@@ -1,3 +1,5 @@
+use std::sync::{Arc, RwLock};
+
 use axum::http::{HeaderMap, StatusCode};
 use serde::{Deserialize, Serialize};
 
@@ -15,12 +17,41 @@ impl AuthConfig {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct SharedAuthConfig {
+    inner: Arc<RwLock<AuthConfig>>,
+}
+
+impl SharedAuthConfig {
+    pub fn new(config: AuthConfig) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(config)),
+        }
+    }
+
+    pub fn get(&self) -> AuthConfig {
+        self.inner
+            .read()
+            .expect("auth config lock poisoned")
+            .clone()
+    }
+
+    pub fn update(&self, config: AuthConfig) {
+        *self.inner.write().expect("auth config lock poisoned") = config;
+    }
+
+    pub fn auth_required(&self) -> bool {
+        self.get().auth_required()
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct TokenQuery {
     pub token: Option<String>,
 }
 
-pub fn authorize_headers(headers: &HeaderMap, auth: &AuthConfig) -> Result<(), ApiError> {
+pub fn authorize_headers(headers: &HeaderMap, auth: &SharedAuthConfig) -> Result<(), ApiError> {
+    let auth = auth.get();
     if auth.dev_mode {
         return Ok(());
     }
@@ -45,7 +76,8 @@ pub fn authorize_headers(headers: &HeaderMap, auth: &AuthConfig) -> Result<(), A
     }
 }
 
-pub fn authorize_query(query: &TokenQuery, auth: &AuthConfig) -> Result<(), ApiError> {
+pub fn authorize_query(query: &TokenQuery, auth: &SharedAuthConfig) -> Result<(), ApiError> {
+    let auth = auth.get();
     if auth.dev_mode {
         return Ok(());
     }

@@ -364,6 +364,18 @@ nav {
   gap: 14px;
 }
 
+.settings-wide-panel,
+.settings-actions-panel {
+  grid-column: 1 / -1;
+}
+
+.settings-actions-panel {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
 .settings-window .panel {
   padding: 16px;
 }
@@ -380,6 +392,13 @@ nav {
 .panel {
   min-width: 0;
   padding: 18px;
+}
+
+.muted-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .panel-title {

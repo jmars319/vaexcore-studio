@@ -6,9 +6,9 @@ use std::{
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use vaexcore_core::{
-    new_id, now_utc, Marker, MediaProfile, MediaProfileInput, PlatformKind, ProfilesSnapshot,
-    RecordingContainer, Resolution, SecretRef, SecretStore, SecretStoreError, SensitiveString,
-    StreamDestination, StreamDestinationInput,
+    new_id, now_utc, AppSettings, Marker, MediaProfile, MediaProfileInput, PlatformKind,
+    ProfilesSnapshot, RecordingContainer, Resolution, SecretRef, SecretStore, SecretStoreError,
+    SensitiveString, StreamDestination, StreamDestinationInput,
 };
 use vaexcore_platforms::apply_platform_defaults;
 
@@ -64,6 +64,43 @@ impl ProfileStore {
             recording_profiles: self.list_recording_profiles()?,
             stream_destinations: self.list_stream_destinations()?,
         })
+    }
+
+    pub fn initialize_app_settings(&self, seed: AppSettings) -> Result<AppSettings, StoreError> {
+        if let Some(settings) = self.read_app_settings()? {
+            return Ok(settings);
+        }
+
+        self.save_app_settings(seed)
+    }
+
+    pub fn app_settings(&self) -> Result<AppSettings, StoreError> {
+        Ok(self.read_app_settings()?.unwrap_or_default())
+    }
+
+    pub fn save_app_settings(&self, mut settings: AppSettings) -> Result<AppSettings, StoreError> {
+        settings.api_host = settings.api_host.trim().to_string();
+        settings.api_token = settings
+            .api_token
+            .map(|token| token.trim().to_string())
+            .filter(|token| !token.is_empty());
+        settings.log_level = settings.log_level.trim().to_ascii_lowercase();
+        settings.validate().map_err(StoreError::InvalidValue)?;
+
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        connection.execute(
+            "INSERT INTO app_settings (id, value_json, updated_at)
+             VALUES ('app', ?1, ?2)
+             ON CONFLICT(id) DO UPDATE SET
+               value_json = excluded.value_json,
+               updated_at = excluded.updated_at",
+            params![serde_json::to_string(&settings)?, now_utc().to_rfc3339()],
+        )?;
+
+        Ok(settings)
     }
 
     pub fn insert_recording_profile(
@@ -317,6 +354,12 @@ impl ProfileStore {
               label TEXT,
               created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+              id TEXT PRIMARY KEY,
+              value_json TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
             "#,
         )?;
         Ok(())
@@ -408,6 +451,24 @@ impl ProfileStore {
         )?;
         Ok(())
     }
+
+    fn read_app_settings(&self) -> Result<Option<AppSettings>, StoreError> {
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        let value = connection
+            .query_row(
+                "SELECT value_json FROM app_settings WHERE id = 'app'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        value
+            .map(|value| serde_json::from_str(&value).map_err(StoreError::Json))
+            .transpose()
+    }
 }
 
 impl SecretStore for ProfileStore {
@@ -462,4 +523,44 @@ fn parse_time(value: &str) -> Result<DateTime<Utc>, StoreError> {
     DateTime::parse_from_rfc3339(value)
         .map(|value| value.with_timezone(&Utc))
         .map_err(|error| StoreError::InvalidValue(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_settings_round_trip() {
+        let store = ProfileStore::open_memory().unwrap();
+        let seed = AppSettings {
+            api_token: Some("seed-token".to_string()),
+            dev_auth_bypass: true,
+            ..AppSettings::default()
+        };
+
+        let initialized = store.initialize_app_settings(seed.clone()).unwrap();
+        assert_eq!(initialized.api_token, Some("seed-token".to_string()));
+
+        let existing = store
+            .initialize_app_settings(AppSettings {
+                api_token: Some("ignored-token".to_string()),
+                ..AppSettings::default()
+            })
+            .unwrap();
+        assert_eq!(existing.api_token, Some("seed-token".to_string()));
+
+        let saved = store
+            .save_app_settings(AppSettings {
+                api_port: 51288,
+                api_token: Some("  updated-token  ".to_string()),
+                log_level: "DEBUG".to_string(),
+                ..seed
+            })
+            .unwrap();
+
+        assert_eq!(saved.api_port, 51288);
+        assert_eq!(saved.api_token, Some("updated-token".to_string()));
+        assert_eq!(saved.log_level, "debug");
+        assert_eq!(store.app_settings().unwrap(), saved);
+    }
 }

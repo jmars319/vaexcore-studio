@@ -24,7 +24,7 @@ use vaexcore_core::{
 };
 use vaexcore_media::{DryRunMediaEngine, MediaEngine, MediaError};
 
-pub use auth::AuthConfig;
+pub use auth::{AuthConfig, SharedAuthConfig};
 pub use event_bus::EventBus;
 pub use store::{ProfileStore, StoreError};
 
@@ -32,11 +32,11 @@ pub use store::{ProfileStore, StoreError};
 pub struct ApiServerConfig {
     pub bind_addr: SocketAddr,
     pub database_path: PathBuf,
-    pub auth: AuthConfig,
+    pub auth: SharedAuthConfig,
 }
 
 pub struct ApiState {
-    pub auth: AuthConfig,
+    pub auth: SharedAuthConfig,
     pub store: ProfileStore,
     pub engine: Arc<dyn MediaEngine>,
     pub events: EventBus,
@@ -75,7 +75,7 @@ impl ApiState {
         };
         let engine: Arc<dyn MediaEngine> = Arc::new(DryRunMediaEngine::new(Some(event_sink)));
         let state = Arc::new(Self {
-            auth,
+            auth: SharedAuthConfig::new(auth),
             store: ProfileStore::open_memory()?,
             engine,
             events,
@@ -104,10 +104,11 @@ where
     let local_addr = listener.local_addr()?;
     let state = ApiState::new(&config)?;
 
+    let auth_snapshot = config.auth.get();
     tracing::info!(
         service = APP_NAME,
         %local_addr,
-        dev_auth_bypass = config.auth.dev_mode,
+        dev_auth_bypass = auth_snapshot.dev_mode,
         "local API listening"
     );
 
@@ -212,12 +213,13 @@ pub enum CreatedProfile {
 }
 
 async fn health(State(state): State<Arc<ApiState>>) -> Json<ApiResponse<HealthResponse>> {
+    let auth = state.auth.get();
     Json(ApiResponse::ok(HealthResponse {
         service: APP_NAME.to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         ok: true,
-        auth_required: state.auth.auth_required(),
-        dev_auth_bypass: state.auth.dev_mode,
+        auth_required: auth.auth_required(),
+        dev_auth_bypass: auth.dev_mode,
     }))
 }
 
@@ -606,5 +608,58 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response_body(response).await;
         assert_eq!(body["data"]["status"]["stream_active"], false);
+    }
+
+    #[tokio::test]
+    async fn live_auth_updates_are_used() {
+        let state = ApiState::new_in_memory(AuthConfig {
+            token: Some("old-token".to_string()),
+            dev_mode: false,
+        })
+        .unwrap();
+        let app = router(state.clone());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/status")
+                    .header("x-vaexcore-token", "old-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        state.auth.update(AuthConfig {
+            token: Some("new-token".to_string()),
+            dev_mode: false,
+        });
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/status")
+                    .header("x-vaexcore-token", "old-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/status")
+                    .header("x-vaexcore-token", "new-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

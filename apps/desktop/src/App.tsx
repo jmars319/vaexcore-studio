@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import type {
+  AppSettings,
   HealthResponse,
   MediaProfileInput,
   PlatformKind,
@@ -30,8 +31,13 @@ import type {
 import { platformLabels } from "@vaexcore/shared-types";
 import {
   eventSocketUrl,
+  LocalAppSettingsSnapshot,
   loadRuntimeConfig,
+  loadAppSettings,
+  openDataDirectory,
+  regenerateApiToken,
   RuntimeApiConfig,
+  saveAppSettings,
   StudioApi,
 } from "./api";
 import logoUrl from "./assets/brand/vaexcore-studio-logo.jpg";
@@ -83,6 +89,15 @@ const defaultDestinationForm: StreamDestinationInput = {
   enabled: true,
 };
 
+const defaultAppSettings: AppSettings = {
+  api_host: "127.0.0.1",
+  api_port: 51287,
+  api_token: null,
+  dev_auth_bypass: true,
+  log_level: "info",
+  default_recording_profile: defaultProfileForm,
+};
+
 function App() {
   const isSettingsWindow = useMemo(
     () => new URLSearchParams(window.location.search).get("window") === "settings",
@@ -101,11 +116,25 @@ function App() {
   const [destinationForm, setDestinationForm] =
     useState<StreamDestinationInput>(defaultDestinationForm);
   const [markerLabel, setMarkerLabel] = useState("manual-marker");
+  const [settingsSnapshot, setSettingsSnapshot] =
+    useState<LocalAppSettingsSnapshot | null>(null);
+  const [settingsForm, setSettingsForm] =
+    useState<AppSettings>(defaultAppSettings);
+  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
 
   useEffect(() => {
     loadRuntimeConfig().then(setConfig).catch((error: Error) => {
       setError(error.message);
     });
+  }, []);
+
+  useEffect(() => {
+    loadAppSettings()
+      .then((snapshot) => {
+        applySettingsSnapshot(snapshot);
+        setProfileForm(snapshot.settings.default_recording_profile);
+      })
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -276,6 +305,57 @@ function App() {
     }
   }
 
+  function applySettingsSnapshot(snapshot: LocalAppSettingsSnapshot) {
+    setSettingsSnapshot(snapshot);
+    setSettingsForm(snapshot.settings);
+    setConfig((current) => ({
+      apiUrl: snapshot.apiUrl,
+      wsUrl: snapshot.wsUrl,
+      token: snapshot.settings.api_token,
+      devAuthBypass: snapshot.settings.dev_auth_bypass,
+    }));
+  }
+
+  async function handleSaveSettings(event: FormEvent) {
+    event.preventDefault();
+    try {
+      const snapshot = await saveAppSettings(settingsForm);
+      applySettingsSnapshot(snapshot);
+      setProfileForm(snapshot.settings.default_recording_profile);
+      setSettingsMessage(
+        snapshot.restartRequired
+          ? "Saved. Host or port changes apply after restart."
+          : "Saved.",
+      );
+      setError(null);
+    } catch (error) {
+      setSettingsMessage(null);
+      setError(error instanceof Error ? error.message : "Settings save failed");
+    }
+  }
+
+  async function handleRegenerateApiToken() {
+    try {
+      const snapshot = await regenerateApiToken();
+      applySettingsSnapshot(snapshot);
+      setSettingsMessage("API token regenerated.");
+      setError(null);
+    } catch (error) {
+      setSettingsMessage(null);
+      setError(error instanceof Error ? error.message : "Token regeneration failed");
+    }
+  }
+
+  async function handleOpenDataDirectory() {
+    try {
+      await openDataDirectory();
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Could not open data directory",
+      );
+    }
+  }
+
   const page = useMemo(() => {
     switch (section) {
       case "dashboard":
@@ -389,6 +469,13 @@ function App() {
           health={health}
           logoUrl={logoUrl}
           mode={activeStatus?.mode ?? "dry_run"}
+          onOpenDataDirectory={handleOpenDataDirectory}
+          onRegenerateToken={handleRegenerateApiToken}
+          onSave={handleSaveSettings}
+          onSettingsChange={setSettingsForm}
+          settings={settingsForm}
+          snapshot={settingsSnapshot}
+          statusMessage={settingsMessage}
         />
       </main>
     );
@@ -913,9 +1000,32 @@ function SettingsPage(props: {
   health: HealthResponse | null;
   logoUrl: string;
   mode: string;
+  onOpenDataDirectory: () => void;
+  onRegenerateToken: () => void;
+  onSave: (event: FormEvent) => void;
+  onSettingsChange: (settings: AppSettings) => void;
+  settings: AppSettings;
+  snapshot: LocalAppSettingsSnapshot | null;
+  statusMessage: string | null;
 }) {
+  const profile = props.settings.default_recording_profile;
+  const token = props.settings.api_token ?? "not configured";
+
+  function updateSettings(update: Partial<AppSettings>) {
+    props.onSettingsChange({ ...props.settings, ...update });
+  }
+
+  function updateDefaultProfile(update: Partial<MediaProfileInput>) {
+    updateSettings({
+      default_recording_profile: {
+        ...profile,
+        ...update,
+      },
+    });
+  }
+
   return (
-    <div className="settings-grid">
+    <form className="settings-grid" onSubmit={props.onSave}>
       <section className="panel identity-panel">
         <img alt="" src={props.logoUrl} />
         <div>
@@ -924,6 +1034,44 @@ function SettingsPage(props: {
           <KeyValue label="Role" value="local foundation layer" />
         </div>
       </section>
+
+      <section className="panel">
+        <PanelTitle title="Local API" />
+        <TextInput
+          label="Host"
+          value={props.settings.api_host}
+          onChange={(api_host) => updateSettings({ api_host })}
+        />
+        <NumberInput
+          label="Port"
+          value={props.settings.api_port}
+          onChange={(api_port) => updateSettings({ api_port })}
+        />
+        <label className="check-row">
+          <input
+            checked={props.settings.dev_auth_bypass}
+            onChange={(event) =>
+              updateSettings({ dev_auth_bypass: event.target.checked })
+            }
+            type="checkbox"
+          />
+          Dev auth bypass
+        </label>
+        <CopyLine label="API Token" secret value={token} />
+        <div className="button-row">
+          <button
+            className="secondary-button"
+            onClick={props.onRegenerateToken}
+            type="button"
+          >
+            Regenerate Token
+          </button>
+          {props.snapshot?.restartRequired && (
+            <Pill tone="amber">restart required</Pill>
+          )}
+        </div>
+      </section>
+
       <section className="panel">
         <PanelTitle title="Runtime" />
         <KeyValue label="Engine" value={props.engine} />
@@ -934,6 +1082,7 @@ function SettingsPage(props: {
         />
         <KeyValue label="Version" value={props.health?.version ?? "0.1.0"} />
       </section>
+
       <section className="panel">
         <PanelTitle title="Security" />
         <KeyValue
@@ -949,7 +1098,149 @@ function SettingsPage(props: {
           value={props.config?.token ? "generated" : "not configured"}
         />
       </section>
-    </div>
+
+      <section className="panel settings-wide-panel">
+        <PanelTitle title="Default Recording Profile" />
+        <div className="form-grid">
+          <TextInput
+            label="Name"
+            value={profile.name}
+            onChange={(name) => updateDefaultProfile({ name })}
+          />
+          <TextInput
+            label="Output Folder"
+            value={profile.output_folder}
+            onChange={(output_folder) =>
+              updateDefaultProfile({ output_folder })
+            }
+          />
+        </div>
+        <TextInput
+          label="Filename Pattern"
+          value={profile.filename_pattern}
+          onChange={(filename_pattern) =>
+            updateDefaultProfile({ filename_pattern })
+          }
+        />
+        <div className="form-grid">
+          <NumberInput
+            label="Width"
+            value={profile.resolution.width}
+            onChange={(width) =>
+              updateDefaultProfile({
+                resolution: { ...profile.resolution, width },
+              })
+            }
+          />
+          <NumberInput
+            label="Height"
+            value={profile.resolution.height}
+            onChange={(height) =>
+              updateDefaultProfile({
+                resolution: { ...profile.resolution, height },
+              })
+            }
+          />
+        </div>
+        <div className="form-grid">
+          <NumberInput
+            label="Framerate"
+            value={profile.framerate}
+            onChange={(framerate) => updateDefaultProfile({ framerate })}
+          />
+          <NumberInput
+            label="Bitrate"
+            value={profile.bitrate_kbps}
+            onChange={(bitrate_kbps) => updateDefaultProfile({ bitrate_kbps })}
+          />
+        </div>
+        <div className="form-grid">
+          <label>
+            Container
+            <select
+              value={profile.container}
+              onChange={(event) =>
+                updateDefaultProfile({
+                  container: event.target.value as RecordingContainer,
+                })
+              }
+            >
+              <option value="mkv">MKV</option>
+              <option value="mp4">MP4</option>
+            </select>
+          </label>
+          <label>
+            Encoder
+            <select
+              value={
+                typeof profile.encoder_preference === "string"
+                  ? profile.encoder_preference
+                  : "auto"
+              }
+              onChange={(event) =>
+                updateDefaultProfile({
+                  encoder_preference: event.target.value as
+                    | "auto"
+                    | "hardware"
+                    | "software",
+                })
+              }
+            >
+              <option value="auto">Auto</option>
+              <option value="hardware">Hardware</option>
+              <option value="software">Software</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section className="panel">
+        <PanelTitle title="Storage" />
+        <CopyLine label="Data Directory" value={props.snapshot?.dataDir ?? ""} />
+        <CopyLine
+          label="Database"
+          value={props.snapshot?.databasePath ?? ""}
+        />
+        <button
+          className="secondary-button full"
+          onClick={props.onOpenDataDirectory}
+          type="button"
+        >
+          Open Data Directory
+        </button>
+      </section>
+
+      <section className="panel">
+        <PanelTitle title="Diagnostics" />
+        <label>
+          Log Level
+          <select
+            value={props.settings.log_level}
+            onChange={(event) =>
+              updateSettings({
+                log_level: event.target.value as AppSettings["log_level"],
+              })
+            }
+          >
+            <option value="trace">Trace</option>
+            <option value="debug">Debug</option>
+            <option value="info">Info</option>
+            <option value="warn">Warn</option>
+            <option value="error">Error</option>
+          </select>
+        </label>
+        <p className="muted-note">
+          Log level changes are persisted and apply on next launch.
+        </p>
+      </section>
+
+      <section className="panel settings-actions-panel">
+        {props.statusMessage && <Pill tone="green">{props.statusMessage}</Pill>}
+        <button className="primary-button" type="submit">
+          Save Settings
+        </button>
+      </section>
+    </form>
   );
 }
 

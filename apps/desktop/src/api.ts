@@ -1,5 +1,6 @@
 import type {
   ApiResponse,
+  AppSettings,
   CommandStatus,
   CreatedProfile,
   CreateProfileRequest,
@@ -14,6 +15,15 @@ export interface RuntimeApiConfig {
   wsUrl: string;
   token: string | null;
   devAuthBypass: boolean;
+}
+
+export interface LocalAppSettingsSnapshot {
+  settings: AppSettings;
+  apiUrl: string;
+  wsUrl: string;
+  dataDir: string;
+  databasePath: string;
+  restartRequired: boolean;
 }
 
 export async function loadRuntimeConfig(): Promise<RuntimeApiConfig> {
@@ -31,6 +41,28 @@ export async function loadRuntimeConfig(): Promise<RuntimeApiConfig> {
       devAuthBypass: true,
     };
   }
+}
+
+export async function loadAppSettings(): Promise<LocalAppSettingsSnapshot> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<LocalAppSettingsSnapshot>("app_settings");
+}
+
+export async function saveAppSettings(
+  settings: AppSettings,
+): Promise<LocalAppSettingsSnapshot> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<LocalAppSettingsSnapshot>("save_app_settings", { settings });
+}
+
+export async function regenerateApiToken(): Promise<LocalAppSettingsSnapshot> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<LocalAppSettingsSnapshot>("regenerate_api_token");
+}
+
+export async function openDataDirectory(): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("open_data_directory");
 }
 
 export async function apiRequest<T>(
@@ -101,4 +133,3 @@ export function eventSocketUrl(config: RuntimeApiConfig): string {
   url.searchParams.set("token", config.token);
   return url.toString();
 }
-

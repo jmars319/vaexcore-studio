@@ -39,6 +39,15 @@ export interface MediaProfileInput {
   encoder_preference: EncoderPreference;
 }
 
+export interface AppSettings {
+  api_host: string;
+  api_port: number;
+  api_token: string | null;
+  dev_auth_bypass: boolean;
+  log_level: "trace" | "debug" | "info" | "warn" | "error";
+  default_recording_profile: MediaProfileInput;
+}
+
 export interface StreamDestination {
   id: string;
   name: string;
@@ -157,4 +166,3 @@ export const platformLabels: Record<PlatformKind, string> = {
   kick: "Kick",
   custom_rtmp: "Custom RTMP",
 };
-

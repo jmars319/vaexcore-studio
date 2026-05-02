@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::{net::SocketAddr, path::PathBuf, sync::Mutex};
 
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
@@ -6,8 +6,10 @@ use tauri::{
 };
 use tokio::sync::oneshot;
 use vaexcore_api::{
-    default_auth_from_env, default_bind_addr, serve_with_shutdown, ApiServerConfig, AuthConfig,
+    default_auth_from_env, default_bind_addr, generate_token, serve_with_shutdown, ApiServerConfig,
+    AuthConfig, ProfileStore, SharedAuthConfig,
 };
+use vaexcore_core::AppSettings;
 
 const APP_NAME: &str = "vaexcore studio";
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -34,14 +36,87 @@ struct FrontendApiConfig {
     dev_auth_bypass: bool,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FrontendAppSettings {
+    settings: AppSettings,
+    api_url: String,
+    ws_url: String,
+    data_dir: String,
+    database_path: String,
+    restart_required: bool,
+}
+
 struct AppRuntimeState {
-    api: FrontendApiConfig,
+    bind_addr: SocketAddr,
+    auth: SharedAuthConfig,
+    settings_store: ProfileStore,
+    data_dir: PathBuf,
+    database_path: PathBuf,
     api_shutdown: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 #[tauri::command]
 fn api_config(state: tauri::State<'_, AppRuntimeState>) -> FrontendApiConfig {
-    state.api.clone()
+    frontend_api_config(state.bind_addr, &state.auth.get())
+}
+
+#[tauri::command]
+fn app_settings(state: tauri::State<'_, AppRuntimeState>) -> Result<FrontendAppSettings, String> {
+    frontend_app_settings(&state).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_app_settings(
+    state: tauri::State<'_, AppRuntimeState>,
+    settings: AppSettings,
+) -> Result<FrontendAppSettings, String> {
+    let settings = state
+        .settings_store
+        .save_app_settings(settings)
+        .map_err(|error| error.to_string())?;
+    state.auth.update(AuthConfig {
+        token: settings.api_token.clone(),
+        dev_mode: settings.dev_auth_bypass,
+    });
+    frontend_app_settings(&state).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn regenerate_api_token(
+    state: tauri::State<'_, AppRuntimeState>,
+) -> Result<FrontendAppSettings, String> {
+    let mut settings = state
+        .settings_store
+        .app_settings()
+        .map_err(|error| error.to_string())?;
+    settings.api_token = Some(generate_token());
+    let settings = state
+        .settings_store
+        .save_app_settings(settings)
+        .map_err(|error| error.to_string())?;
+    state.auth.update(AuthConfig {
+        token: settings.api_token.clone(),
+        dev_mode: settings.dev_auth_bypass,
+    });
+    frontend_app_settings(&state).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn open_data_directory(state: tauri::State<'_, AppRuntimeState>) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&state.data_dir)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("opening the data directory is not implemented on this platform".to_string())
+    }
 }
 
 #[tauri::command]
@@ -218,14 +293,28 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            let auth = default_auth_from_env();
-            let bind_addr = default_bind_addr();
-            let api = frontend_api_config(bind_addr, &auth);
-            let database_path = app.path().app_data_dir()?.join("studio.sqlite");
+            let default_auth = default_auth_from_env();
+            let data_dir = app.path().app_data_dir()?;
+            let database_path = data_dir.join("studio.sqlite");
+            let settings_store = ProfileStore::open(&database_path)?;
+            let settings = settings_store.initialize_app_settings(AppSettings {
+                api_token: default_auth.token.clone(),
+                dev_auth_bypass: default_auth.dev_mode,
+                ..AppSettings::default()
+            })?;
+            let bind_addr = settings_bind_addr(&settings).unwrap_or_else(default_bind_addr);
+            let auth = SharedAuthConfig::new(AuthConfig {
+                token: settings.api_token.clone(),
+                dev_mode: settings.dev_auth_bypass,
+            });
             let (api_shutdown, shutdown_rx) = oneshot::channel::<()>();
 
             app.manage(AppRuntimeState {
-                api,
+                bind_addr,
+                auth: auth.clone(),
+                settings_store,
+                data_dir,
+                database_path: database_path.clone(),
                 api_shutdown: Mutex::new(Some(api_shutdown)),
             });
 
@@ -247,7 +336,14 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![api_config, open_settings_window])
+        .invoke_handler(tauri::generate_handler![
+            api_config,
+            app_settings,
+            save_app_settings,
+            regenerate_api_token,
+            open_data_directory,
+            open_settings_window
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run vaexcore studio");
 }
@@ -314,8 +410,8 @@ fn show_settings_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         WebviewUrl::App("index.html?window=settings".into()),
     )
     .title("Configuration Settings")
-    .inner_size(560.0, 640.0)
-    .min_inner_size(500.0, 520.0)
+    .inner_size(720.0, 820.0)
+    .min_inner_size(560.0, 620.0)
     .resizable(true)
     .maximizable(false)
     .center()
@@ -348,4 +444,31 @@ fn frontend_api_config(bind_addr: std::net::SocketAddr, auth: &AuthConfig) -> Fr
         token: auth.token.clone(),
         dev_auth_bypass: auth.dev_mode,
     }
+}
+
+fn frontend_app_settings(
+    state: &tauri::State<'_, AppRuntimeState>,
+) -> Result<FrontendAppSettings, vaexcore_api::StoreError> {
+    let settings = state.settings_store.app_settings()?;
+    let api = frontend_api_config(state.bind_addr, &state.auth.get());
+    Ok(FrontendAppSettings {
+        restart_required: settings_restart_required(&settings, state.bind_addr),
+        settings,
+        api_url: api.api_url,
+        ws_url: api.ws_url,
+        data_dir: state.data_dir.display().to_string(),
+        database_path: state.database_path.display().to_string(),
+    })
+}
+
+fn settings_bind_addr(settings: &AppSettings) -> Option<SocketAddr> {
+    format!("{}:{}", settings.api_host, settings.api_port)
+        .parse()
+        .ok()
+}
+
+fn settings_restart_required(settings: &AppSettings, active_addr: SocketAddr) -> bool {
+    settings_bind_addr(settings)
+        .map(|settings_addr| settings_addr != active_addr)
+        .unwrap_or(true)
 }

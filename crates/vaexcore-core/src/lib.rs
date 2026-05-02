@@ -2,6 +2,7 @@ pub mod events;
 pub mod profiles;
 pub mod responses;
 pub mod security;
+pub mod settings;
 pub mod status;
 
 pub use events::{StudioEvent, StudioEventKind};
@@ -14,6 +15,7 @@ pub use responses::{
     StudioStatus,
 };
 pub use security::{SecretRef, SecretStore, SecretStoreError, SensitiveString};
+pub use settings::AppSettings;
 pub use status::{EngineMode, EngineStatus, RecordingSession, StreamSession};
 
 pub const APP_NAME: &str = "vaexcore studio";
