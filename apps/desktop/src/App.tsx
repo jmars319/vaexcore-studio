@@ -5,6 +5,7 @@ import {
   Copy,
   FileVideo,
   MapPin,
+  Pencil,
   Play,
   Plus,
   Radio,
@@ -13,19 +14,23 @@ import {
   SlidersHorizontal,
   Square,
   Terminal,
+  Trash2,
   Video,
   WifiOff,
+  X,
 } from "lucide-react";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import type {
   AppSettings,
   HealthResponse,
+  MediaProfile,
   MediaProfileInput,
   PlatformKind,
   ProfilesSnapshot,
   RecordingContainer,
   StudioEvent,
   StudioStatus,
+  StreamDestination,
   StreamDestinationInput,
 } from "@vaexcore/shared-types";
 import { platformLabels } from "@vaexcore/shared-types";
@@ -115,6 +120,8 @@ function App() {
   const [profileForm, setProfileForm] = useState<MediaProfileInput>(defaultProfileForm);
   const [destinationForm, setDestinationForm] =
     useState<StreamDestinationInput>(defaultDestinationForm);
+  const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const [editingDestinationId, setEditingDestinationId] = useState<string | null>(null);
   const [markerLabel, setMarkerLabel] = useState("manual-marker");
   const [settingsSnapshot, setSettingsSnapshot] =
     useState<LocalAppSettingsSnapshot | null>(null);
@@ -185,11 +192,19 @@ function App() {
           mergeEvents([...nextStatus.recent_events, ...current]),
         );
         setError(null);
-        setSelectedProfileId(
-          (current) => current ?? nextProfiles.recording_profiles[0]?.id,
+        setSelectedProfileId((current) =>
+          current &&
+          nextProfiles.recording_profiles.some((profile) => profile.id === current)
+            ? current
+            : nextProfiles.recording_profiles[0]?.id,
         );
-        setSelectedDestinationId(
-          (current) => current ?? nextProfiles.stream_destinations[0]?.id,
+        setSelectedDestinationId((current) =>
+          current &&
+          nextProfiles.stream_destinations.some(
+            (destination) => destination.id === current,
+          )
+            ? current
+            : nextProfiles.stream_destinations[0]?.id,
         );
       } catch (error) {
         if (!cancelled) {
@@ -235,11 +250,33 @@ function App() {
     if (!config) return;
     const nextProfiles = await StudioApi.profiles(config);
     setProfiles(nextProfiles);
-    setSelectedProfileId(
-      (current) => current ?? nextProfiles.recording_profiles[0]?.id,
+    setSelectedProfileId((current) =>
+      current &&
+      nextProfiles.recording_profiles.some((profile) => profile.id === current)
+        ? current
+        : nextProfiles.recording_profiles[0]?.id,
     );
-    setSelectedDestinationId(
-      (current) => current ?? nextProfiles.stream_destinations[0]?.id,
+    setSelectedDestinationId((current) =>
+      current &&
+      nextProfiles.stream_destinations.some(
+        (destination) => destination.id === current,
+      )
+        ? current
+        : nextProfiles.stream_destinations[0]?.id,
+    );
+    setEditingProfileId((current) =>
+      current &&
+      nextProfiles.recording_profiles.some((profile) => profile.id === current)
+        ? current
+        : null,
+    );
+    setEditingDestinationId((current) =>
+      current &&
+      nextProfiles.stream_destinations.some(
+        (destination) => destination.id === current,
+      )
+        ? current
+        : null,
     );
   }
 
@@ -260,14 +297,19 @@ function App() {
     event.preventDefault();
     if (!config) return;
     try {
-      await StudioApi.createProfile(config, {
-        kind: "recording_profile",
-        value: profileForm,
-      });
+      if (editingProfileId) {
+        await StudioApi.updateRecordingProfile(config, editingProfileId, profileForm);
+      } else {
+        await StudioApi.createProfile(config, {
+          kind: "recording_profile",
+          value: profileForm,
+        });
+      }
       await refreshProfiles();
+      setEditingProfileId(null);
       setError(null);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Profile create failed");
+      setError(error instanceof Error ? error.message : "Profile save failed");
     }
   }
 
@@ -275,19 +317,88 @@ function App() {
     event.preventDefault();
     if (!config) return;
     try {
-      await StudioApi.createProfile(config, {
-        kind: "stream_destination",
-        value: {
-          ...destinationForm,
-          stream_key: destinationForm.stream_key || null,
-        },
-      });
+      const value = {
+        ...destinationForm,
+        stream_key: destinationForm.stream_key || null,
+      };
+      if (editingDestinationId) {
+        await StudioApi.updateStreamDestination(config, editingDestinationId, value);
+      } else {
+        await StudioApi.createProfile(config, {
+          kind: "stream_destination",
+          value,
+        });
+      }
       await refreshProfiles();
+      setEditingDestinationId(null);
       setError(null);
     } catch (error) {
       setError(
-        error instanceof Error ? error.message : "Destination create failed",
+        error instanceof Error ? error.message : "Destination save failed",
       );
+    }
+  }
+
+  function editRecordingProfile(profile: MediaProfile) {
+    setEditingProfileId(profile.id);
+    setProfileForm({
+      name: profile.name,
+      output_folder: profile.output_folder,
+      filename_pattern: profile.filename_pattern,
+      container: profile.container,
+      resolution: profile.resolution,
+      framerate: profile.framerate,
+      bitrate_kbps: profile.bitrate_kbps,
+      encoder_preference: profile.encoder_preference,
+    });
+  }
+
+  function cancelRecordingProfileEdit() {
+    setEditingProfileId(null);
+    setProfileForm(settingsSnapshot?.settings.default_recording_profile ?? defaultProfileForm);
+  }
+
+  async function deleteRecordingProfile(profile: MediaProfile) {
+    if (!config || !window.confirm(`Delete recording profile "${profile.name}"?`)) return;
+    try {
+      await StudioApi.deleteRecordingProfile(config, profile.id);
+      await refreshProfiles();
+      if (editingProfileId === profile.id) {
+        cancelRecordingProfileEdit();
+      }
+      setError(null);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Profile delete failed");
+    }
+  }
+
+  function editStreamDestination(destination: StreamDestination) {
+    setEditingDestinationId(destination.id);
+    setDestinationForm({
+      name: destination.name,
+      platform: destination.platform,
+      ingest_url: destination.ingest_url,
+      stream_key: "",
+      enabled: destination.enabled,
+    });
+  }
+
+  function cancelStreamDestinationEdit() {
+    setEditingDestinationId(null);
+    setDestinationForm(defaultDestinationForm);
+  }
+
+  async function deleteStreamDestination(destination: StreamDestination) {
+    if (!config || !window.confirm(`Delete stream destination "${destination.name}"?`)) return;
+    try {
+      await StudioApi.deleteStreamDestination(config, destination.id);
+      await refreshProfiles();
+      if (editingDestinationId === destination.id) {
+        cancelStreamDestinationEdit();
+      }
+      setError(null);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Destination delete failed");
     }
   }
 
@@ -373,7 +484,11 @@ function App() {
         return (
           <DestinationsPage
             destinationForm={destinationForm}
+            editingDestinationId={editingDestinationId}
+            onCancelEdit={cancelStreamDestinationEdit}
             onCreate={createDestination}
+            onDelete={deleteStreamDestination}
+            onEdit={editStreamDestination}
             onFormChange={setDestinationForm}
             profiles={profiles}
           />
@@ -381,7 +496,11 @@ function App() {
       case "profiles":
         return (
           <RecordingProfilesPage
+            editingProfileId={editingProfileId}
+            onCancelEdit={cancelRecordingProfileEdit}
             onCreate={createRecordingProfile}
+            onDelete={deleteRecordingProfile}
+            onEdit={editRecordingProfile}
             onFormChange={setProfileForm}
             profileForm={profileForm}
             profiles={profiles}
@@ -433,6 +552,8 @@ function App() {
     activeStatus?.stream_active,
     config,
     destinationForm,
+    editingDestinationId,
+    editingProfileId,
     events,
     markerLabel,
     profileForm,
@@ -614,10 +735,16 @@ function Dashboard(props: {
 
 function DestinationsPage(props: {
   destinationForm: StreamDestinationInput;
+  editingDestinationId: string | null;
+  onCancelEdit: () => void;
   onCreate: (event: FormEvent) => void;
+  onDelete: (destination: StreamDestination) => void;
+  onEdit: (destination: StreamDestination) => void;
   onFormChange: (value: StreamDestinationInput) => void;
   profiles: ProfilesSnapshot | null;
 }) {
+  const isEditing = props.editingDestinationId !== null;
+
   return (
     <div className="two-column">
       <section className="panel wide">
@@ -635,13 +762,33 @@ function DestinationsPage(props: {
               <Pill tone={destination.stream_key_ref ? "amber" : "muted"}>
                 {destination.stream_key_ref ? "key stored" : "no key"}
               </Pill>
+              <div className="table-actions">
+                <button
+                  aria-label={`Edit ${destination.name}`}
+                  className="icon-button"
+                  onClick={() => props.onEdit(destination)}
+                  title={`Edit ${destination.name}`}
+                  type="button"
+                >
+                  <Pencil size={15} />
+                </button>
+                <button
+                  aria-label={`Delete ${destination.name}`}
+                  className="icon-button danger"
+                  onClick={() => props.onDelete(destination)}
+                  title={`Delete ${destination.name}`}
+                  type="button"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
             </div>
           ))}
         </div>
       </section>
 
       <section className="panel">
-        <PanelTitle title="Create Destination" />
+        <PanelTitle title={isEditing ? "Edit Destination" : "Create Destination"} />
         <form className="form" onSubmit={props.onCreate}>
           <TextInput
             label="Name"
@@ -683,6 +830,9 @@ function DestinationsPage(props: {
               props.onFormChange({ ...props.destinationForm, stream_key })
             }
           />
+          {isEditing && (
+            <p className="form-hint">Leave blank to keep the stored key.</p>
+          )}
           <label className="check-row">
             <input
               checked={props.destinationForm.enabled ?? true}
@@ -696,10 +846,22 @@ function DestinationsPage(props: {
             />
             Enabled
           </label>
-          <button className="primary-button" type="submit">
-            <Plus size={16} />
-            Add Destination
-          </button>
+          <div className="button-row">
+            <button className="primary-button" type="submit">
+              {isEditing ? <CheckCircle2 size={16} /> : <Plus size={16} />}
+              {isEditing ? "Save Destination" : "Add Destination"}
+            </button>
+            {isEditing && (
+              <button
+                className="secondary-button"
+                onClick={props.onCancelEdit}
+                type="button"
+              >
+                <X size={16} />
+                Cancel
+              </button>
+            )}
+          </div>
         </form>
       </section>
     </div>
@@ -707,11 +869,17 @@ function DestinationsPage(props: {
 }
 
 function RecordingProfilesPage(props: {
+  editingProfileId: string | null;
+  onCancelEdit: () => void;
   onCreate: (event: FormEvent) => void;
+  onDelete: (profile: MediaProfile) => void;
+  onEdit: (profile: MediaProfile) => void;
   onFormChange: (value: MediaProfileInput) => void;
   profileForm: MediaProfileInput;
   profiles: ProfilesSnapshot | null;
 }) {
+  const isEditing = props.editingProfileId !== null;
+
   return (
     <div className="two-column">
       <section className="panel wide">
@@ -728,13 +896,33 @@ function RecordingProfilesPage(props: {
               </div>
               <Pill tone="amber">{profile.container}</Pill>
               <code>{profile.output_folder}</code>
+              <div className="table-actions">
+                <button
+                  aria-label={`Edit ${profile.name}`}
+                  className="icon-button"
+                  onClick={() => props.onEdit(profile)}
+                  title={`Edit ${profile.name}`}
+                  type="button"
+                >
+                  <Pencil size={15} />
+                </button>
+                <button
+                  aria-label={`Delete ${profile.name}`}
+                  className="icon-button danger"
+                  onClick={() => props.onDelete(profile)}
+                  title={`Delete ${profile.name}`}
+                  type="button"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
             </div>
           ))}
         </div>
       </section>
 
       <section className="panel">
-        <PanelTitle title="Create Profile" />
+        <PanelTitle title={isEditing ? "Edit Profile" : "Create Profile"} />
         <form className="form" onSubmit={props.onCreate}>
           <TextInput
             label="Name"
@@ -828,10 +1016,22 @@ function RecordingProfilesPage(props: {
               <option value="software">Software</option>
             </select>
           </label>
-          <button className="primary-button" type="submit">
-            <Plus size={16} />
-            Add Profile
-          </button>
+          <div className="button-row">
+            <button className="primary-button" type="submit">
+              {isEditing ? <CheckCircle2 size={16} /> : <Plus size={16} />}
+              {isEditing ? "Save Profile" : "Add Profile"}
+            </button>
+            {isEditing && (
+              <button
+                className="secondary-button"
+                onClick={props.onCancelEdit}
+                type="button"
+              >
+                <X size={16} />
+                Cancel
+              </button>
+            )}
+          </div>
         </form>
       </section>
     </div>

@@ -112,6 +112,73 @@ impl ProfileStore {
         Ok(profile)
     }
 
+    pub fn update_recording_profile(
+        &self,
+        id: &str,
+        input: MediaProfileInput,
+    ) -> Result<Option<MediaProfile>, StoreError> {
+        let Some(existing) = self.recording_profile_by_id(Some(id))? else {
+            return Ok(None);
+        };
+
+        let profile = MediaProfile {
+            id: existing.id,
+            name: input.name,
+            output_folder: input.output_folder,
+            filename_pattern: input.filename_pattern,
+            container: input.container,
+            resolution: input.resolution,
+            framerate: input.framerate,
+            bitrate_kbps: input.bitrate_kbps,
+            encoder_preference: input.encoder_preference,
+            created_at: existing.created_at,
+            updated_at: now_utc(),
+        };
+
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        let changed = connection.execute(
+            "UPDATE recording_profiles
+             SET name = ?2,
+                 output_folder = ?3,
+                 filename_pattern = ?4,
+                 container = ?5,
+                 width = ?6,
+                 height = ?7,
+                 framerate = ?8,
+                 bitrate_kbps = ?9,
+                 encoder_preference_json = ?10,
+                 updated_at = ?11
+             WHERE id = ?1",
+            params![
+                profile.id,
+                profile.name,
+                profile.output_folder,
+                profile.filename_pattern,
+                profile.container.as_str(),
+                profile.resolution.width,
+                profile.resolution.height,
+                profile.framerate,
+                profile.bitrate_kbps,
+                serde_json::to_string(&profile.encoder_preference)?,
+                profile.updated_at.to_rfc3339(),
+            ],
+        )?;
+
+        Ok((changed > 0).then_some(profile))
+    }
+
+    pub fn delete_recording_profile(&self, id: &str) -> Result<bool, StoreError> {
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        let changed = connection.execute("DELETE FROM recording_profiles WHERE id = ?1", [id])?;
+        Ok(changed > 0)
+    }
+
     pub fn list_recording_profiles(&self) -> Result<Vec<MediaProfile>, StoreError> {
         let connection = self
             .connection
@@ -196,6 +263,93 @@ impl ProfileStore {
         let destination = StreamDestination::from_input(input, stream_key_ref);
         self.insert_stream_destination_model(&destination)?;
         Ok(destination)
+    }
+
+    pub fn update_stream_destination(
+        &self,
+        id: &str,
+        input: StreamDestinationInput,
+    ) -> Result<Option<StreamDestination>, StoreError> {
+        let Some(existing) = self.stream_destination_by_id_any(id)? else {
+            return Ok(None);
+        };
+
+        let mut input = apply_platform_defaults(input);
+        let old_secret_ref = existing.stream_key_ref.clone();
+        let stream_key_ref = input
+            .stream_key
+            .as_ref()
+            .filter(|secret| !secret.is_empty())
+            .map(|secret| self.put_secret("stream_destination", secret))
+            .transpose()?
+            .or_else(|| existing.stream_key_ref.clone());
+
+        input.stream_key = None;
+        let destination = StreamDestination {
+            id: existing.id,
+            name: input.name,
+            platform: input.platform,
+            ingest_url: input.ingest_url.unwrap_or_default(),
+            stream_key_ref,
+            enabled: input.enabled.unwrap_or(existing.enabled),
+            created_at: existing.created_at,
+            updated_at: now_utc(),
+        };
+
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        let changed = connection.execute(
+            "UPDATE stream_destinations
+             SET name = ?2,
+                 platform = ?3,
+                 ingest_url = ?4,
+                 stream_key_ref_provider = ?5,
+                 stream_key_ref_id = ?6,
+                 enabled = ?7,
+                 updated_at = ?8
+             WHERE id = ?1",
+            params![
+                destination.id,
+                destination.name,
+                destination.platform.as_str(),
+                destination.ingest_url,
+                destination
+                    .stream_key_ref
+                    .as_ref()
+                    .map(|secret| &secret.provider),
+                destination.stream_key_ref.as_ref().map(|secret| &secret.id),
+                destination.enabled,
+                destination.updated_at.to_rfc3339(),
+            ],
+        )?;
+        drop(connection);
+
+        if changed > 0 && old_secret_ref != destination.stream_key_ref {
+            self.delete_secret_ref(old_secret_ref.as_ref())?;
+        }
+
+        Ok((changed > 0).then_some(destination))
+    }
+
+    pub fn delete_stream_destination(&self, id: &str) -> Result<bool, StoreError> {
+        let Some(existing) = self.stream_destination_by_id_any(id)? else {
+            return Ok(false);
+        };
+
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        let changed = connection.execute("DELETE FROM stream_destinations WHERE id = ?1", [id])?;
+        drop(connection);
+
+        if changed > 0 {
+            self.delete_secret_ref(existing.stream_key_ref.as_ref())?;
+        }
+
+        Ok(changed > 0)
     }
 
     pub fn list_stream_destinations(&self) -> Result<Vec<StreamDestination>, StoreError> {
@@ -284,6 +438,16 @@ impl ProfileStore {
                 .into_iter()
                 .find(|destination| destination.enabled),
         })
+    }
+
+    fn stream_destination_by_id_any(
+        &self,
+        id: &str,
+    ) -> Result<Option<StreamDestination>, StoreError> {
+        Ok(self
+            .list_stream_destinations()?
+            .into_iter()
+            .find(|destination| destination.id == id))
     }
 
     pub fn create_marker(&self, label: Option<String>) -> Result<Marker, StoreError> {
@@ -468,6 +632,23 @@ impl ProfileStore {
         value
             .map(|value| serde_json::from_str(&value).map_err(StoreError::Json))
             .transpose()
+    }
+
+    fn delete_secret_ref(&self, reference: Option<&SecretRef>) -> Result<(), StoreError> {
+        let Some(reference) = reference else {
+            return Ok(());
+        };
+
+        if reference.provider != "local-sqlite" {
+            return Ok(());
+        }
+
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        connection.execute("DELETE FROM secrets WHERE id = ?1", [&reference.id])?;
+        Ok(())
     }
 }
 

@@ -7,11 +7,11 @@ use std::{future::Future, net::SocketAddr, path::PathBuf, sync::Arc};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Query, State,
+        Path, Query, State,
     },
     http::{HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -128,11 +128,19 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .route("/stream/stop", post(stop_stream))
         .route("/marker/create", post(create_marker))
         .route("/profiles", get(get_profiles).post(post_profiles))
+        .route(
+            "/profiles/recording/{id}",
+            put(put_recording_profile).delete(delete_recording_profile),
+        )
+        .route(
+            "/profiles/destinations/{id}",
+            put(put_stream_destination).delete(delete_stream_destination),
+        )
         .route("/events", get(events_ws))
         .layer(
             CorsLayer::new()
                 .allow_origin(tower_http::cors::Any)
-                .allow_methods([Method::GET, Method::POST])
+                .allow_methods([Method::DELETE, Method::GET, Method::POST, Method::PUT])
                 .allow_headers(tower_http::cors::Any),
         )
         .layer(TraceLayer::new_for_http())
@@ -212,6 +220,12 @@ pub enum CreatedProfile {
     StreamDestination(vaexcore_core::StreamDestination),
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct DeletedProfile {
+    pub id: String,
+    pub deleted: bool,
+}
+
 async fn health(State(state): State<Arc<ApiState>>) -> Json<ApiResponse<HealthResponse>> {
     let auth = state.auth.get();
     Json(ApiResponse::ok(HealthResponse {
@@ -259,6 +273,112 @@ async fn post_profiles(
     };
 
     Ok(Json(ApiResponse::ok(created)))
+}
+
+async fn put_recording_profile(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(input): Json<MediaProfileInput>,
+) -> Result<Json<ApiResponse<CreatedProfile>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let profile = state
+        .store
+        .update_recording_profile(&id, input)?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "recording_profile_not_found",
+                "recording profile not found",
+            )
+        })?;
+
+    Ok(Json(ApiResponse::ok(CreatedProfile::RecordingProfile(
+        profile,
+    ))))
+}
+
+async fn delete_recording_profile(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<DeletedProfile>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let status = state.engine.status().await;
+    if status
+        .recording
+        .as_ref()
+        .is_some_and(|session| session.profile.id == id)
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "recording_profile_in_use",
+            "cannot delete the active recording profile",
+        ));
+    }
+
+    if !state.store.delete_recording_profile(&id)? {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "recording_profile_not_found",
+            "recording profile not found",
+        ));
+    }
+
+    Ok(Json(ApiResponse::ok(DeletedProfile { id, deleted: true })))
+}
+
+async fn put_stream_destination(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(input): Json<StreamDestinationInput>,
+) -> Result<Json<ApiResponse<CreatedProfile>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let destination = state
+        .store
+        .update_stream_destination(&id, input)?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "stream_destination_not_found",
+                "stream destination not found",
+            )
+        })?;
+
+    Ok(Json(ApiResponse::ok(CreatedProfile::StreamDestination(
+        destination,
+    ))))
+}
+
+async fn delete_stream_destination(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<ApiResponse<DeletedProfile>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let status = state.engine.status().await;
+    if status
+        .stream
+        .as_ref()
+        .is_some_and(|session| session.destination.id == id)
+    {
+        return Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "stream_destination_in_use",
+            "cannot delete the active stream destination",
+        ));
+    }
+
+    if !state.store.delete_stream_destination(&id)? {
+        return Err(ApiError::new(
+            StatusCode::NOT_FOUND,
+            "stream_destination_not_found",
+            "stream destination not found",
+        ));
+    }
+
+    Ok(Json(ApiResponse::ok(DeletedProfile { id, deleted: true })))
 }
 
 async fn start_recording(
@@ -522,6 +642,43 @@ mod tests {
         serde_json::from_slice(&bytes).unwrap()
     }
 
+    async fn request_json(
+        app: Router,
+        method: &str,
+        uri: String,
+        body: Option<serde_json::Value>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut request = Request::builder().method(method).uri(uri);
+        let body = match body {
+            Some(body) => {
+                request = request.header("content-type", "application/json");
+                Body::from(body.to_string())
+            }
+            None => Body::empty(),
+        };
+        let response = app.oneshot(request.body(body).unwrap()).await.unwrap();
+        let status = response.status();
+        (status, response_body(response).await)
+    }
+
+    async fn first_recording_profile_id(app: Router) -> String {
+        let (status, body) = request_json(app, "GET", "/profiles".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        body["data"]["recording_profiles"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    async fn first_stream_destination_id(app: Router) -> String {
+        let (status, body) = request_json(app, "GET", "/profiles".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        body["data"]["stream_destinations"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
     #[tokio::test]
     async fn health_check_returns_ok() {
         let response = test_app()
@@ -608,6 +765,146 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response_body(response).await;
         assert_eq!(body["data"]["status"]["stream_active"], false);
+    }
+
+    #[tokio::test]
+    async fn recording_profile_update_and_delete_smoke_test() {
+        let app = test_app();
+        let profile_id = first_recording_profile_id(app.clone()).await;
+
+        let (status, body) = request_json(
+            app.clone(),
+            "PUT",
+            format!("/profiles/recording/{profile_id}"),
+            Some(json!({
+                "name": "Updated Local Profile",
+                "output_folder": "~/Movies/updated",
+                "filename_pattern": "updated-{time}",
+                "container": "mp4",
+                "resolution": { "width": 1280, "height": 720 },
+                "framerate": 30,
+                "bitrate_kbps": 6000,
+                "encoder_preference": "hardware"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["kind"], "recording_profile");
+        assert_eq!(body["data"]["value"]["name"], "Updated Local Profile");
+        assert_eq!(body["data"]["value"]["container"], "mp4");
+
+        let (status, body) = request_json(
+            app.clone(),
+            "DELETE",
+            format!("/profiles/recording/{profile_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["deleted"], true);
+
+        let (status, body) = request_json(app, "GET", "/profiles".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let still_present = body["data"]["recording_profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|profile| profile["id"].as_str() == Some(profile_id.as_str()));
+        assert!(!still_present);
+    }
+
+    #[tokio::test]
+    async fn stream_destination_update_and_delete_smoke_test() {
+        let app = test_app();
+        let destination_id = first_stream_destination_id(app.clone()).await;
+
+        let (status, body) = request_json(
+            app.clone(),
+            "PUT",
+            format!("/profiles/destinations/{destination_id}"),
+            Some(json!({
+                "name": "Updated RTMPS Destination",
+                "platform": "custom_rtmp",
+                "ingest_url": "rtmps://example.test/live",
+                "stream_key": "test-stream-key",
+                "enabled": false
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["kind"], "stream_destination");
+        assert_eq!(body["data"]["value"]["name"], "Updated RTMPS Destination");
+        assert_eq!(body["data"]["value"]["enabled"], false);
+        assert!(body["data"]["value"]["stream_key_ref"].is_object());
+
+        let (status, body) = request_json(
+            app.clone(),
+            "DELETE",
+            format!("/profiles/destinations/{destination_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["deleted"], true);
+
+        let (status, body) = request_json(app, "GET", "/profiles".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let still_present = body["data"]["stream_destinations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|destination| destination["id"].as_str() == Some(destination_id.as_str()));
+        assert!(!still_present);
+    }
+
+    #[tokio::test]
+    async fn deleting_active_recording_profile_conflicts() {
+        let app = test_app();
+        let profile_id = first_recording_profile_id(app.clone()).await;
+
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            "/recording/start".to_string(),
+            Some(json!({ "profile_id": profile_id.clone() })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = request_json(
+            app,
+            "DELETE",
+            format!("/profiles/recording/{profile_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"]["code"], "recording_profile_in_use");
+    }
+
+    #[tokio::test]
+    async fn deleting_active_stream_destination_conflicts() {
+        let app = test_app();
+        let destination_id = first_stream_destination_id(app.clone()).await;
+
+        let (status, _) = request_json(
+            app.clone(),
+            "POST",
+            "/stream/start".to_string(),
+            Some(json!({ "destination_id": destination_id.clone() })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = request_json(
+            app,
+            "DELETE",
+            format!("/profiles/destinations/{destination_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"]["code"], "stream_destination_in_use");
     }
 
     #[tokio::test]

@@ -467,7 +467,7 @@ nav {
 
 .table-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 12px;
   padding: 12px;
@@ -480,6 +480,12 @@ nav {
 .table-row span {
   display: block;
   overflow-wrap: anywhere;
+}
+
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 code {
@@ -498,6 +504,12 @@ code {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.form-hint {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 label {
@@ -580,6 +592,11 @@ select:focus {
   border: 1px solid var(--border);
   background: #141526;
   color: #f4e9ff;
+}
+
+.icon-button.danger {
+  border-color: rgba(255, 74, 162, 0.38);
+  color: #ff9dc8;
 }
 
 .event-list {
@@ -692,6 +709,10 @@ select:focus {
 
   .table-row {
     grid-template-columns: 1fr;
+  }
+
+  .table-actions {
+    justify-content: flex-start;
   }
 
   .runtime-row,

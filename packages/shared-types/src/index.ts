@@ -160,6 +160,11 @@ export type CreatedProfile =
   | { kind: "recording_profile"; value: MediaProfile }
   | { kind: "stream_destination"; value: StreamDestination };
 
+export interface DeletedProfile {
+  id: string;
+  deleted: boolean;
+}
+
 export const platformLabels: Record<PlatformKind, string> = {
   twitch: "Twitch",
   youtube: "YouTube",

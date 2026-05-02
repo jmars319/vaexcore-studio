@@ -4,10 +4,13 @@ import type {
   CommandStatus,
   CreatedProfile,
   CreateProfileRequest,
+  DeletedProfile,
   HealthResponse,
   Marker,
+  MediaProfileInput,
   ProfilesSnapshot,
   StudioStatus,
+  StreamDestinationInput,
 } from "@vaexcore/shared-types";
 
 export interface RuntimeApiConfig {
@@ -103,6 +106,44 @@ export const StudioApi = {
       method: "POST",
       body: JSON.stringify(request),
     }),
+  updateRecordingProfile: (
+    config: RuntimeApiConfig,
+    id: string,
+    value: MediaProfileInput,
+  ) =>
+    apiRequest<CreatedProfile>(
+      config,
+      `/profiles/recording/${encodeURIComponent(id)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(value),
+      },
+    ),
+  deleteRecordingProfile: (config: RuntimeApiConfig, id: string) =>
+    apiRequest<DeletedProfile>(
+      config,
+      `/profiles/recording/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
+  updateStreamDestination: (
+    config: RuntimeApiConfig,
+    id: string,
+    value: StreamDestinationInput,
+  ) =>
+    apiRequest<CreatedProfile>(
+      config,
+      `/profiles/destinations/${encodeURIComponent(id)}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(value),
+      },
+    ),
+  deleteStreamDestination: (config: RuntimeApiConfig, id: string) =>
+    apiRequest<DeletedProfile>(
+      config,
+      `/profiles/destinations/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    ),
   startRecording: (config: RuntimeApiConfig, profileId?: string) =>
     apiRequest<CommandStatus>(config, "/recording/start", {
       method: "POST",
