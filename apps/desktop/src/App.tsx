@@ -9,6 +9,7 @@ import {
   Plus,
   Radio,
   ScrollText,
+  Settings as SettingsIcon,
   SlidersHorizontal,
   Square,
   Terminal,
@@ -41,8 +42,16 @@ type Section =
   | "profiles"
   | "controls"
   | "apps"
-  | "logs"
-  | "settings";
+  | "logs";
+
+const sectionIds: readonly Section[] = [
+  "dashboard",
+  "destinations",
+  "profiles",
+  "controls",
+  "apps",
+  "logs",
+];
 
 const navItems: Array<{ id: Section; label: string; icon: ReactNode }> = [
   { id: "dashboard", label: "Dashboard", icon: <Activity size={17} /> },
@@ -53,11 +62,11 @@ const navItems: Array<{ id: Section; label: string; icon: ReactNode }> = [
   { id: "logs", label: "Logs", icon: <ScrollText size={17} /> },
 ];
 
-const openSettingsEvent = "vaexcore://open-settings";
+const openSectionEvent = "vaexcore://open-section";
 
 const defaultProfileForm: MediaProfileInput = {
   name: "1080p60 Local",
-  output_folder: "~/Movies/vaexcore-studio",
+  output_folder: "~/Movies/vaexcore studio",
   filename_pattern: "{date}-{time}-{profile}",
   container: "mkv",
   resolution: { width: 1920, height: 1080 },
@@ -75,6 +84,10 @@ const defaultDestinationForm: StreamDestinationInput = {
 };
 
 function App() {
+  const isSettingsWindow = useMemo(
+    () => new URLSearchParams(window.location.search).get("window") === "settings",
+    [],
+  );
   const [section, setSection] = useState<Section>("dashboard");
   const [config, setConfig] = useState<RuntimeApiConfig | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -101,8 +114,10 @@ function App() {
 
     import("@tauri-apps/api/event")
       .then(({ listen }) =>
-        listen(openSettingsEvent, () => {
-          setSection("settings");
+        listen<string>(openSectionEvent, ({ payload }) => {
+          if (isSection(payload)) {
+            setSection(payload);
+          }
         }),
       )
       .then((nextUnlisten) => {
@@ -247,6 +262,20 @@ function App() {
     }
   }
 
+  async function handleOpenSettingsWindow() {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke<void>("open_settings_window");
+      setError(null);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Configuration settings unavailable",
+      );
+    }
+  }
+
   const page = useMemo(() => {
     switch (section) {
       case "dashboard":
@@ -316,27 +345,15 @@ function App() {
         return <ConnectedAppsPage config={config} />;
       case "logs":
         return <LogsPage events={events} />;
-      case "settings":
-        return (
-          <SettingsPage
-            config={config}
-            engine={activeStatus?.engine ?? "starting"}
-            health={health}
-            logoUrl={logoUrl}
-            mode={activeStatus?.mode ?? "dry_run"}
-          />
-        );
     }
   }, [
     activeDestination?.name,
     activeStatus?.engine,
-    activeStatus?.mode,
     activeStatus?.recording_active,
     activeStatus?.stream_active,
     config,
     destinationForm,
     events,
-    health,
     markerLabel,
     profileForm,
     profiles,
@@ -346,6 +363,37 @@ function App() {
     selectedProfileId,
   ]);
 
+  if (isSettingsWindow) {
+    return (
+      <main className="settings-window">
+        <header className="settings-window-header">
+          <div className="brand-mark compact">
+            <img alt="" src={logoUrl} />
+          </div>
+          <div>
+            <p className="section-label">Configuration</p>
+            <h1>Settings</h1>
+          </div>
+        </header>
+
+        {error && (
+          <div className="error-banner">
+            <WifiOff size={17} />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <SettingsPage
+          config={config}
+          engine={activeStatus?.engine ?? "starting"}
+          health={health}
+          logoUrl={logoUrl}
+          mode={activeStatus?.mode ?? "dry_run"}
+        />
+      </main>
+    );
+  }
+
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -354,7 +402,7 @@ function App() {
             <img alt="" src={logoUrl} />
           </div>
           <div>
-            <h1>vaexcore-studio</h1>
+            <h1>vaexcore studio</h1>
             <span>local control core</span>
           </div>
         </div>
@@ -374,8 +422,19 @@ function App() {
         </nav>
 
         <div className="sidebar-footer">
-          <StatusDot active={!error} />
-          <span>{error ? "API unavailable" : "API connected"}</span>
+          <div className="sidebar-status">
+            <StatusDot active={!error} />
+            <span>{error ? "API unavailable" : "API connected"}</span>
+          </div>
+          <button
+            aria-label="Open Configuration Settings"
+            className="icon-button sidebar-settings-button"
+            onClick={handleOpenSettingsWindow}
+            title="Configuration Settings"
+            type="button"
+          >
+            <SettingsIcon size={16} />
+          </button>
         </div>
       </aside>
 
@@ -861,7 +920,7 @@ function SettingsPage(props: {
         <img alt="" src={props.logoUrl} />
         <div>
           <PanelTitle title="Identity" />
-          <KeyValue label="Product" value="vaexcore-studio" />
+          <KeyValue label="Product" value="vaexcore studio" />
           <KeyValue label="Role" value="local foundation layer" />
         </div>
       </section>
@@ -871,7 +930,7 @@ function SettingsPage(props: {
         <KeyValue label="Mode" value={props.mode} />
         <KeyValue
           label="Service"
-          value={props.health?.service ?? "vaexcore-studio"}
+          value={props.health?.service ?? "vaexcore studio"}
         />
         <KeyValue label="Version" value={props.health?.version ?? "0.1.0"} />
       </section>
@@ -1022,6 +1081,10 @@ function NumberInput(props: {
   );
 }
 
+function isSection(value: unknown): value is Section {
+  return typeof value === "string" && sectionIds.includes(value as Section);
+}
+
 function sectionTitle(section: Section): string {
   return section
     .split("_")
@@ -1043,8 +1106,6 @@ function sectionHeading(section: Section): string {
       return "Connected Apps";
     case "logs":
       return "Event Logs";
-    case "settings":
-      return "Settings";
   }
 }
 

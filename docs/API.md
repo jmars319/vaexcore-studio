@@ -134,7 +134,7 @@ Create recording profile:
   "kind": "recording_profile",
   "value": {
     "name": "1080p60 Local",
-    "output_folder": "~/Movies/vaexcore-studio",
+    "output_folder": "~/Movies/vaexcore studio",
     "filename_pattern": "{date}-{time}-{profile}",
     "container": "mkv",
     "resolution": { "width": 1920, "height": 1080 },
@@ -183,4 +183,3 @@ Supported event types:
 - `stream.stopped`
 - `marker.created`
 - `error`
-

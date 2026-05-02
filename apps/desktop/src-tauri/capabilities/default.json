@@ -1,8 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default permissions for the main vaexcore-studio window",
-  "windows": ["main"],
+  "description": "Default permissions for vaexcore studio windows",
+  "windows": ["main", "settings"],
   "permissions": ["core:default"]
 }
-

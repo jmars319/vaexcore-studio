@@ -1,6 +1,6 @@
-# vaexcore-studio
+# vaexcore studio
 
-`vaexcore-studio` is a macOS-first desktop control system for streaming, local recording, and localhost integrations. It is designed as the foundation layer that Twitch bots, highlight locators, stream deck tools, and future overlay systems can trust.
+`vaexcore studio` is a macOS-first desktop control system for streaming, local recording, and localhost integrations. It is designed as the foundation layer that Twitch bots, highlight locators, stream deck tools, and future overlay systems can trust.
 
 It is not a giveaway, moderation, highlight detection, scene editing, cloud, or plugin marketplace app.
 
@@ -107,4 +107,3 @@ curl -H "x-vaexcore-token: replace-with-a-local-token" http://127.0.0.1:51287/st
 - API responses expose secret references, not raw stream keys.
 - Stream keys are never included in media events or status payloads.
 - The API is localhost-only by default.
-

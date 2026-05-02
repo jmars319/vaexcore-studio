@@ -142,7 +142,7 @@ impl Default for MediaProfileInput {
     fn default() -> Self {
         Self {
             name: "Default Local Recording".to_string(),
-            output_folder: "~/Movies/vaexcore-studio".to_string(),
+            output_folder: "~/Movies/vaexcore studio".to_string(),
             filename_pattern: "{date}-{time}-{profile}".to_string(),
             container: RecordingContainer::Mkv,
             resolution: Resolution::default(),

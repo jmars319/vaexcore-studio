@@ -1,6 +1,6 @@
 # Architecture
 
-`vaexcore-studio` is structured around strict ownership boundaries:
+`vaexcore studio` is structured around strict ownership boundaries:
 
 - UI renders state and sends commands.
 - Local API owns command routing, auth, persistence, and events.
@@ -90,4 +90,3 @@ React UI
 - Secrets do not appear in logs, status, or events.
 - API responses use structured JSON envelopes.
 - Partial failures return explicit errors and do not mutate unrelated state.
-

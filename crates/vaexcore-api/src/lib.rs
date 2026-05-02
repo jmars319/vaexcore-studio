@@ -491,9 +491,9 @@ pub fn default_bind_addr() -> SocketAddr {
 }
 
 pub fn default_database_path() -> PathBuf {
-    directories::ProjectDirs::from("com", "vaexcore", "vaexcore-studio")
+    directories::ProjectDirs::from("com", "vaexcore", "vaexcore studio")
         .map(|dirs| dirs.data_dir().join("studio.sqlite"))
-        .unwrap_or_else(|| PathBuf::from("vaexcore-studio.sqlite"))
+        .unwrap_or_else(|| PathBuf::from("vaexcore studio.sqlite"))
 }
 
 #[cfg(test)]

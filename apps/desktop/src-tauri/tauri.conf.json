@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "vaexcore-studio",
+  "productName": "vaexcore studio",
   "version": "0.1.0",
   "identifier": "com.vaexcore.studio",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "vaexcore-studio",
+        "title": "vaexcore studio",
         "width": 1440,
         "height": 960,
         "minWidth": 1100,
@@ -30,6 +30,6 @@
     "icon": ["icons/icon.png"],
     "category": "DeveloperTool",
     "shortDescription": "Local streaming and recording control core",
-    "longDescription": "vaexcore-studio is a local-first streaming, recording, and app integration control system."
+    "longDescription": "vaexcore studio is a local-first streaming, recording, and app integration control system."
   }
 }

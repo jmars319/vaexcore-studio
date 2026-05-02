@@ -16,7 +16,7 @@ pub use responses::{
 pub use security::{SecretRef, SecretStore, SecretStoreError, SensitiveString};
 pub use status::{EngineMode, EngineStatus, RecordingSession, StreamSession};
 
-pub const APP_NAME: &str = "vaexcore-studio";
+pub const APP_NAME: &str = "vaexcore studio";
 pub const DEFAULT_API_PORT: u16 = 51287;
 pub const DEFAULT_API_HOST: &str = "127.0.0.1";
 

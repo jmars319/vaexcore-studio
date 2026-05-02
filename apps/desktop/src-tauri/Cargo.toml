@@ -1,7 +1,7 @@
 [package]
 name = "vaexcore-studio-desktop"
 version = "0.1.0"
-description = "macOS-first desktop control system for vaexcore-studio."
+description = "macOS-first desktop control system for vaexcore studio."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

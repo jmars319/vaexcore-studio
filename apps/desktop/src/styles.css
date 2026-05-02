@@ -150,6 +150,7 @@ nav {
 .sidebar-footer {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 9px;
   margin-top: auto;
   padding: 12px;
@@ -157,6 +158,25 @@ nav {
   border-radius: 8px;
   color: #d6cfeb;
   font-size: 13px;
+}
+
+.sidebar-status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.sidebar-status span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-settings-button {
+  width: 34px;
+  min-height: 34px;
+  flex: 0 0 auto;
 }
 
 .status-dot {
@@ -174,6 +194,33 @@ nav {
 .workspace {
   min-width: 0;
   padding: 24px;
+}
+
+.settings-window {
+  min-height: 100vh;
+  padding: 20px;
+  overflow: auto;
+  background:
+    linear-gradient(180deg, rgba(34, 216, 255, 0.08), transparent 36%),
+    var(--bg);
+}
+
+.settings-window-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.settings-window-header h1 {
+  margin: 2px 0 0;
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.brand-mark.compact {
+  width: 42px;
+  height: 42px;
 }
 
 .topbar {
@@ -310,6 +357,24 @@ nav {
   box-shadow:
     0 0 24px rgba(34, 216, 255, 0.16),
     0 0 36px rgba(255, 50, 245, 0.14);
+}
+
+.settings-window .settings-grid {
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.settings-window .panel {
+  padding: 16px;
+}
+
+.settings-window .identity-panel {
+  grid-template-columns: 88px minmax(0, 1fr);
+}
+
+.settings-window .identity-panel img {
+  width: 88px;
+  height: 88px;
 }
 
 .panel {
