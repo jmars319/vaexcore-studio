@@ -10,6 +10,7 @@
 - Dry-run recording and streaming lifecycle.
 - Manual marker events.
 - Replaceable `media-runner` sidecar scaffold.
+- Sidecar startup supervision with dry-run fallback.
 
 ## Next Milestone: Runtime Hardening
 
@@ -19,6 +20,7 @@
 - Per-command request IDs.
 - Structured app log file rotation.
 - Import/export profile bundle.
+- Sidecar restart policy after crashes.
 
 ## Real Media Engine Milestone
 
@@ -28,7 +30,7 @@
 - Encoder and muxer capability discovery.
 - Recording container safety checks.
 - RTMP/RTMPS connection status events.
-- Sidecar health supervision from the API process.
+- Real command transport between API and `media-runner`.
 
 ## Platform Milestone
 
@@ -55,4 +57,3 @@
 - Plugin marketplace.
 - Cloud dependency.
 - Mobile app.
-

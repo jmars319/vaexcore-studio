@@ -1,4 +1,9 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Mutex};
+use std::{
+    env,
+    net::{SocketAddr, TcpListener},
+    path::PathBuf,
+    sync::Mutex,
+};
 
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
@@ -10,6 +15,7 @@ use vaexcore_api::{
     AuthConfig, ProfileStore, SharedAuthConfig,
 };
 use vaexcore_core::AppSettings;
+use vaexcore_media::{MediaRunnerConfig, MediaRunnerSupervisor};
 
 const APP_NAME: &str = "vaexcore studio";
 const MAIN_WINDOW_LABEL: &str = "main";
@@ -53,6 +59,7 @@ struct AppRuntimeState {
     settings_store: ProfileStore,
     data_dir: PathBuf,
     database_path: PathBuf,
+    media_runner: Option<MediaRunnerSupervisor>,
     api_shutdown: Mutex<Option<oneshot::Sender<()>>>,
 }
 
@@ -307,6 +314,7 @@ pub fn run() {
                 token: settings.api_token.clone(),
                 dev_mode: settings.dev_auth_bypass,
             });
+            let media_runner = start_media_runner(app.handle());
             let (api_shutdown, shutdown_rx) = oneshot::channel::<()>();
 
             app.manage(AppRuntimeState {
@@ -315,6 +323,7 @@ pub fn run() {
                 settings_store,
                 data_dir,
                 database_path: database_path.clone(),
+                media_runner: media_runner.clone(),
                 api_shutdown: Mutex::new(Some(api_shutdown)),
             });
 
@@ -323,6 +332,7 @@ pub fn run() {
                     bind_addr,
                     database_path,
                     auth,
+                    media_runner,
                 };
 
                 if let Err(error) = serve_with_shutdown(config, async {
@@ -422,6 +432,10 @@ fn show_settings_window(app: &tauri::AppHandle) -> tauri::Result<()> {
 }
 
 fn quit_app(app: &tauri::AppHandle) {
+    if let Some(media_runner) = &app.state::<AppRuntimeState>().media_runner {
+        media_runner.shutdown();
+    }
+
     if let Some(shutdown) = app
         .state::<AppRuntimeState>()
         .api_shutdown
@@ -433,6 +447,83 @@ fn quit_app(app: &tauri::AppHandle) {
     }
 
     app.exit(0);
+}
+
+fn start_media_runner(app: &tauri::AppHandle) -> Option<MediaRunnerSupervisor> {
+    let Some(executable_path) = resolve_media_runner_path(app) else {
+        tracing::warn!("media-runner sidecar not found; using in-process dry-run media engine");
+        return None;
+    };
+    let Some(status_addr) = reserve_sidecar_status_addr() else {
+        tracing::warn!(
+            "could not reserve a media-runner status port; using in-process dry-run media engine"
+        );
+        return None;
+    };
+
+    let config = MediaRunnerConfig::dry_run(executable_path.clone(), status_addr);
+    match MediaRunnerSupervisor::start(config) {
+        Ok(supervisor) => {
+            tracing::info!(
+                path = %executable_path.display(),
+                %status_addr,
+                "media-runner sidecar started"
+            );
+            Some(supervisor)
+        }
+        Err(error) => {
+            tracing::warn!(%error, "media-runner sidecar unavailable; using in-process dry-run media engine");
+            None
+        }
+    }
+}
+
+fn resolve_media_runner_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    if let Ok(path) = env::var("VAEXCORE_MEDIA_RUNNER_PATH") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+        tracing::warn!(
+            path = %path.display(),
+            "VAEXCORE_MEDIA_RUNNER_PATH does not point to a file"
+        );
+    }
+
+    let executable_name = if cfg!(windows) {
+        "media-runner.exe"
+    } else {
+        "media-runner"
+    };
+    let mut candidates = Vec::new();
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join(executable_name));
+    }
+
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(exe_dir) = current_exe.parent() {
+            candidates.push(exe_dir.join(executable_name));
+            candidates.push(exe_dir.join("../Resources").join(executable_name));
+        }
+    }
+
+    if let Some(workspace_root) = workspace_root_from_manifest() {
+        candidates.push(workspace_root.join("target/debug").join(executable_name));
+        candidates.push(workspace_root.join("target/release").join(executable_name));
+    }
+
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn workspace_root_from_manifest() -> Option<PathBuf> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir.ancestors().nth(3).map(PathBuf::from)
+}
+
+fn reserve_sidecar_status_addr() -> Option<SocketAddr> {
+    let listener = TcpListener::bind("127.0.0.1:0").ok()?;
+    listener.local_addr().ok()
 }
 
 fn frontend_api_config(bind_addr: std::net::SocketAddr, auth: &AuthConfig) -> FrontendApiConfig {

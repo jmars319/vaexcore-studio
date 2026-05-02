@@ -9,6 +9,12 @@ use vaexcore_core::{
     StreamDestination, StreamSession, StudioEvent, StudioEventKind,
 };
 
+mod sidecar;
+
+pub use sidecar::{
+    MediaRunnerConfig, MediaRunnerStatus, MediaRunnerSupervisor, SidecarError, SidecarMediaEngine,
+};
+
 pub type MediaEventSink = Arc<dyn Fn(StudioEvent) + Send + Sync>;
 
 #[derive(Debug, thiserror::Error)]

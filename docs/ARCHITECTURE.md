@@ -14,9 +14,10 @@ The Tauri desktop process starts:
 
 1. React UI in the WebView.
 2. Rust local API on `127.0.0.1:51287`.
-3. `DryRunMediaEngine` in-process for MVP simulation.
+3. A supervised `media-runner` sidecar when available.
+4. `DryRunMediaEngine` in-process as the fallback and MVP simulation layer.
 
-The `media-runner` sidecar is scaffolded separately. The UI does not depend on it being present, and the app should remain usable when the sidecar is missing.
+The UI does not depend on the sidecar being present. If `media-runner` is missing or unhealthy, the app remains usable through dry-run media execution.
 
 ## Crate Responsibilities
 
@@ -42,6 +43,7 @@ Local API:
 - SQLite persistence
 - SecretStore implementation
 - Dry-run engine wiring
+- Optional sidecar supervision and health events
 
 ### `vaexcore-media`
 
@@ -54,6 +56,8 @@ Media abstraction:
 - `StreamDestination`
 - `EngineStatus`
 - `DryRunMediaEngine`
+- `SidecarMediaEngine`
+- `MediaRunnerSupervisor`
 - feature-gated `GStreamerMediaEngine` placeholder
 
 ### `vaexcore-platforms`
@@ -77,7 +81,8 @@ React UI
   -> vaexcore-api
   -> SQLite profile/secret lookup
   -> MediaEngine trait
-  -> DryRunMediaEngine
+  -> SidecarMediaEngine when media-runner is available
+  -> DryRunMediaEngine fallback
   -> StudioEvent
   -> EventBus
   -> WebSocket clients

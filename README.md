@@ -12,7 +12,7 @@ It is not a giveaway, moderation, highlight detection, scene editing, cloud, or 
 - SQLite for local profiles, markers, and secret references
 - Local HTTP + WebSocket API
 - Dry-run media engine behind a media abstraction
-- Replaceable `media-runner` sidecar scaffold
+- Supervised, replaceable `media-runner` sidecar path with dry-run fallback
 
 ## Repository Layout
 
@@ -63,7 +63,19 @@ npm run build
 cargo test --workspace
 ```
 
-Run the sidecar dry-run status service:
+Build the sidecar executable for local desktop supervision:
+
+```bash
+cargo build -p vaexcore-media-runner
+```
+
+The desktop app auto-detects `target/debug/media-runner` or `target/release/media-runner` when present. You can also point directly at a sidecar executable:
+
+```bash
+VAEXCORE_MEDIA_RUNNER_PATH=/absolute/path/to/media-runner npm run tauri -w apps/desktop -- dev
+```
+
+Run the sidecar dry-run status service manually:
 
 ```bash
 cargo run -p vaexcore-media-runner -- --status-addr 127.0.0.1:51387 --dry-run
@@ -100,6 +112,7 @@ curl -H "x-vaexcore-token: replace-with-a-local-token" http://127.0.0.1:51287/st
 - Create manual markers.
 - Stream lifecycle events over WebSocket.
 - Simulate media execution with `DryRunMediaEngine`.
+- Prefer supervised `media-runner` dry-run execution when the sidecar is available, and fall back to in-process dry-run when it is missing.
 
 ## Security Notes
 

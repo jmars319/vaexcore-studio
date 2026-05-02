@@ -2,7 +2,7 @@ mod auth;
 mod event_bus;
 mod store;
 
-use std::{future::Future, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{future::Future, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{
     extract::{
@@ -22,7 +22,9 @@ use vaexcore_core::{
     new_id, ApiResponse, CommandStatus, HealthResponse, Marker, MediaProfileInput,
     ProfilesSnapshot, StreamDestinationInput, StudioEvent, StudioEventKind, StudioStatus, APP_NAME,
 };
-use vaexcore_media::{DryRunMediaEngine, MediaEngine, MediaError};
+use vaexcore_media::{
+    DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor, SidecarMediaEngine,
+};
 
 pub use auth::{AuthConfig, SharedAuthConfig};
 pub use event_bus::EventBus;
@@ -33,6 +35,7 @@ pub struct ApiServerConfig {
     pub bind_addr: SocketAddr,
     pub database_path: PathBuf,
     pub auth: SharedAuthConfig,
+    pub media_runner: Option<MediaRunnerSupervisor>,
 }
 
 pub struct ApiState {
@@ -49,7 +52,11 @@ impl ApiState {
             let events = events.clone();
             Arc::new(move |event: StudioEvent| events.emit(event))
         };
-        let engine: Arc<dyn MediaEngine> = Arc::new(DryRunMediaEngine::new(Some(event_sink)));
+        let engine: Arc<dyn MediaEngine> = match config.media_runner.clone() {
+            Some(runner) => Arc::new(SidecarMediaEngine::new(runner, Some(event_sink))),
+            None => Arc::new(DryRunMediaEngine::new(Some(event_sink))),
+        };
+        let monitor_events = events.clone();
         let state = Arc::new(Self {
             auth: config.auth.clone(),
             store: ProfileStore::open(&config.database_path)?,
@@ -63,6 +70,9 @@ impl ApiState {
         state
             .events
             .emit(StudioEvent::simple(StudioEventKind::MediaEngineReady));
+        if let Some(runner) = config.media_runner.clone() {
+            spawn_media_runner_monitor(runner, monitor_events);
+        }
 
         Ok(state)
     }
@@ -90,6 +100,51 @@ impl ApiState {
 
         Ok(state)
     }
+}
+
+fn spawn_media_runner_monitor(runner: MediaRunnerSupervisor, events: EventBus) {
+    tokio::spawn(async move {
+        let mut ready = false;
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
+
+        loop {
+            interval.tick().await;
+            match runner.status().await {
+                Ok(status) if status.ready => {
+                    if !ready {
+                        events.emit(StudioEvent::new(
+                            StudioEventKind::MediaEngineReady,
+                            json!({
+                                "engine": "SidecarMediaEngine",
+                                "runner_service": status.service,
+                                "runner_status_addr": runner.status_addr().to_string(),
+                                "dry_run": status.dry_run,
+                                "pipeline_name": status.pipeline_name,
+                            }),
+                        ));
+                    }
+                    ready = true;
+                }
+                Ok(status) => {
+                    if ready {
+                        events.emit(StudioEvent::error(format!(
+                            "media runner reported not ready: {}",
+                            status.service
+                        )));
+                    }
+                    ready = false;
+                }
+                Err(error) => {
+                    if ready {
+                        events.emit(StudioEvent::error(format!(
+                            "media runner unavailable: {error}"
+                        )));
+                    }
+                    ready = false;
+                }
+            }
+        }
+    });
 }
 
 pub async fn serve(config: ApiServerConfig) -> anyhow::Result<()> {
