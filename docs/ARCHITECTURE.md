@@ -14,10 +14,10 @@ The Tauri desktop process starts:
 
 1. React UI in the WebView.
 2. Rust local API on `127.0.0.1:51287`.
-3. A supervised `media-runner` sidecar when available.
+3. A supervised bundled `media-runner` sidecar when available.
 4. `DryRunMediaEngine` in-process as the fallback and MVP simulation layer.
 
-The UI does not depend on the sidecar being present. If `media-runner` is missing or unhealthy, the app remains usable through dry-run media execution.
+The UI does not depend on the sidecar being present. If `media-runner` is missing or unhealthy, the app remains usable through dry-run media execution. Release builds stage `media-runner` as a Tauri external binary.
 
 ## Crate Responsibilities
 

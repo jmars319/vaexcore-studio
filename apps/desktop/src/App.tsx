@@ -37,8 +37,10 @@ import { platformLabels } from "@vaexcore/shared-types";
 import {
   eventSocketUrl,
   LocalAppSettingsSnapshot,
+  loadMediaRunnerInfo,
   loadRuntimeConfig,
   loadAppSettings,
+  MediaRunnerInfo,
   openDataDirectory,
   regenerateApiToken,
   RuntimeApiConfig,
@@ -128,6 +130,8 @@ function App() {
   const [settingsForm, setSettingsForm] =
     useState<AppSettings>(defaultAppSettings);
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
+  const [mediaRunnerInfo, setMediaRunnerInfo] =
+    useState<MediaRunnerInfo | null>(null);
 
   useEffect(() => {
     loadRuntimeConfig().then(setConfig).catch((error: Error) => {
@@ -179,15 +183,17 @@ function App() {
 
     async function refresh() {
       try {
-        const [nextHealth, nextStatus, nextProfiles] = await Promise.all([
+        const [nextHealth, nextStatus, nextProfiles, nextMediaRunnerInfo] = await Promise.all([
           StudioApi.health(runtimeConfig),
           StudioApi.status(runtimeConfig),
           StudioApi.profiles(runtimeConfig),
+          loadMediaRunnerInfo(),
         ]);
         if (cancelled) return;
         setHealth(nextHealth);
         setStatus(nextStatus);
         setProfiles(nextProfiles);
+        setMediaRunnerInfo(nextMediaRunnerInfo);
         setEvents((current) =>
           mergeEvents([...nextStatus.recent_events, ...current]),
         );
@@ -541,7 +547,13 @@ function App() {
           />
         );
       case "apps":
-        return <ConnectedAppsPage config={config} />;
+        return (
+          <ConnectedAppsPage
+            config={config}
+            engine={activeStatus?.engine ?? "starting"}
+            mediaRunnerInfo={mediaRunnerInfo}
+          />
+        );
       case "logs":
         return <LogsPage events={events} />;
     }
@@ -556,6 +568,7 @@ function App() {
     editingProfileId,
     events,
     markerLabel,
+    mediaRunnerInfo,
     profileForm,
     profiles,
     recordingPath,
@@ -589,6 +602,7 @@ function App() {
           engine={activeStatus?.engine ?? "starting"}
           health={health}
           logoUrl={logoUrl}
+          mediaRunnerInfo={mediaRunnerInfo}
           mode={activeStatus?.mode ?? "dry_run"}
           onOpenDataDirectory={handleOpenDataDirectory}
           onRegenerateToken={handleRegenerateApiToken}
@@ -1152,10 +1166,15 @@ function ControlsPage(props: {
   );
 }
 
-function ConnectedAppsPage(props: { config: RuntimeApiConfig | null }) {
+function ConnectedAppsPage(props: {
+  config: RuntimeApiConfig | null;
+  engine: string;
+  mediaRunnerInfo: MediaRunnerInfo | null;
+}) {
   const apiUrl = props.config?.apiUrl ?? "http://127.0.0.1:51287";
   const wsUrl = props.config?.wsUrl ?? "ws://127.0.0.1:51287/events";
   const token = props.config?.token ?? "dev-auth-bypass";
+  const runnerState = mediaRunnerState(props.mediaRunnerInfo, props.engine);
 
   return (
     <div className="stack">
@@ -1164,6 +1183,18 @@ function ConnectedAppsPage(props: { config: RuntimeApiConfig | null }) {
         <CopyLine label="HTTP API URL" value={apiUrl} />
         <CopyLine label="WebSocket URL" value={wsUrl} />
         <CopyLine label="API Token" secret value={token} />
+      </section>
+      <section className="panel">
+        <PanelTitle title="Local Runtime" />
+        <KeyValue label="Media Runner" value={runnerState} />
+        <KeyValue
+          label="Sidecar Bundle"
+          value={props.mediaRunnerInfo?.bundled ? "bundled" : "not bundled"}
+        />
+        <KeyValue
+          label="Status Endpoint"
+          value={props.mediaRunnerInfo?.statusAddr ?? "inactive"}
+        />
       </section>
       <section className="panel">
         <PanelTitle title="Recent Clients" />
@@ -1199,6 +1230,7 @@ function SettingsPage(props: {
   engine: string;
   health: HealthResponse | null;
   logoUrl: string;
+  mediaRunnerInfo: MediaRunnerInfo | null;
   mode: string;
   onOpenDataDirectory: () => void;
   onRegenerateToken: () => void;
@@ -1276,6 +1308,14 @@ function SettingsPage(props: {
         <PanelTitle title="Runtime" />
         <KeyValue label="Engine" value={props.engine} />
         <KeyValue label="Mode" value={props.mode} />
+        <KeyValue
+          label="Media Runner"
+          value={mediaRunnerState(props.mediaRunnerInfo, props.engine)}
+        />
+        <KeyValue
+          label="Sidecar Bundle"
+          value={props.mediaRunnerInfo?.bundled ? "bundled" : "not bundled"}
+        />
         <KeyValue
           label="Service"
           value={props.health?.service ?? "vaexcore studio"}
@@ -1609,6 +1649,16 @@ function mergeEvents(events: StudioEvent[]): StudioEvent[] {
       return true;
     })
     .slice(0, 100);
+}
+
+function mediaRunnerState(
+  info: MediaRunnerInfo | null,
+  engine: string,
+): string {
+  if (info?.running && info.bundled) return "bundled, running";
+  if (info?.running) return "running";
+  if (engine === "starting") return "unavailable";
+  return "fallback dry-run";
 }
 
 function mask(value: string): string {

@@ -5,7 +5,7 @@
   "identifier": "com.vaexcore.studio",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run prepare:sidecars && npm run build",
     "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../dist"
   },
@@ -27,6 +27,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": ["binaries/media-runner"],
     "icon": ["icons/icon.png"],
     "category": "DeveloperTool",
     "shortDescription": "Local streaming and recording control core",

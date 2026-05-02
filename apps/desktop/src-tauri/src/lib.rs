@@ -53,6 +53,16 @@ struct FrontendAppSettings {
     restart_required: bool,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FrontendMediaRunnerInfo {
+    bundled: bool,
+    running: bool,
+    fallback_dry_run: bool,
+    status_addr: Option<String>,
+    executable_path: Option<String>,
+}
+
 struct AppRuntimeState {
     bind_addr: SocketAddr,
     auth: SharedAuthConfig,
@@ -129,6 +139,37 @@ fn open_data_directory(state: tauri::State<'_, AppRuntimeState>) -> Result<(), S
 #[tauri::command]
 async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     show_settings_window(&app).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn media_runner_info(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppRuntimeState>,
+) -> Result<FrontendMediaRunnerInfo, String> {
+    let runner = state.media_runner.clone();
+    drop(state);
+
+    let running = match &runner {
+        Some(runner) => runner.health().await.is_ok(),
+        None => false,
+    };
+    let executable_path = runner
+        .as_ref()
+        .map(MediaRunnerSupervisor::executable_path)
+        .or_else(|| resolve_media_runner_path(&app));
+    let bundled = executable_path
+        .as_ref()
+        .is_some_and(|path| is_bundled_media_runner_path(&app, path));
+
+    Ok(FrontendMediaRunnerInfo {
+        bundled,
+        running,
+        fallback_dry_run: !running,
+        status_addr: runner
+            .as_ref()
+            .map(|runner| runner.status_addr().to_string()),
+        executable_path: executable_path.map(|path| path.display().to_string()),
+    })
 }
 
 pub fn run() {
@@ -352,7 +393,8 @@ pub fn run() {
             save_app_settings,
             regenerate_api_token,
             open_data_directory,
-            open_settings_window
+            open_settings_window,
+            media_runner_info
         ])
         .run(tauri::generate_context!())
         .expect("failed to run vaexcore studio");
@@ -490,30 +532,121 @@ fn resolve_media_runner_path(app: &tauri::AppHandle) -> Option<PathBuf> {
         );
     }
 
-    let executable_name = if cfg!(windows) {
-        "media-runner.exe"
-    } else {
-        "media-runner"
-    };
+    let executable_names = media_runner_executable_names();
     let mut candidates = Vec::new();
 
     if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join(executable_name));
+        push_media_runner_candidates(&mut candidates, &resource_dir, &executable_names);
+        push_media_runner_candidates(
+            &mut candidates,
+            &resource_dir.join("binaries"),
+            &executable_names,
+        );
     }
 
     if let Ok(current_exe) = env::current_exe() {
         if let Some(exe_dir) = current_exe.parent() {
-            candidates.push(exe_dir.join(executable_name));
-            candidates.push(exe_dir.join("../Resources").join(executable_name));
+            push_media_runner_candidates(&mut candidates, exe_dir, &executable_names);
+            push_media_runner_candidates(
+                &mut candidates,
+                &exe_dir.join("binaries"),
+                &executable_names,
+            );
+            push_media_runner_candidates(
+                &mut candidates,
+                &exe_dir.join("../Resources"),
+                &executable_names,
+            );
+            push_media_runner_candidates(
+                &mut candidates,
+                &exe_dir.join("../Resources/binaries"),
+                &executable_names,
+            );
         }
     }
 
     if let Some(workspace_root) = workspace_root_from_manifest() {
-        candidates.push(workspace_root.join("target/debug").join(executable_name));
-        candidates.push(workspace_root.join("target/release").join(executable_name));
+        let unsuffixed_name = media_runner_unsuffixed_name();
+        candidates.push(workspace_root.join("target/debug").join(&unsuffixed_name));
+        candidates.push(workspace_root.join("target/release").join(&unsuffixed_name));
+        push_media_runner_candidates(
+            &mut candidates,
+            &workspace_root.join("apps/desktop/src-tauri/binaries"),
+            &executable_names,
+        );
     }
 
     candidates.into_iter().find(|path| path.is_file())
+}
+
+fn push_media_runner_candidates(
+    candidates: &mut Vec<PathBuf>,
+    directory: &std::path::Path,
+    executable_names: &[String],
+) {
+    for executable_name in executable_names {
+        candidates.push(directory.join(executable_name));
+    }
+}
+
+fn media_runner_executable_names() -> Vec<String> {
+    let extension = if cfg!(windows) { ".exe" } else { "" };
+    vec![
+        format!("media-runner-{}{}", media_runner_target_triple(), extension),
+        format!("media-runner{extension}"),
+    ]
+}
+
+fn media_runner_unsuffixed_name() -> String {
+    if cfg!(windows) {
+        "media-runner.exe".to_string()
+    } else {
+        "media-runner".to_string()
+    }
+}
+
+fn media_runner_target_triple() -> &'static str {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "aarch64-apple-darwin"
+    } else if cfg!(all(target_os = "macos", target_arch = "x86_64")) {
+        "x86_64-apple-darwin"
+    } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        "x86_64-pc-windows-msvc"
+    } else if cfg!(all(target_os = "windows", target_arch = "aarch64")) {
+        "aarch64-pc-windows-msvc"
+    } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "x86_64-unknown-linux-gnu"
+    } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+        "aarch64-unknown-linux-gnu"
+    } else {
+        "unknown"
+    }
+}
+
+fn is_bundled_media_runner_path(app: &tauri::AppHandle, path: &std::path::Path) -> bool {
+    let Ok(path) = path.canonicalize() else {
+        return false;
+    };
+
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        if canonicalized_contains(&resource_dir, &path) {
+            return true;
+        }
+    }
+
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(exe_dir) = current_exe.parent() {
+            return canonicalized_contains(exe_dir, &path);
+        }
+    }
+
+    false
+}
+
+fn canonicalized_contains(base: &std::path::Path, path: &std::path::Path) -> bool {
+    base.canonicalize()
+        .map(|base| path.starts_with(base))
+        .unwrap_or(false)
 }
 
 fn workspace_root_from_manifest() -> Option<PathBuf> {

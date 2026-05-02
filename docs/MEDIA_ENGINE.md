@@ -74,10 +74,18 @@ cargo run -p vaexcore-media-runner -- --status-addr 127.0.0.1:51387 --dry-run
 The desktop runtime now attempts to start `media-runner` on launch. Discovery order:
 
 - `VAEXCORE_MEDIA_RUNNER_PATH`
-- app resource directory
+- app resource directory and bundled Tauri sidecar locations
 - executable directory
 - `target/debug/media-runner`
 - `target/release/media-runner`
+
+Release builds stage the sidecar with:
+
+```bash
+npm run prepare:sidecars -w apps/desktop
+```
+
+Tauri bundles the staged binary through `bundle.externalBin`, which expects the `media-runner-<target-triple>` filename shape.
 
 If a runner is found, `vaexcore-api` wraps the dry-run lifecycle with `SidecarMediaEngine` and polls the runner `/status` endpoint. The command lifecycle remains idempotent and MVP-safe while the sidecar contract is still status-only.
 

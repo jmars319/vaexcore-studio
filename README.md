@@ -63,13 +63,13 @@ npm run build
 cargo test --workspace
 ```
 
-Build the sidecar executable for local desktop supervision:
+Build and stage the sidecar executable for local desktop supervision and release bundling:
 
 ```bash
-cargo build -p vaexcore-media-runner
+npm run prepare:sidecars -w apps/desktop
 ```
 
-The desktop app auto-detects `target/debug/media-runner` or `target/release/media-runner` when present. You can also point directly at a sidecar executable:
+The desktop app first checks bundled sidecar locations, then falls back to local build artifacts like `target/debug/media-runner` or `target/release/media-runner`. You can also point directly at a sidecar executable:
 
 ```bash
 VAEXCORE_MEDIA_RUNNER_PATH=/absolute/path/to/media-runner npm run tauri -w apps/desktop -- dev

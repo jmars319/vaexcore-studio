@@ -29,6 +29,14 @@ export interface LocalAppSettingsSnapshot {
   restartRequired: boolean;
 }
 
+export interface MediaRunnerInfo {
+  bundled: boolean;
+  running: boolean;
+  fallbackDryRun: boolean;
+  statusAddr: string | null;
+  executablePath: string | null;
+}
+
 export async function loadRuntimeConfig(): Promise<RuntimeApiConfig> {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -66,6 +74,21 @@ export async function regenerateApiToken(): Promise<LocalAppSettingsSnapshot> {
 export async function openDataDirectory(): Promise<void> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<void>("open_data_directory");
+}
+
+export async function loadMediaRunnerInfo(): Promise<MediaRunnerInfo> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<MediaRunnerInfo>("media_runner_info");
+  } catch {
+    return {
+      bundled: false,
+      running: false,
+      fallbackDryRun: true,
+      statusAddr: null,
+      executablePath: null,
+    };
+  }
 }
 
 export async function apiRequest<T>(
