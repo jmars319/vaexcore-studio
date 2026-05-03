@@ -12,7 +12,8 @@ pub use profiles::{
 };
 pub use responses::{
     ApiErrorBody, ApiResponse, AuditLogEntry, AuditLogSnapshot, CommandStatus, ConnectedClient,
-    ConnectedClientsSnapshot, HealthResponse, Marker, ProfilesSnapshot, StudioStatus,
+    ConnectedClientsSnapshot, HealthResponse, Marker, ProfileBundle, ProfileBundleImportResult,
+    ProfilesSnapshot, StreamDestinationBundleItem, StudioStatus,
 };
 pub use security::{SecretRef, SecretStore, SecretStoreError, SensitiveString};
 pub use settings::AppSettings;

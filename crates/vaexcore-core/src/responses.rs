@@ -1,4 +1,6 @@
-use crate::{EngineStatus, MediaProfile, StreamDestination, StudioEvent};
+use crate::{
+    EngineStatus, MediaProfile, MediaProfileInput, PlatformKind, StreamDestination, StudioEvent,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -106,4 +108,27 @@ pub struct AuditLogEntry {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct AuditLogSnapshot {
     pub entries: Vec<AuditLogEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct StreamDestinationBundleItem {
+    pub name: String,
+    pub platform: PlatformKind,
+    pub ingest_url: String,
+    pub enabled: bool,
+    pub has_stream_key: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct ProfileBundle {
+    pub version: u32,
+    pub exported_at: DateTime<Utc>,
+    pub recording_profiles: Vec<MediaProfileInput>,
+    pub stream_destinations: Vec<StreamDestinationBundleItem>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct ProfileBundleImportResult {
+    pub recording_profiles: usize,
+    pub stream_destinations: usize,
 }

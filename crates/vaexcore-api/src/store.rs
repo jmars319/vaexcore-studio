@@ -7,8 +7,9 @@ use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use vaexcore_core::{
     new_id, now_utc, AppSettings, AuditLogEntry, Marker, MediaProfile, MediaProfileInput,
-    PlatformKind, ProfilesSnapshot, RecordingContainer, Resolution, SecretRef, SecretStore,
-    SecretStoreError, SensitiveString, StreamDestination, StreamDestinationInput,
+    PlatformKind, ProfileBundle, ProfileBundleImportResult, ProfilesSnapshot, RecordingContainer,
+    Resolution, SecretRef, SecretStore, SecretStoreError, SensitiveString, StreamDestination,
+    StreamDestinationBundleItem, StreamDestinationInput,
 };
 use vaexcore_platforms::apply_platform_defaults;
 
@@ -66,6 +67,67 @@ impl ProfileStore {
         Ok(ProfilesSnapshot {
             recording_profiles: self.list_recording_profiles()?,
             stream_destinations: self.list_stream_destinations()?,
+        })
+    }
+
+    pub fn export_profile_bundle(&self) -> Result<ProfileBundle, StoreError> {
+        let recording_profiles = self
+            .list_recording_profiles()?
+            .into_iter()
+            .map(media_profile_input_from_model)
+            .collect();
+        let stream_destinations = self
+            .list_stream_destinations()?
+            .into_iter()
+            .map(|destination| StreamDestinationBundleItem {
+                name: destination.name,
+                platform: destination.platform,
+                ingest_url: destination.ingest_url,
+                enabled: destination.enabled,
+                has_stream_key: destination.stream_key_ref.is_some(),
+            })
+            .collect();
+
+        Ok(ProfileBundle {
+            version: 1,
+            exported_at: now_utc(),
+            recording_profiles,
+            stream_destinations,
+        })
+    }
+
+    pub fn import_profile_bundle(
+        &self,
+        bundle: ProfileBundle,
+    ) -> Result<ProfileBundleImportResult, StoreError> {
+        if bundle.version != 1 {
+            return Err(StoreError::InvalidValue(format!(
+                "unsupported profile bundle version {}",
+                bundle.version
+            )));
+        }
+
+        let mut recording_profiles = 0;
+        for profile in bundle.recording_profiles {
+            self.insert_recording_profile(profile)?;
+            recording_profiles += 1;
+        }
+
+        let mut stream_destinations = 0;
+        for destination in bundle.stream_destinations {
+            self.insert_stream_destination(StreamDestinationInput {
+                name: destination.name,
+                platform: destination.platform,
+                ingest_url: Some(destination.ingest_url),
+                stream_key: None,
+                enabled: Some(destination.enabled),
+            })?;
+            stream_destinations += 1;
+        }
+
+        Ok(ProfileBundleImportResult {
+            recording_profiles,
+            stream_destinations,
         })
     }
 
@@ -876,6 +938,19 @@ impl SecretStore for ProfileStore {
     }
 }
 
+fn media_profile_input_from_model(profile: MediaProfile) -> MediaProfileInput {
+    MediaProfileInput {
+        name: profile.name,
+        output_folder: profile.output_folder,
+        filename_pattern: profile.filename_pattern,
+        container: profile.container,
+        resolution: profile.resolution,
+        framerate: profile.framerate,
+        bitrate_kbps: profile.bitrate_kbps,
+        encoder_preference: profile.encoder_preference,
+    }
+}
+
 fn parse_time(value: &str) -> Result<DateTime<Utc>, StoreError> {
     DateTime::parse_from_rfc3339(value)
         .map(|value| value.with_timezone(&Utc))
@@ -948,5 +1023,46 @@ mod tests {
 
         let entries = store.list_audit_log_entries(10).unwrap();
         assert_eq!(entries, vec![entry]);
+    }
+
+    #[test]
+    fn profile_bundle_exports_without_secret_values() {
+        let store = ProfileStore::open_memory().unwrap();
+        store
+            .insert_stream_destination(StreamDestinationInput {
+                name: "Secret RTMP".to_string(),
+                platform: PlatformKind::CustomRtmp,
+                ingest_url: Some("rtmps://example.test/live".to_string()),
+                stream_key: Some(SensitiveString::new("super-secret-key")),
+                enabled: Some(true),
+            })
+            .unwrap();
+
+        let bundle = store.export_profile_bundle().unwrap();
+        let json = serde_json::to_string(&bundle).unwrap();
+
+        assert_eq!(bundle.version, 1);
+        assert!(bundle
+            .stream_destinations
+            .iter()
+            .any(|destination| destination.name == "Secret RTMP" && destination.has_stream_key));
+        assert!(!json.contains("super-secret-key"));
+    }
+
+    #[test]
+    fn profile_bundle_import_creates_new_profiles_without_secrets() {
+        let source = ProfileStore::open_memory().unwrap();
+        let bundle = source.export_profile_bundle().unwrap();
+        let target = ProfileStore::open_memory().unwrap();
+
+        let result = target.import_profile_bundle(bundle).unwrap();
+
+        assert!(result.recording_profiles > 0);
+        assert!(result.stream_destinations > 0);
+        assert!(target
+            .list_stream_destinations()
+            .unwrap()
+            .into_iter()
+            .any(|destination| destination.stream_key_ref.is_none()));
     }
 }

@@ -27,6 +27,7 @@ crates/
   vaexcore-platforms/      Twitch, YouTube, Kick, custom RTMP definitions
 packages/
   shared-types/            TypeScript API/event contracts
+  client-sdk/              TypeScript client for localhost integrations
 sidecars/
   media-runner/            replaceable media execution sidecar
 docs/
@@ -64,6 +65,13 @@ npm run build
 cargo test --workspace
 ```
 
+Build and run the TypeScript client SDK smoke example after Studio is running:
+
+```bash
+npm run build -w @vaexcore/client-sdk
+node packages/client-sdk/examples/node-smoke.mjs
+```
+
 Build and stage the sidecar executable for local desktop supervision and release bundling:
 
 ```bash
@@ -93,6 +101,8 @@ http://127.0.0.1:51287
 ws://127.0.0.1:51287/events
 ```
 
+If that port is occupied, the app binds a fallback localhost port and writes the active URLs to `api-discovery.json` in the app data directory. Connected tools should use that discovery file when available instead of assuming the default port.
+
 In debug builds, auth bypass is enabled by default. For token-protected local clients, set:
 
 ```bash
@@ -110,6 +120,19 @@ curl -H "x-vaexcore-token: replace-with-a-local-token" http://127.0.0.1:51287/st
 HTTP responses include an `x-vaexcore-request-id` header. Local clients may send their own request ID with the same header for log correlation.
 External clients can identify themselves with `x-vaexcore-client-id` and `x-vaexcore-client-name`; Studio shows recent clients on the Connected Apps page.
 
+TypeScript integrations can use `@vaexcore/client-sdk`:
+
+```ts
+import { VaexcoreStudioClient } from "@vaexcore/client-sdk";
+
+const client = new VaexcoreStudioClient({
+  apiUrl: "http://127.0.0.1:51287",
+  token: process.env.VAEXCORE_API_TOKEN,
+});
+
+await client.createMarker("manual-marker");
+```
+
 ## MVP Behavior
 
 - Create Twitch, YouTube, Kick, and custom RTMP stream destinations.
@@ -119,6 +142,8 @@ External clients can identify themselves with `x-vaexcore-client-id` and `x-vaex
 - Stream lifecycle events over WebSocket.
 - Track recent localhost clients.
 - Record a bounded command audit log without storing request bodies.
+- Export/import profile bundles without raw stream keys.
+- Write structured JSONL app logs under the local app data directory.
 - Simulate media execution with `DryRunMediaEngine`.
 - Prefer supervised `media-runner` dry-run execution when the sidecar is available, with in-process dry-run fallback when it is missing during startup.
 

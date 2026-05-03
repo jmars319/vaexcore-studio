@@ -118,10 +118,10 @@ impl ApiState {
 fn spawn_media_runner_monitor(runner: MediaRunnerSupervisor, events: EventBus) {
     tokio::spawn(async move {
         let mut ready = false;
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        let mut restart_backoff = Duration::from_secs(1);
 
         loop {
-            interval.tick().await;
+            tokio::time::sleep(Duration::from_secs(5)).await;
             match runner.status().await {
                 Ok(status) if status.ready => {
                     if !ready {
@@ -137,6 +137,7 @@ fn spawn_media_runner_monitor(runner: MediaRunnerSupervisor, events: EventBus) {
                         ));
                     }
                     ready = true;
+                    restart_backoff = Duration::from_secs(1);
                 }
                 Ok(status) => {
                     if ready {
@@ -146,6 +147,7 @@ fn spawn_media_runner_monitor(runner: MediaRunnerSupervisor, events: EventBus) {
                         )));
                     }
                     ready = false;
+                    restart_backoff = restart_media_runner(&runner, &events, restart_backoff).await;
                 }
                 Err(error) => {
                     if ready {
@@ -154,10 +156,47 @@ fn spawn_media_runner_monitor(runner: MediaRunnerSupervisor, events: EventBus) {
                         )));
                     }
                     ready = false;
+                    restart_backoff = restart_media_runner(&runner, &events, restart_backoff).await;
                 }
             }
         }
     });
+}
+
+async fn restart_media_runner(
+    runner: &MediaRunnerSupervisor,
+    events: &EventBus,
+    restart_backoff: Duration,
+) -> Duration {
+    events.emit(StudioEvent::new(
+        StudioEventKind::MediaEngineReady,
+        json!({
+            "engine": "SidecarMediaEngine",
+            "restart": "attempting",
+            "backoff_ms": restart_backoff.as_millis(),
+        }),
+    ));
+
+    tokio::time::sleep(restart_backoff).await;
+    match runner.restart().await {
+        Ok(()) => {
+            events.emit(StudioEvent::new(
+                StudioEventKind::MediaEngineReady,
+                json!({
+                    "engine": "SidecarMediaEngine",
+                    "restart": "complete",
+                    "runner_status_addr": runner.status_addr().to_string(),
+                }),
+            ));
+            Duration::from_secs(1)
+        }
+        Err(error) => {
+            events.emit(StudioEvent::error(format!(
+                "media runner restart failed: {error}"
+            )));
+            (restart_backoff * 2).min(Duration::from_secs(30))
+        }
+    }
 }
 
 pub async fn serve(config: ApiServerConfig) -> anyhow::Result<()> {
@@ -169,7 +208,19 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     let listener = TcpListener::bind(config.bind_addr).await?;
+    serve_listener_with_shutdown(config, listener, shutdown).await
+}
+
+pub async fn serve_listener_with_shutdown<F>(
+    mut config: ApiServerConfig,
+    listener: TcpListener,
+    shutdown: F,
+) -> anyhow::Result<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
     let local_addr = listener.local_addr()?;
+    config.bind_addr = local_addr;
     let state = ApiState::new(&config)?;
 
     let auth_snapshot = config.auth.get();

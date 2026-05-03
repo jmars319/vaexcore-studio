@@ -7,10 +7,14 @@
 .envrc
 .npmrc
 .yarnrc.yml
+*.local.json
+profile-bundle*.json
+secrets.*
 
 node_modules/
 dist/
 target/
+*.tsbuildinfo
 
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/target/
@@ -18,6 +22,7 @@ apps/desktop/src-tauri/binaries/media-runner-*
 
 # Logs and local app state
 *.log
+*.jsonl
 logs/
 *.db
 *.db-shm

@@ -76,6 +76,8 @@ struct MediaRunnerSupervisorInner {
     child: Mutex<Option<Child>>,
     executable_path: PathBuf,
     status_addr: SocketAddr,
+    dry_run: bool,
+    startup_timeout: Duration,
     require_child: bool,
 }
 
@@ -85,28 +87,16 @@ impl MediaRunnerSupervisor {
             return Err(SidecarError::MissingExecutable(config.executable_path));
         }
 
-        let mut command = Command::new(&config.executable_path);
-        command
-            .arg("--status-addr")
-            .arg(config.status_addr.to_string())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-
-        if config.dry_run {
-            command.arg("--dry-run");
-        }
-
-        let child = command.spawn().map_err(|source| SidecarError::Spawn {
-            path: config.executable_path.clone(),
-            source,
-        })?;
+        let child =
+            spawn_media_runner_child(&config.executable_path, config.status_addr, config.dry_run)?;
 
         let supervisor = Self {
             inner: Arc::new(MediaRunnerSupervisorInner {
                 child: Mutex::new(Some(child)),
                 executable_path: config.executable_path,
                 status_addr: config.status_addr,
+                dry_run: config.dry_run,
+                startup_timeout: config.startup_timeout,
                 require_child: true,
             }),
         };
@@ -171,8 +161,30 @@ impl MediaRunnerSupervisor {
             .map_err(|error| SidecarError::Join(error.to_string()))?
     }
 
+    pub async fn restart(&self) -> Result<(), SidecarError> {
+        let supervisor = self.clone();
+        tokio::task::spawn_blocking(move || supervisor.restart_blocking())
+            .await
+            .map_err(|error| SidecarError::Join(error.to_string()))?
+    }
+
     pub fn shutdown(&self) {
         self.inner.shutdown();
+    }
+
+    fn restart_blocking(&self) -> Result<(), SidecarError> {
+        self.inner.shutdown();
+        let child = spawn_media_runner_child(
+            &self.inner.executable_path,
+            self.inner.status_addr,
+            self.inner.dry_run,
+        )?;
+        *self
+            .inner
+            .child
+            .lock()
+            .expect("media runner child mutex poisoned") = Some(child);
+        self.wait_until_ready(self.inner.startup_timeout)
     }
 
     fn wait_until_ready(&self, timeout: Duration) -> Result<(), SidecarError> {
@@ -268,6 +280,29 @@ impl MediaRunnerSupervisor {
 
         Ok(())
     }
+}
+
+fn spawn_media_runner_child(
+    executable_path: &PathBuf,
+    status_addr: SocketAddr,
+    dry_run: bool,
+) -> Result<Child, SidecarError> {
+    let mut command = Command::new(executable_path);
+    command
+        .arg("--status-addr")
+        .arg(status_addr.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    if dry_run {
+        command.arg("--dry-run");
+    }
+
+    command.spawn().map_err(|source| SidecarError::Spawn {
+        path: executable_path.clone(),
+        source,
+    })
 }
 
 impl MediaRunnerSupervisorInner {
@@ -680,6 +715,8 @@ mod tests {
                     child: Mutex::new(None),
                     executable_path: PathBuf::from("fake-media-runner"),
                     status_addr: addr,
+                    dry_run: true,
+                    startup_timeout: Duration::from_secs(2),
                     require_child: false,
                 }),
             };

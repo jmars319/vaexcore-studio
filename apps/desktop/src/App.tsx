@@ -38,6 +38,8 @@ import type {
 import { platformLabels } from "@vaexcore/shared-types";
 import {
   eventSocketUrl,
+  exportProfileBundle,
+  importProfileBundle,
   LocalAppSettingsSnapshot,
   loadMediaRunnerInfo,
   loadRuntimeConfig,
@@ -106,6 +108,14 @@ const defaultAppSettings: AppSettings = {
   log_level: "info",
   default_recording_profile: defaultProfileForm,
 };
+
+function hostFromUrl(url: string, fallback: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return fallback;
+  }
+}
 
 function App() {
   const isSettingsWindow = useMemo(
@@ -443,6 +453,18 @@ function App() {
     setConfig((current) => ({
       apiUrl: snapshot.apiUrl,
       wsUrl: snapshot.wsUrl,
+      configuredApiUrl: snapshot.configuredApiUrl,
+      configuredWsUrl: snapshot.configuredWsUrl,
+      bindAddr: hostFromUrl(
+        snapshot.apiUrl,
+        current?.bindAddr ?? "127.0.0.1:51287",
+      ),
+      configuredBindAddr: hostFromUrl(
+        snapshot.configuredApiUrl,
+        current?.configuredBindAddr ?? "127.0.0.1:51287",
+      ),
+      portFallbackActive: snapshot.portFallbackActive,
+      discoveryFile: snapshot.discoveryFile,
       token: snapshot.settings.api_token,
       devAuthBypass: snapshot.settings.dev_auth_bypass,
     }));
@@ -485,6 +507,37 @@ function App() {
       setError(
         error instanceof Error ? error.message : "Could not open data directory",
       );
+    }
+  }
+
+  async function handleExportProfileBundle() {
+    try {
+      const result = await exportProfileBundle();
+      setSettingsMessage(
+        `Exported ${result.recordingProfiles} recording profiles and ${result.streamDestinations} destinations.`,
+      );
+      setError(null);
+    } catch (error) {
+      setSettingsMessage(null);
+      setError(error instanceof Error ? error.message : "Profile export failed");
+    }
+  }
+
+  async function handleImportProfileBundle() {
+    if (!window.confirm("Import profile bundle from the app data directory?")) {
+      return;
+    }
+
+    try {
+      const result = await importProfileBundle();
+      await refreshProfiles();
+      setSettingsMessage(
+        `Imported ${result.recordingProfiles} recording profiles and ${result.streamDestinations} destinations.`,
+      );
+      setError(null);
+    } catch (error) {
+      setSettingsMessage(null);
+      setError(error instanceof Error ? error.message : "Profile import failed");
     }
   }
 
@@ -622,6 +675,8 @@ function App() {
           logoUrl={logoUrl}
           mediaRunnerInfo={mediaRunnerInfo}
           mode={activeStatus?.mode ?? "dry_run"}
+          onExportProfileBundle={handleExportProfileBundle}
+          onImportProfileBundle={handleImportProfileBundle}
           onOpenDataDirectory={handleOpenDataDirectory}
           onRegenerateToken={handleRegenerateApiToken}
           onSave={handleSaveSettings}
@@ -1192,6 +1247,7 @@ function ConnectedAppsPage(props: {
 }) {
   const apiUrl = props.config?.apiUrl ?? "http://127.0.0.1:51287";
   const wsUrl = props.config?.wsUrl ?? "ws://127.0.0.1:51287/events";
+  const configuredApiUrl = props.config?.configuredApiUrl ?? apiUrl;
   const token = props.config?.token ?? "dev-auth-bypass";
   const runnerState = mediaRunnerState(props.mediaRunnerInfo, props.engine);
 
@@ -1201,6 +1257,12 @@ function ConnectedAppsPage(props: {
         <PanelTitle title="Local Endpoints" />
         <CopyLine label="HTTP API URL" value={apiUrl} />
         <CopyLine label="WebSocket URL" value={wsUrl} />
+        {props.config?.portFallbackActive && (
+          <CopyLine label="Configured API URL" value={configuredApiUrl} />
+        )}
+        {props.config?.discoveryFile && (
+          <CopyLine label="Discovery File" value={props.config.discoveryFile} />
+        )}
         <CopyLine label="API Token" secret value={token} />
       </section>
       <section className="panel">
@@ -1266,6 +1328,8 @@ function SettingsPage(props: {
   logoUrl: string;
   mediaRunnerInfo: MediaRunnerInfo | null;
   mode: string;
+  onExportProfileBundle: () => void;
+  onImportProfileBundle: () => void;
   onOpenDataDirectory: () => void;
   onRegenerateToken: () => void;
   onSave: (event: FormEvent) => void;
@@ -1343,6 +1407,18 @@ function SettingsPage(props: {
         <KeyValue label="Engine" value={props.engine} />
         <KeyValue label="Mode" value={props.mode} />
         <KeyValue
+          label="Active API"
+          value={props.config?.bindAddr ?? "127.0.0.1:51287"}
+        />
+        <KeyValue
+          label="Configured API"
+          value={props.config?.configuredBindAddr ?? "127.0.0.1:51287"}
+        />
+        <KeyValue
+          label="Port Fallback"
+          value={props.config?.portFallbackActive ? "active" : "inactive"}
+        />
+        <KeyValue
           label="Media Runner"
           value={mediaRunnerState(props.mediaRunnerInfo, props.engine)}
         />
@@ -1355,6 +1431,12 @@ function SettingsPage(props: {
           value={props.health?.service ?? "vaexcore studio"}
         />
         <KeyValue label="Version" value={props.health?.version ?? "0.1.0"} />
+        {props.snapshot?.discoveryFile && (
+          <CopyLine label="Discovery File" value={props.snapshot.discoveryFile} />
+        )}
+        {props.snapshot?.logDir && (
+          <CopyLine label="Log Directory" value={props.snapshot.logDir} />
+        )}
       </section>
 
       <section className="panel">
@@ -1482,6 +1564,22 @@ function SettingsPage(props: {
         >
           Open Data Directory
         </button>
+        <div className="button-row">
+          <button
+            className="secondary-button"
+            onClick={props.onExportProfileBundle}
+            type="button"
+          >
+            Export Profiles
+          </button>
+          <button
+            className="secondary-button"
+            onClick={props.onImportProfileBundle}
+            type="button"
+          >
+            Import Profiles
+          </button>
+        </div>
       </section>
 
       <section className="panel">

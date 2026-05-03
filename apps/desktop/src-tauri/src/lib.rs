@@ -1,7 +1,9 @@
 use std::{
     env,
+    fs::OpenOptions,
+    io::Write,
     net::{SocketAddr, TcpListener},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Mutex,
 };
 
@@ -10,11 +12,12 @@ use tauri::{
     Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 use tokio::sync::oneshot;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use vaexcore_api::{
-    default_auth_from_env, default_bind_addr, generate_token, serve_with_shutdown, ApiServerConfig,
-    AuthConfig, ProfileStore, SharedAuthConfig,
+    default_auth_from_env, default_bind_addr, generate_token, serve_listener_with_shutdown,
+    ApiServerConfig, AuthConfig, ProfileStore, SharedAuthConfig,
 };
-use vaexcore_core::AppSettings;
+use vaexcore_core::{AppSettings, ProfileBundle};
 use vaexcore_media::{MediaRunnerConfig, MediaRunnerSupervisor};
 
 const APP_NAME: &str = "vaexcore studio";
@@ -38,6 +41,12 @@ const FRONTEND_OPEN_SECTION_EVENT: &str = "vaexcore://open-section";
 struct FrontendApiConfig {
     api_url: String,
     ws_url: String,
+    configured_api_url: String,
+    configured_ws_url: String,
+    bind_addr: String,
+    configured_bind_addr: String,
+    port_fallback_active: bool,
+    discovery_file: String,
     token: Option<String>,
     dev_auth_bypass: bool,
 }
@@ -48,9 +57,29 @@ struct FrontendAppSettings {
     settings: AppSettings,
     api_url: String,
     ws_url: String,
+    configured_api_url: String,
+    configured_ws_url: String,
+    port_fallback_active: bool,
     data_dir: String,
     database_path: String,
+    discovery_file: String,
+    log_dir: String,
     restart_required: bool,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiDiscoveryDocument {
+    service: String,
+    api_url: String,
+    ws_url: String,
+    bind_addr: String,
+    configured_bind_addr: String,
+    port_fallback_active: bool,
+    auth_required: bool,
+    dev_auth_bypass: bool,
+    pid: u32,
+    updated_at: String,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -63,19 +92,42 @@ struct FrontendMediaRunnerInfo {
     executable_path: Option<String>,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FrontendProfileBundleResult {
+    path: String,
+    recording_profiles: usize,
+    stream_destinations: usize,
+}
+
+#[derive(Clone)]
+struct DailyLogWriter {
+    directory: PathBuf,
+}
+
 struct AppRuntimeState {
     bind_addr: SocketAddr,
+    configured_bind_addr: SocketAddr,
+    port_fallback_active: bool,
     auth: SharedAuthConfig,
     settings_store: ProfileStore,
     data_dir: PathBuf,
     database_path: PathBuf,
+    discovery_file: PathBuf,
+    log_dir: PathBuf,
     media_runner: Option<MediaRunnerSupervisor>,
     api_shutdown: Mutex<Option<oneshot::Sender<()>>>,
 }
 
 #[tauri::command]
 fn api_config(state: tauri::State<'_, AppRuntimeState>) -> FrontendApiConfig {
-    frontend_api_config(state.bind_addr, &state.auth.get())
+    frontend_api_config(
+        state.bind_addr,
+        state.configured_bind_addr,
+        state.port_fallback_active,
+        &state.discovery_file,
+        &state.auth.get(),
+    )
 }
 
 #[tauri::command]
@@ -96,6 +148,22 @@ fn save_app_settings(
         token: settings.api_token.clone(),
         dev_mode: settings.dev_auth_bypass,
     });
+    write_api_discovery_file(
+        &state.discovery_file,
+        state.bind_addr,
+        state.configured_bind_addr,
+        state.port_fallback_active,
+        &state.auth.get(),
+    )
+    .map_err(|error| error.to_string())?;
+    write_app_log(
+        &state.log_dir,
+        "settings.saved",
+        serde_json::json!({
+            "restart_required": settings_restart_required(&settings, state.bind_addr),
+            "dev_auth_bypass": settings.dev_auth_bypass,
+        }),
+    );
     frontend_app_settings(&state).map_err(|error| error.to_string())
 }
 
@@ -116,6 +184,21 @@ fn regenerate_api_token(
         token: settings.api_token.clone(),
         dev_mode: settings.dev_auth_bypass,
     });
+    write_api_discovery_file(
+        &state.discovery_file,
+        state.bind_addr,
+        state.configured_bind_addr,
+        state.port_fallback_active,
+        &state.auth.get(),
+    )
+    .map_err(|error| error.to_string())?;
+    write_app_log(
+        &state.log_dir,
+        "settings.api_token_regenerated",
+        serde_json::json!({
+            "dev_auth_bypass": settings.dev_auth_bypass,
+        }),
+    );
     frontend_app_settings(&state).map_err(|error| error.to_string())
 }
 
@@ -134,6 +217,65 @@ fn open_data_directory(state: tauri::State<'_, AppRuntimeState>) -> Result<(), S
     {
         Err("opening the data directory is not implemented on this platform".to_string())
     }
+}
+
+#[tauri::command]
+fn export_profile_bundle(
+    state: tauri::State<'_, AppRuntimeState>,
+) -> Result<FrontendProfileBundleResult, String> {
+    let bundle = state
+        .settings_store
+        .export_profile_bundle()
+        .map_err(|error| error.to_string())?;
+    let path = profile_bundle_path(&state);
+    let result = FrontendProfileBundleResult {
+        path: path.display().to_string(),
+        recording_profiles: bundle.recording_profiles.len(),
+        stream_destinations: bundle.stream_destinations.len(),
+    };
+    let serialized = serde_json::to_vec_pretty(&bundle).map_err(|error| error.to_string())?;
+    std::fs::write(path, serialized).map_err(|error| error.to_string())?;
+    write_app_log(
+        &state.log_dir,
+        "profiles.bundle_exported",
+        serde_json::json!({
+            "recording_profiles": result.recording_profiles,
+            "stream_destinations": result.stream_destinations,
+            "path": &result.path,
+        }),
+    );
+    Ok(result)
+}
+
+#[tauri::command]
+fn import_profile_bundle(
+    state: tauri::State<'_, AppRuntimeState>,
+) -> Result<FrontendProfileBundleResult, String> {
+    let path = profile_bundle_path(&state);
+    let contents = std::fs::read(&path).map_err(|error| error.to_string())?;
+    let bundle: ProfileBundle =
+        serde_json::from_slice(&contents).map_err(|error| error.to_string())?;
+    let result = state
+        .settings_store
+        .import_profile_bundle(bundle)
+        .map_err(|error| error.to_string())?;
+
+    Ok(FrontendProfileBundleResult {
+        path: path.display().to_string(),
+        recording_profiles: result.recording_profiles,
+        stream_destinations: result.stream_destinations,
+    })
+    .inspect(|result| {
+        write_app_log(
+            &state.log_dir,
+            "profiles.bundle_imported",
+            serde_json::json!({
+                "recording_profiles": result.recording_profiles,
+                "stream_destinations": result.stream_destinations,
+                "path": &result.path,
+            }),
+        );
+    })
 }
 
 #[tauri::command]
@@ -173,12 +315,7 @@ async fn media_runner_info(
 }
 
 pub fn run() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "vaexcore_api=info,vaexcore_studio_desktop=info".into()),
-        )
-        .try_init();
+    let log_dir = init_logging(&default_data_dir());
 
     tauri::Builder::default()
         .menu(|handle| {
@@ -340,7 +477,7 @@ pub fn run() {
                 }
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
             let default_auth = default_auth_from_env();
             let data_dir = app.path().app_data_dir()?;
             let database_path = data_dir.join("studio.sqlite");
@@ -350,20 +487,46 @@ pub fn run() {
                 dev_auth_bypass: default_auth.dev_mode,
                 ..AppSettings::default()
             })?;
-            let bind_addr = settings_bind_addr(&settings).unwrap_or_else(default_bind_addr);
+            let configured_bind_addr =
+                settings_bind_addr(&settings).unwrap_or_else(default_bind_addr);
+            let (api_listener, bind_addr, port_fallback_active) =
+                bind_api_listener(configured_bind_addr)?;
             let auth = SharedAuthConfig::new(AuthConfig {
                 token: settings.api_token.clone(),
                 dev_mode: settings.dev_auth_bypass,
             });
             let media_runner = start_media_runner(app.handle());
             let (api_shutdown, shutdown_rx) = oneshot::channel::<()>();
+            let discovery_file = data_dir.join("api-discovery.json");
+            write_api_discovery_file(
+                &discovery_file,
+                bind_addr,
+                configured_bind_addr,
+                port_fallback_active,
+                &auth.get(),
+            )?;
+            write_app_log(
+                &log_dir,
+                "app.api.ready",
+                serde_json::json!({
+                    "api_url": format!("http://{bind_addr}"),
+                    "ws_url": format!("ws://{bind_addr}/events"),
+                    "configured_bind_addr": configured_bind_addr.to_string(),
+                    "port_fallback_active": port_fallback_active,
+                    "discovery_file": discovery_file.display().to_string(),
+                }),
+            );
 
             app.manage(AppRuntimeState {
                 bind_addr,
+                configured_bind_addr,
+                port_fallback_active,
                 auth: auth.clone(),
                 settings_store,
                 data_dir,
                 database_path: database_path.clone(),
+                discovery_file,
+                log_dir: log_dir.clone(),
                 media_runner: media_runner.clone(),
                 api_shutdown: Mutex::new(Some(api_shutdown)),
             });
@@ -376,7 +539,15 @@ pub fn run() {
                     media_runner,
                 };
 
-                if let Err(error) = serve_with_shutdown(config, async {
+                let listener = match tokio::net::TcpListener::from_std(api_listener) {
+                    Ok(listener) => listener,
+                    Err(error) => {
+                        tracing::error!(%error, "could not create async API listener");
+                        return;
+                    }
+                };
+
+                if let Err(error) = serve_listener_with_shutdown(config, listener, async {
                     let _ = shutdown_rx.await;
                 })
                 .await
@@ -393,6 +564,8 @@ pub fn run() {
             save_app_settings,
             regenerate_api_token,
             open_data_directory,
+            export_profile_bundle,
+            import_profile_bundle,
             open_settings_window,
             media_runner_info
         ])
@@ -669,17 +842,167 @@ fn workspace_root_from_manifest() -> Option<PathBuf> {
     manifest_dir.ancestors().nth(3).map(PathBuf::from)
 }
 
+fn init_logging(data_dir: &Path) -> PathBuf {
+    let log_dir = data_dir.join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+
+    let env_filter =
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    let file_writer = DailyLogWriter {
+        directory: log_dir.clone(),
+    };
+    let file_layer = tracing_subscriber::fmt::layer()
+        .json()
+        .with_ansi(false)
+        .with_writer(file_writer);
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .compact()
+        .with_writer(std::io::stderr);
+
+    match tracing_subscriber::registry()
+        .with(env_filter)
+        .with(stderr_layer)
+        .with(file_layer)
+        .try_init()
+    {
+        Ok(()) => tracing::info!(log_dir = %log_dir.display(), "structured logging initialized"),
+        Err(error) => eprintln!("failed to initialize structured logging: {error}"),
+    };
+    write_app_log(
+        &log_dir,
+        "app.logging.initialized",
+        serde_json::json!({
+            "log_dir": log_dir.display().to_string(),
+        }),
+    );
+
+    log_dir
+}
+
+fn default_data_dir() -> PathBuf {
+    directories::ProjectDirs::from("com", "vaexcore", "studio")
+        .map(|dirs| dirs.data_dir().to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(".vaexcore-studio"))
+}
+
+impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for DailyLogWriter {
+    type Writer = Box<dyn Write + Send + 'writer>;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        let _ = std::fs::create_dir_all(&self.directory);
+        let path = daily_log_path(&self.directory);
+        match OpenOptions::new().create(true).append(true).open(path) {
+            Ok(file) => Box::new(file),
+            Err(_) => Box::new(std::io::sink()),
+        }
+    }
+}
+
+fn write_app_log(log_dir: &Path, event: &str, fields: serde_json::Value) {
+    let _ = std::fs::create_dir_all(log_dir);
+    let entry = serde_json::json!({
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "level": "info",
+        "target": "vaexcore_studio_desktop",
+        "event": event,
+        "fields": fields,
+    });
+
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(daily_log_path(log_dir))
+    {
+        let _ = writeln!(file, "{entry}");
+    }
+}
+
+fn daily_log_path(log_dir: &Path) -> PathBuf {
+    let date = chrono::Utc::now().format("%Y-%m-%d");
+    log_dir.join(format!("studio-{date}.jsonl"))
+}
+
+fn profile_bundle_path(state: &AppRuntimeState) -> PathBuf {
+    state.data_dir.join("profile-bundle.json")
+}
+
 fn reserve_sidecar_status_addr() -> Option<SocketAddr> {
     let listener = TcpListener::bind("127.0.0.1:0").ok()?;
     listener.local_addr().ok()
 }
 
-fn frontend_api_config(bind_addr: std::net::SocketAddr, auth: &AuthConfig) -> FrontendApiConfig {
+fn bind_api_listener(
+    configured_bind_addr: SocketAddr,
+) -> std::io::Result<(TcpListener, SocketAddr, bool)> {
+    match TcpListener::bind(configured_bind_addr) {
+        Ok(listener) => {
+            listener.set_nonblocking(true)?;
+            Ok((listener, configured_bind_addr, false))
+        }
+        Err(error) => {
+            tracing::warn!(
+                %configured_bind_addr,
+                %error,
+                "configured API port unavailable; binding fallback port"
+            );
+            let fallback_addr = SocketAddr::new(configured_bind_addr.ip(), 0);
+            let listener = TcpListener::bind(fallback_addr)?;
+            listener.set_nonblocking(true)?;
+            let active_addr = listener.local_addr()?;
+            tracing::info!(%active_addr, "API fallback port selected");
+            Ok((listener, active_addr, true))
+        }
+    }
+}
+
+fn write_api_discovery_file(
+    discovery_file: &std::path::Path,
+    bind_addr: SocketAddr,
+    configured_bind_addr: SocketAddr,
+    port_fallback_active: bool,
+    auth: &AuthConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = discovery_file.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let document = ApiDiscoveryDocument {
+        service: APP_NAME.to_string(),
+        api_url: format!("http://{bind_addr}"),
+        ws_url: format!("ws://{bind_addr}/events"),
+        bind_addr: bind_addr.to_string(),
+        configured_bind_addr: configured_bind_addr.to_string(),
+        port_fallback_active,
+        auth_required: auth.auth_required(),
+        dev_auth_bypass: auth.dev_mode,
+        pid: std::process::id(),
+        updated_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    std::fs::write(discovery_file, serde_json::to_vec_pretty(&document)?)?;
+    Ok(())
+}
+
+fn frontend_api_config(
+    bind_addr: std::net::SocketAddr,
+    configured_bind_addr: std::net::SocketAddr,
+    port_fallback_active: bool,
+    discovery_file: &std::path::Path,
+    auth: &AuthConfig,
+) -> FrontendApiConfig {
     let api_url = format!("http://{bind_addr}");
     let ws_url = format!("ws://{bind_addr}/events");
+    let configured_api_url = format!("http://{configured_bind_addr}");
+    let configured_ws_url = format!("ws://{configured_bind_addr}/events");
     FrontendApiConfig {
         api_url,
         ws_url,
+        configured_api_url,
+        configured_ws_url,
+        bind_addr: bind_addr.to_string(),
+        configured_bind_addr: configured_bind_addr.to_string(),
+        port_fallback_active,
+        discovery_file: discovery_file.display().to_string(),
         token: auth.token.clone(),
         dev_auth_bypass: auth.dev_mode,
     }
@@ -689,14 +1012,25 @@ fn frontend_app_settings(
     state: &tauri::State<'_, AppRuntimeState>,
 ) -> Result<FrontendAppSettings, vaexcore_api::StoreError> {
     let settings = state.settings_store.app_settings()?;
-    let api = frontend_api_config(state.bind_addr, &state.auth.get());
+    let api = frontend_api_config(
+        state.bind_addr,
+        state.configured_bind_addr,
+        state.port_fallback_active,
+        &state.discovery_file,
+        &state.auth.get(),
+    );
     Ok(FrontendAppSettings {
         restart_required: settings_restart_required(&settings, state.bind_addr),
         settings,
         api_url: api.api_url,
         ws_url: api.ws_url,
+        configured_api_url: api.configured_api_url,
+        configured_ws_url: api.configured_ws_url,
+        port_fallback_active: api.port_fallback_active,
         data_dir: state.data_dir.display().to_string(),
         database_path: state.database_path.display().to_string(),
+        discovery_file: state.discovery_file.display().to_string(),
+        log_dir: state.log_dir.display().to_string(),
     })
 }
 

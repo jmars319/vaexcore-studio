@@ -18,6 +18,12 @@ import type {
 export interface RuntimeApiConfig {
   apiUrl: string;
   wsUrl: string;
+  configuredApiUrl: string;
+  configuredWsUrl: string;
+  bindAddr: string;
+  configuredBindAddr: string;
+  portFallbackActive: boolean;
+  discoveryFile: string;
   token: string | null;
   devAuthBypass: boolean;
 }
@@ -26,8 +32,13 @@ export interface LocalAppSettingsSnapshot {
   settings: AppSettings;
   apiUrl: string;
   wsUrl: string;
+  configuredApiUrl: string;
+  configuredWsUrl: string;
+  portFallbackActive: boolean;
   dataDir: string;
   databasePath: string;
+  discoveryFile: string;
+  logDir: string;
   restartRequired: boolean;
 }
 
@@ -37,6 +48,12 @@ export interface MediaRunnerInfo {
   fallbackDryRun: boolean;
   statusAddr: string | null;
   executablePath: string | null;
+}
+
+export interface ProfileBundleFileResult {
+  path: string;
+  recordingProfiles: number;
+  streamDestinations: number;
 }
 
 const UI_CLIENT_ID = "vaexcore-studio-ui";
@@ -53,6 +70,12 @@ export async function loadRuntimeConfig(): Promise<RuntimeApiConfig> {
     return {
       apiUrl,
       wsUrl,
+      configuredApiUrl: apiUrl,
+      configuredWsUrl: wsUrl,
+      bindAddr: new URL(apiUrl).host,
+      configuredBindAddr: new URL(apiUrl).host,
+      portFallbackActive: false,
+      discoveryFile: "",
       token: import.meta.env.VITE_VAEXCORE_API_TOKEN ?? null,
       devAuthBypass: true,
     };
@@ -79,6 +102,16 @@ export async function regenerateApiToken(): Promise<LocalAppSettingsSnapshot> {
 export async function openDataDirectory(): Promise<void> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<void>("open_data_directory");
+}
+
+export async function exportProfileBundle(): Promise<ProfileBundleFileResult> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<ProfileBundleFileResult>("export_profile_bundle");
+}
+
+export async function importProfileBundle(): Promise<ProfileBundleFileResult> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<ProfileBundleFileResult>("import_profile_bundle");
 }
 
 export async function loadMediaRunnerInfo(): Promise<MediaRunnerInfo> {

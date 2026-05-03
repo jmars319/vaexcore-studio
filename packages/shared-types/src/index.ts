@@ -149,6 +149,26 @@ export interface AuditLogSnapshot {
   entries: AuditLogEntry[];
 }
 
+export interface StreamDestinationBundleItem {
+  name: string;
+  platform: PlatformKind;
+  ingest_url: string;
+  enabled: boolean;
+  has_stream_key: boolean;
+}
+
+export interface ProfileBundle {
+  version: number;
+  exported_at: string;
+  recording_profiles: MediaProfileInput[];
+  stream_destinations: StreamDestinationBundleItem[];
+}
+
+export interface ProfileBundleImportResult {
+  recording_profiles: number;
+  stream_destinations: number;
+}
+
 export interface ProfilesSnapshot {
   recording_profiles: MediaProfile[];
   stream_destinations: StreamDestination[];

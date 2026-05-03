@@ -4,8 +4,9 @@
   "private": true,
   "description": "macOS-first desktop control system for streaming, recording, and local app integrations.",
   "workspaces": [
-    "apps/desktop",
-    "packages/shared-types"
+    "packages/shared-types",
+    "packages/client-sdk",
+    "apps/desktop"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
@@ -18,4 +19,3 @@
     "node": ">=20"
   }
 }
-

@@ -12,6 +12,11 @@ WebSocket URL:
 ws://127.0.0.1:51287/events
 ```
 
+The desktop app writes an API discovery document to its app data directory at
+`api-discovery.json`. External tools should prefer that file when present,
+because vaexcore studio can fall back to an available port if the configured
+port is already occupied.
+
 ## Auth
 
 Debug builds enable dev auth bypass by default. When auth is required, pass either:
@@ -38,6 +43,24 @@ x-vaexcore-client-name: Human Friendly Client Name
 ```
 
 These headers feed the recent client registry. They are labels only, not auth credentials.
+
+## TypeScript Client SDK
+
+The workspace includes `@vaexcore/client-sdk` for local tools and bots:
+
+```ts
+import { VaexcoreStudioClient } from "@vaexcore/client-sdk";
+
+const client = new VaexcoreStudioClient({
+  apiUrl: "http://127.0.0.1:51287",
+  token: process.env.VAEXCORE_API_TOKEN,
+  clientId: "my-control-tool",
+  clientName: "My Control Tool",
+});
+
+await client.createMarker("manual-marker");
+const status = await client.status();
+```
 
 ## Response Envelope
 
