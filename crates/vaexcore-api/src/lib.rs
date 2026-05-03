@@ -5,11 +5,13 @@ mod store;
 use std::{future::Future, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{
+    body::Body,
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, Query, State,
     },
-    http::{HeaderMap, Method, StatusCode},
+    http::{HeaderMap, HeaderValue, Method, Request, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post, put},
     Json, Router,
@@ -29,6 +31,9 @@ use vaexcore_media::{
 pub use auth::{AuthConfig, SharedAuthConfig};
 pub use event_bus::EventBus;
 pub use store::{ProfileStore, StoreError};
+
+const REQUEST_ID_HEADER: &str = "x-vaexcore-request-id";
+const DEFAULT_EVENT_REPLAY_LIMIT: usize = 100;
 
 #[derive(Clone, Debug)]
 pub struct ApiServerConfig {
@@ -198,8 +203,44 @@ pub fn router(state: Arc<ApiState>) -> Router {
                 .allow_methods([Method::DELETE, Method::GET, Method::POST, Method::PUT])
                 .allow_headers(tower_http::cors::Any),
         )
+        .layer(middleware::from_fn(request_id_middleware))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+async fn request_id_middleware(request: Request<Body>, next: Next) -> Response {
+    let request_id = request
+        .headers()
+        .get(REQUEST_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| is_valid_request_id(value))
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| new_id("req"));
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+
+    let mut response = next.run(request).await;
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert(REQUEST_ID_HEADER, value);
+    }
+
+    tracing::info!(
+        %request_id,
+        %method,
+        %path,
+        status = response.status().as_u16(),
+        "handled API request"
+    );
+    response
+}
+
+fn is_valid_request_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
 #[derive(Debug)]
@@ -588,13 +629,18 @@ async fn events_ws(
         return error.into_response();
     }
 
+    let replay_limit = query
+        .limit
+        .unwrap_or(DEFAULT_EVENT_REPLAY_LIMIT)
+        .min(event_bus::RECENT_EVENT_LIMIT);
+
     websocket
-        .on_upgrade(move |socket| stream_events(socket, state))
+        .on_upgrade(move |socket| stream_events(socket, state, replay_limit))
         .into_response()
 }
 
-async fn stream_events(mut socket: WebSocket, state: Arc<ApiState>) {
-    for event in state.events.recent() {
+async fn stream_events(mut socket: WebSocket, state: Arc<ApiState>, replay_limit: usize) {
+    for event in state.events.recent_limit(replay_limit) {
         match serde_json::to_string(&event) {
             Ok(serialized) => {
                 if socket.send(Message::Text(serialized.into())).await.is_err() {
@@ -750,6 +796,50 @@ mod tests {
         let body = response_body(response).await;
         assert_eq!(body["ok"], true);
         assert_eq!(body["data"]["service"], APP_NAME);
+    }
+
+    #[tokio::test]
+    async fn request_id_header_is_preserved() {
+        let response = test_app()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header("x-vaexcore-request-id", "client.req-1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-vaexcore-request-id")
+                .and_then(|value| value.to_str().ok()),
+            Some("client.req-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn request_id_header_is_generated() {
+        let response = test_app()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let request_id = response
+            .headers()
+            .get("x-vaexcore-request-id")
+            .and_then(|value| value.to_str().ok())
+            .unwrap();
+        assert!(request_id.starts_with("req_"));
     }
 
     #[tokio::test]
@@ -1013,5 +1103,39 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn events_query_auth_rejects_missing_token() {
+        let auth = SharedAuthConfig::new(AuthConfig {
+            token: Some("test-token".to_string()),
+            dev_mode: false,
+        });
+
+        let result = auth::authorize_query(
+            &auth::TokenQuery {
+                token: None,
+                limit: Some(1),
+            },
+            &auth,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn events_query_auth_accepts_token_with_replay_limit() {
+        let auth = SharedAuthConfig::new(AuthConfig {
+            token: Some("test-token".to_string()),
+            dev_mode: false,
+        });
+
+        auth::authorize_query(
+            &auth::TokenQuery {
+                token: Some("test-token".to_string()),
+                limit: Some(1),
+            },
+            &auth,
+        )
+        .unwrap();
     }
 }

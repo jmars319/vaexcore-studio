@@ -12,7 +12,7 @@ It is not a giveaway, moderation, highlight detection, scene editing, cloud, or 
 - SQLite for local profiles, markers, and secret references
 - Local HTTP + WebSocket API
 - Dry-run media engine behind a media abstraction
-- Supervised, replaceable `media-runner` sidecar path with dry-run fallback
+- Supervised, replaceable `media-runner` sidecar with HTTP command transport
 
 ## Repository Layout
 
@@ -81,6 +81,8 @@ Run the sidecar dry-run status service manually:
 cargo run -p vaexcore-media-runner -- --status-addr 127.0.0.1:51387 --dry-run
 ```
 
+When running as a service, `media-runner` exposes `/health`, `/status`, and dry-run recording/stream command endpoints.
+
 ## Local API
 
 The desktop process starts the local API on:
@@ -104,6 +106,8 @@ curl http://127.0.0.1:51287/health
 curl -H "x-vaexcore-token: replace-with-a-local-token" http://127.0.0.1:51287/status
 ```
 
+HTTP responses include an `x-vaexcore-request-id` header. Local clients may send their own request ID with the same header for log correlation.
+
 ## MVP Behavior
 
 - Create Twitch, YouTube, Kick, and custom RTMP stream destinations.
@@ -112,7 +116,7 @@ curl -H "x-vaexcore-token: replace-with-a-local-token" http://127.0.0.1:51287/st
 - Create manual markers.
 - Stream lifecycle events over WebSocket.
 - Simulate media execution with `DryRunMediaEngine`.
-- Prefer supervised `media-runner` dry-run execution when the sidecar is available, and fall back to in-process dry-run when it is missing.
+- Prefer supervised `media-runner` dry-run execution when the sidecar is available, with in-process dry-run fallback when it is missing during startup.
 
 ## Security Notes
 

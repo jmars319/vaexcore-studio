@@ -1,6 +1,7 @@
-use crate::{DryRunMediaEngine, MediaEngine, MediaError, MediaEventSink, MediaTransition};
+use crate::{MediaEngine, MediaError, MediaEventSink, MediaTransition};
 use async_trait::async_trait;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::json;
 use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
@@ -10,7 +11,8 @@ use std::{
     time::{Duration, Instant},
 };
 use vaexcore_core::{
-    ApiResponse, EngineMode, EngineStatus, RecordingSession, StreamDestination, StreamSession,
+    ApiResponse, EngineMode, EngineStatus, MediaProfile, RecordingSession, StreamDestination,
+    StreamSession, StudioEvent, StudioEventKind,
 };
 
 #[derive(Clone, Debug)]
@@ -135,6 +137,40 @@ impl MediaRunnerSupervisor {
             .map_err(|error| SidecarError::Join(error.to_string()))?
     }
 
+    pub async fn start_recording(
+        &self,
+        profile: MediaProfile,
+    ) -> Result<MediaTransition<RecordingSession>, SidecarError> {
+        let supervisor = self.clone();
+        tokio::task::spawn_blocking(move || supervisor.post_blocking("/recording/start", &profile))
+            .await
+            .map_err(|error| SidecarError::Join(error.to_string()))?
+    }
+
+    pub async fn stop_recording(&self) -> Result<MediaTransition<RecordingSession>, SidecarError> {
+        let supervisor = self.clone();
+        tokio::task::spawn_blocking(move || supervisor.post_empty_blocking("/recording/stop"))
+            .await
+            .map_err(|error| SidecarError::Join(error.to_string()))?
+    }
+
+    pub async fn start_stream(
+        &self,
+        destination: StreamDestination,
+    ) -> Result<MediaTransition<StreamSession>, SidecarError> {
+        let supervisor = self.clone();
+        tokio::task::spawn_blocking(move || supervisor.post_blocking("/stream/start", &destination))
+            .await
+            .map_err(|error| SidecarError::Join(error.to_string()))?
+    }
+
+    pub async fn stop_stream(&self) -> Result<MediaTransition<StreamSession>, SidecarError> {
+        let supervisor = self.clone();
+        tokio::task::spawn_blocking(move || supervisor.post_empty_blocking("/stream/stop"))
+            .await
+            .map_err(|error| SidecarError::Join(error.to_string()))?
+    }
+
     pub fn shutdown(&self) {
         self.inner.shutdown();
     }
@@ -157,8 +193,13 @@ impl MediaRunnerSupervisor {
 
     fn health_blocking(&self) -> Result<(), SidecarError> {
         self.ensure_running()?;
-        let body: serde_json::Value =
-            get_api_response(self.status_addr(), "/health", Duration::from_millis(500))?;
+        let body: serde_json::Value = request_api_response(
+            self.status_addr(),
+            "GET",
+            "/health",
+            None,
+            Duration::from_millis(500),
+        )?;
         let ok = body
             .get("ok")
             .and_then(serde_json::Value::as_bool)
@@ -170,7 +211,39 @@ impl MediaRunnerSupervisor {
 
     fn status_blocking(&self) -> Result<MediaRunnerStatus, SidecarError> {
         self.ensure_running()?;
-        get_api_response(self.status_addr(), "/status", Duration::from_millis(500))
+        request_api_response(
+            self.status_addr(),
+            "GET",
+            "/status",
+            None,
+            Duration::from_millis(500),
+        )
+    }
+
+    fn post_blocking<T: DeserializeOwned, B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, SidecarError> {
+        self.ensure_running()?;
+        request_api_response(
+            self.status_addr(),
+            "POST",
+            path,
+            Some(serde_json::to_string(body)?),
+            Duration::from_secs(2),
+        )
+    }
+
+    fn post_empty_blocking<T: DeserializeOwned>(&self, path: &str) -> Result<T, SidecarError> {
+        self.ensure_running()?;
+        request_api_response(
+            self.status_addr(),
+            "POST",
+            path,
+            Some("{}".to_string()),
+            Duration::from_secs(2),
+        )
     }
 
     fn ensure_running(&self) -> Result<(), SidecarError> {
@@ -230,44 +303,120 @@ impl Drop for MediaRunnerSupervisorInner {
 
 #[derive(Clone)]
 pub struct SidecarMediaEngine {
-    dry_run: DryRunMediaEngine,
     runner: MediaRunnerSupervisor,
+    event_sink: Option<MediaEventSink>,
 }
 
 impl SidecarMediaEngine {
     pub fn new(runner: MediaRunnerSupervisor, event_sink: Option<MediaEventSink>) -> Self {
-        Self {
-            dry_run: DryRunMediaEngine::new(event_sink),
-            runner,
-        }
+        Self { runner, event_sink }
     }
 
     pub fn runner(&self) -> MediaRunnerSupervisor {
         self.runner.clone()
     }
 
-    async fn sidecar_status(&self, mut status: EngineStatus) -> EngineStatus {
+    fn emit(&self, event: StudioEvent) {
+        if let Some(sink) = &self.event_sink {
+            sink(event);
+        }
+    }
+
+    fn emit_recording_started(&self, transition: &MediaTransition<RecordingSession>) {
+        if !transition.changed {
+            return;
+        }
+        if let Some(session) = &transition.session {
+            self.emit(StudioEvent::new(
+                StudioEventKind::RecordingStarted,
+                json!({
+                    "session_id": session.id,
+                    "output_path": session.output_path,
+                    "profile_id": session.profile.id,
+                }),
+            ));
+        }
+    }
+
+    fn emit_recording_stopped(&self, transition: &MediaTransition<RecordingSession>) {
+        if !transition.changed {
+            return;
+        }
+        if let Some(session) = &transition.session {
+            self.emit(StudioEvent::new(
+                StudioEventKind::RecordingStopped,
+                json!({
+                    "session_id": session.id,
+                    "output_path": session.output_path,
+                    "profile_id": session.profile.id,
+                }),
+            ));
+        }
+    }
+
+    fn emit_stream_started(&self, transition: &MediaTransition<StreamSession>) {
+        if !transition.changed {
+            return;
+        }
+        if let Some(session) = &transition.session {
+            self.emit(StudioEvent::new(
+                StudioEventKind::StreamStarted,
+                json!({
+                    "session_id": session.id,
+                    "destination_id": session.destination.id,
+                    "destination_name": session.destination.name,
+                    "platform": session.destination.platform,
+                }),
+            ));
+        }
+    }
+
+    fn emit_stream_stopped(&self, transition: &MediaTransition<StreamSession>) {
+        if !transition.changed {
+            return;
+        }
+        if let Some(session) = &transition.session {
+            self.emit(StudioEvent::new(
+                StudioEventKind::StreamStopped,
+                json!({
+                    "session_id": session.id,
+                    "destination_id": session.destination.id,
+                    "destination_name": session.destination.name,
+                    "platform": session.destination.platform,
+                }),
+            ));
+        }
+    }
+
+    fn sidecar_status_from_runner_status(&self, runner_status: MediaRunnerStatus) -> EngineStatus {
+        let mut status = runner_status.engine_status;
+        status.engine = format!(
+            "SidecarMediaEngine ({})",
+            runner_status
+                .pipeline_name
+                .unwrap_or_else(|| runner_status.service.clone())
+        );
+        status.mode = if runner_status.dry_run {
+            EngineMode::DryRun
+        } else {
+            status.mode
+        };
+        status
+    }
+
+    async fn sidecar_status(&self) -> EngineStatus {
         match self.runner.status().await {
             Ok(runner_status) if runner_status.ready => {
-                status.engine = format!(
-                    "SidecarMediaEngine ({})",
-                    runner_status
-                        .pipeline_name
-                        .unwrap_or_else(|| runner_status.service.clone())
-                );
-                status.mode = if runner_status.dry_run {
-                    EngineMode::DryRun
-                } else {
-                    runner_status.engine_status.mode
-                };
-                status
+                self.sidecar_status_from_runner_status(runner_status)
             }
-            _ => {
-                status.engine = "DryRunMediaEngine".to_string();
-                status.mode = EngineMode::DryRun;
-                status
-            }
+            _ => EngineStatus::idle("SidecarMediaEngine unavailable", EngineMode::DryRun),
         }
+    }
+}
+
+impl From<SidecarError> for MediaError {
+    fn from(error: SidecarError) -> Self {
+        Self::Unavailable(error.to_string())
     }
 }
 
@@ -275,16 +424,26 @@ impl SidecarMediaEngine {
 impl MediaEngine for SidecarMediaEngine {
     async fn start_recording(
         &self,
-        profile: vaexcore_core::MediaProfile,
+        profile: MediaProfile,
     ) -> Result<MediaTransition<RecordingSession>, MediaError> {
-        let mut transition = self.dry_run.start_recording(profile).await?;
-        transition.status = self.sidecar_status(transition.status).await;
+        let mut transition = self.runner.start_recording(profile).await?;
+        transition.status = self
+            .runner
+            .status()
+            .await
+            .map(|status| self.sidecar_status_from_runner_status(status))?;
+        self.emit_recording_started(&transition);
         Ok(transition)
     }
 
     async fn stop_recording(&self) -> Result<MediaTransition<RecordingSession>, MediaError> {
-        let mut transition = self.dry_run.stop_recording().await?;
-        transition.status = self.sidecar_status(transition.status).await;
+        let mut transition = self.runner.stop_recording().await?;
+        transition.status = self
+            .runner
+            .status()
+            .await
+            .map(|status| self.sidecar_status_from_runner_status(status))?;
+        self.emit_recording_stopped(&transition);
         Ok(transition)
     }
 
@@ -292,33 +451,56 @@ impl MediaEngine for SidecarMediaEngine {
         &self,
         destination: StreamDestination,
     ) -> Result<MediaTransition<StreamSession>, MediaError> {
-        let mut transition = self.dry_run.start_stream(destination).await?;
-        transition.status = self.sidecar_status(transition.status).await;
+        let mut transition = self.runner.start_stream(destination).await?;
+        transition.status = self
+            .runner
+            .status()
+            .await
+            .map(|status| self.sidecar_status_from_runner_status(status))?;
+        self.emit_stream_started(&transition);
         Ok(transition)
     }
 
     async fn stop_stream(&self) -> Result<MediaTransition<StreamSession>, MediaError> {
-        let mut transition = self.dry_run.stop_stream().await?;
-        transition.status = self.sidecar_status(transition.status).await;
+        let mut transition = self.runner.stop_stream().await?;
+        transition.status = self
+            .runner
+            .status()
+            .await
+            .map(|status| self.sidecar_status_from_runner_status(status))?;
+        self.emit_stream_stopped(&transition);
         Ok(transition)
     }
 
     async fn status(&self) -> EngineStatus {
-        let status = self.dry_run.status().await;
-        self.sidecar_status(status).await
+        self.sidecar_status().await
     }
 }
 
-fn get_api_response<T: DeserializeOwned>(
+fn request_api_response<T: DeserializeOwned>(
     addr: SocketAddr,
+    method: &str,
     path: &str,
+    body: Option<String>,
     timeout: Duration,
 ) -> Result<T, SidecarError> {
     let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
+    let body = body.unwrap_or_default();
+    let content_headers = if body.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Content-Type: application/json\r\nContent-Length: {}\r\n",
+            body.len()
+        )
+    };
     stream.write_all(
-        format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n").as_bytes(),
+        format!(
+            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n{content_headers}\r\n{body}"
+        )
+        .as_bytes(),
     )?;
 
     let mut response = String::new();
@@ -328,7 +510,11 @@ fn get_api_response<T: DeserializeOwned>(
         .ok_or_else(|| SidecarError::Http("malformed HTTP response".to_string()))?;
     let status_line = head.lines().next().unwrap_or_default();
     if !status_line.contains(" 200 ") {
-        return Err(SidecarError::Http(status_line.to_string()));
+        let message = serde_json::from_str::<ApiResponse<serde_json::Value>>(body.trim())
+            .ok()
+            .and_then(|response| response.error.map(|error| error.message))
+            .unwrap_or_else(|| status_line.to_string());
+        return Err(SidecarError::Http(message));
     }
 
     let response: ApiResponse<T> = serde_json::from_str(body.trim())?;
@@ -348,6 +534,7 @@ fn get_api_response<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
     use std::{
         net::TcpListener,
         sync::{
@@ -356,7 +543,7 @@ mod tests {
         },
         thread::{self, JoinHandle},
     };
-    use vaexcore_core::{MediaProfile, PlatformKind, StreamDestination, StreamDestinationInput};
+    use vaexcore_core::{new_id, PlatformKind, StreamDestinationInput};
 
     #[test]
     fn missing_runner_executable_is_reported() {
@@ -427,6 +614,7 @@ mod tests {
             let stop = Arc::new(AtomicBool::new(false));
             let thread_stop = stop.clone();
             let thread = thread::spawn(move || {
+                let mut runner_state = TestRunnerState::default();
                 listener.set_nonblocking(true).unwrap();
                 while !thread_stop.load(Ordering::SeqCst) {
                     match listener.accept() {
@@ -434,18 +622,38 @@ mod tests {
                             let mut request = [0_u8; 1024];
                             let bytes = stream.read(&mut request).unwrap_or(0);
                             let request = String::from_utf8_lossy(&request[..bytes]);
-                            let body = if request.starts_with("GET /status ") {
+                            let request_body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+                            let response_body = if request.starts_with("GET /status ") {
                                 serde_json::to_string(&ApiResponse::ok(MediaRunnerStatus {
                                     service: "fake-media-runner".to_string(),
                                     ready: true,
                                     dry_run: true,
                                     pipeline_name: Some("test".to_string()),
-                                    engine_status: EngineStatus::idle(
-                                        "fake-media-runner",
-                                        EngineMode::DryRun,
-                                    ),
+                                    engine_status: runner_state.status(),
                                 }))
                                 .unwrap()
+                            } else if request.starts_with("POST /recording/start ") {
+                                let profile: MediaProfile =
+                                    serde_json::from_str(request_body).unwrap();
+                                serde_json::to_string(&ApiResponse::ok(
+                                    runner_state.start_recording(profile),
+                                ))
+                                .unwrap()
+                            } else if request.starts_with("POST /recording/stop ") {
+                                serde_json::to_string(&ApiResponse::ok(
+                                    runner_state.stop_recording(),
+                                ))
+                                .unwrap()
+                            } else if request.starts_with("POST /stream/start ") {
+                                let destination: StreamDestination =
+                                    serde_json::from_str(request_body).unwrap();
+                                serde_json::to_string(&ApiResponse::ok(
+                                    runner_state.start_stream(destination),
+                                ))
+                                .unwrap()
+                            } else if request.starts_with("POST /stream/stop ") {
+                                serde_json::to_string(&ApiResponse::ok(runner_state.stop_stream()))
+                                    .unwrap()
                             } else {
                                 serde_json::to_string(&ApiResponse::ok(serde_json::json!({
                                     "service": "fake-media-runner",
@@ -455,8 +663,8 @@ mod tests {
                             };
                             let response = format!(
                                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                                body.len(),
-                                body
+                                response_body.len(),
+                                response_body
                             );
                             let _ = stream.write_all(response.as_bytes());
                         }
@@ -500,6 +708,100 @@ mod tests {
             );
             if let Some(thread) = self.thread.take() {
                 let _ = thread.join();
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct TestRunnerState {
+        recording: Option<RecordingSession>,
+        stream: Option<StreamSession>,
+    }
+
+    impl TestRunnerState {
+        fn status(&self) -> EngineStatus {
+            EngineStatus {
+                engine: "fake-media-runner".to_string(),
+                mode: EngineMode::DryRun,
+                recording: self.recording.clone(),
+                stream: self.stream.clone(),
+                recording_active: self.recording.is_some(),
+                stream_active: self.stream.is_some(),
+                recording_path: self
+                    .recording
+                    .as_ref()
+                    .map(|session| session.output_path.clone()),
+                active_destination: self
+                    .stream
+                    .as_ref()
+                    .map(|session| session.destination.clone()),
+                updated_at: Utc::now(),
+            }
+        }
+
+        fn start_recording(&mut self, profile: MediaProfile) -> MediaTransition<RecordingSession> {
+            if let Some(session) = self.recording.clone() {
+                return MediaTransition {
+                    changed: false,
+                    session: Some(session),
+                    status: self.status(),
+                };
+            }
+
+            let session = RecordingSession {
+                id: new_id("recording"),
+                profile,
+                output_path: "fake-output.mkv".to_string(),
+                started_at: Utc::now(),
+            };
+            self.recording = Some(session.clone());
+            MediaTransition {
+                changed: true,
+                session: Some(session),
+                status: self.status(),
+            }
+        }
+
+        fn stop_recording(&mut self) -> MediaTransition<RecordingSession> {
+            let session = self.recording.take();
+            MediaTransition {
+                changed: session.is_some(),
+                session,
+                status: self.status(),
+            }
+        }
+
+        fn start_stream(
+            &mut self,
+            destination: StreamDestination,
+        ) -> MediaTransition<StreamSession> {
+            if let Some(session) = self.stream.clone() {
+                return MediaTransition {
+                    changed: false,
+                    session: Some(session),
+                    status: self.status(),
+                };
+            }
+
+            let session = StreamSession {
+                id: new_id("stream"),
+                destination,
+                started_at: Utc::now(),
+            };
+            self.stream = Some(session.clone());
+            MediaTransition {
+                changed: true,
+                session: Some(session),
+                status: self.status(),
+            }
+        }
+
+        fn stop_stream(&mut self) -> MediaTransition<StreamSession> {
+            let session = self.stream.take();
+            MediaTransition {
+                changed: session.is_some(),
+                session,
+                status: self.status(),
             }
         }
     }

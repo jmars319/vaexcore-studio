@@ -4181,6 +4181,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "vaexcore-core",
+ "vaexcore-media",
 ]
 
 [[package]]

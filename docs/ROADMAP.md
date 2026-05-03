@@ -11,13 +11,15 @@
 - Manual marker events.
 - Replaceable `media-runner` sidecar scaffold.
 - Sidecar startup supervision with dry-run fallback.
+- Sidecar dry-run command transport.
+- SQLite schema migration tracking.
+- API request ID headers and bounded WebSocket replay.
 
 ## Next Milestone: Runtime Hardening
 
 - API port fallback and frontend discovery.
 - More detailed command audit log.
 - Recent client registry.
-- Per-command request IDs.
 - Structured app log file rotation.
 - Import/export profile bundle.
 - Sidecar restart policy after crashes.
@@ -30,7 +32,7 @@
 - Encoder and muxer capability discovery.
 - Recording container safety checks.
 - RTMP/RTMPS connection status events.
-- Real command transport between API and `media-runner`.
+- Real pipeline execution behind the existing `media-runner` command transport.
 
 ## Platform Milestone
 

@@ -28,6 +28,8 @@ x-vaexcore-token: <token>
 
 For WebSocket clients, pass `?token=<token>` or the token header.
 
+HTTP responses include `x-vaexcore-request-id`. Clients may send this header on requests to correlate their own logs with Studio logs; otherwise the API generates one.
+
 ## Response Envelope
 
 Success:
@@ -162,7 +164,7 @@ Create stream destination:
 
 ## Events
 
-`WS /events` sends JSON event objects:
+`WS /events` sends JSON event objects. New connections receive recent events before live events. Pass `?limit=<count>` to control replay count, capped at 100.
 
 ```json
 {

@@ -396,8 +396,14 @@ pub fn run() {
             open_settings_window,
             media_runner_info
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run vaexcore studio");
+        .build(tauri::generate_context!())
+        .expect("failed to build vaexcore studio")
+        .run(|app, event| match event {
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                shutdown_runtime(app);
+            }
+            _ => {}
+        });
 }
 
 fn open_settings(app: &tauri::AppHandle) {
@@ -474,21 +480,30 @@ fn show_settings_window(app: &tauri::AppHandle) -> tauri::Result<()> {
 }
 
 fn quit_app(app: &tauri::AppHandle) {
-    if let Some(media_runner) = &app.state::<AppRuntimeState>().media_runner {
+    shutdown_runtime(app);
+    app.exit(0);
+}
+
+fn shutdown_runtime(app: &tauri::AppHandle) {
+    let Some(state) = app.try_state::<AppRuntimeState>() else {
+        return;
+    };
+
+    if let Some(media_runner) = &state.media_runner {
         media_runner.shutdown();
     }
 
-    if let Some(shutdown) = app
-        .state::<AppRuntimeState>()
-        .api_shutdown
-        .lock()
-        .expect("api shutdown mutex poisoned")
-        .take()
-    {
+    let shutdown = {
+        let mut guard = state
+            .api_shutdown
+            .lock()
+            .expect("api shutdown mutex poisoned");
+        guard.take()
+    };
+
+    if let Some(shutdown) = shutdown {
         let _ = shutdown.send(());
     }
-
-    app.exit(0);
 }
 
 fn start_media_runner(app: &tauri::AppHandle) -> Option<MediaRunnerSupervisor> {

@@ -1,9 +1,19 @@
-use std::{env, io::Read, net::SocketAddr, path::PathBuf};
+use std::{env, io::Read, net::SocketAddr, path::PathBuf, sync::Arc};
 
-use axum::{routing::get, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-use vaexcore_core::{ApiResponse, EngineMode, EngineStatus, APP_NAME};
+use vaexcore_core::{
+    ApiResponse, EngineMode, EngineStatus, MediaProfile, RecordingSession, StreamDestination,
+    StreamSession, APP_NAME,
+};
+use vaexcore_media::{DryRunMediaEngine, MediaEngine, MediaError, MediaTransition};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunnerConfig {
@@ -33,6 +43,12 @@ pub struct RunnerStatus {
     pub engine_status: EngineStatus,
 }
 
+#[derive(Clone)]
+struct RunnerState {
+    config: RunnerConfig,
+    engine: Arc<DryRunMediaEngine>,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -53,26 +69,20 @@ async fn main() -> anyhow::Result<()> {
         config.status_addr = Some(status_addr);
     }
 
-    let status = status_from_config(&config);
+    let state = RunnerState {
+        config: config.clone(),
+        engine: Arc::new(DryRunMediaEngine::new(None)),
+    };
 
     if let Some(addr) = config.status_addr {
         let app = Router::new()
-            .route(
-                "/health",
-                get(|| async {
-                    Json(ApiResponse::ok(serde_json::json!({
-                        "service": "vaexcore-media-runner",
-                        "ok": true
-                    })))
-                }),
-            )
-            .route(
-                "/status",
-                get({
-                    let status = status.clone();
-                    move || async move { Json(ApiResponse::ok(status.clone())) }
-                }),
-            );
+            .route("/health", get(health))
+            .route("/status", get(status))
+            .route("/recording/start", post(start_recording))
+            .route("/recording/stop", post(stop_recording))
+            .route("/stream/start", post(start_stream))
+            .route("/stream/stop", post(stop_stream))
+            .with_state(state);
 
         let listener = TcpListener::bind(addr).await?;
         let local_addr = listener.local_addr()?;
@@ -81,11 +91,80 @@ async fn main() -> anyhow::Result<()> {
     } else {
         println!(
             "{}",
-            serde_json::to_string_pretty(&ApiResponse::ok(status))?
+            serde_json::to_string_pretty(&ApiResponse::ok(status_from_config(&config)))?
         );
     }
 
     Ok(())
+}
+
+async fn health() -> Json<ApiResponse<serde_json::Value>> {
+    Json(ApiResponse::ok(serde_json::json!({
+        "service": "vaexcore-media-runner",
+        "ok": true
+    })))
+}
+
+async fn status(State(state): State<RunnerState>) -> Json<ApiResponse<RunnerStatus>> {
+    Json(ApiResponse::ok(runner_status(&state).await))
+}
+
+async fn start_recording(
+    State(state): State<RunnerState>,
+    Json(profile): Json<MediaProfile>,
+) -> Result<Json<ApiResponse<MediaTransition<RecordingSession>>>, RunnerApiError> {
+    let transition = state.engine.start_recording(profile).await?;
+    Ok(Json(ApiResponse::ok(transition)))
+}
+
+async fn stop_recording(
+    State(state): State<RunnerState>,
+) -> Result<Json<ApiResponse<MediaTransition<RecordingSession>>>, RunnerApiError> {
+    let transition = state.engine.stop_recording().await?;
+    Ok(Json(ApiResponse::ok(transition)))
+}
+
+async fn start_stream(
+    State(state): State<RunnerState>,
+    Json(destination): Json<StreamDestination>,
+) -> Result<Json<ApiResponse<MediaTransition<StreamSession>>>, RunnerApiError> {
+    let transition = state.engine.start_stream(destination).await?;
+    Ok(Json(ApiResponse::ok(transition)))
+}
+
+async fn stop_stream(
+    State(state): State<RunnerState>,
+) -> Result<Json<ApiResponse<MediaTransition<StreamSession>>>, RunnerApiError> {
+    let transition = state.engine.stop_stream().await?;
+    Ok(Json(ApiResponse::ok(transition)))
+}
+
+#[derive(Debug)]
+struct RunnerApiError {
+    status: StatusCode,
+    code: String,
+    message: String,
+}
+
+impl From<MediaError> for RunnerApiError {
+    fn from(error: MediaError) -> Self {
+        let status = match error {
+            MediaError::InvalidCommand(_) => StatusCode::BAD_REQUEST,
+            MediaError::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+        };
+        Self {
+            status,
+            code: "media_error".to_string(),
+            message: error.to_string(),
+        }
+    }
+}
+
+impl IntoResponse for RunnerApiError {
+    fn into_response(self) -> Response {
+        let body: ApiResponse<serde_json::Value> = ApiResponse::error(self.code, self.message);
+        (self.status, Json(body)).into_response()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -158,6 +237,24 @@ fn status_from_config(config: &RunnerConfig) -> RunnerStatus {
                 EngineMode::ExternalSidecar
             },
         ),
+    }
+}
+
+async fn runner_status(state: &RunnerState) -> RunnerStatus {
+    let mut engine_status = state.engine.status().await;
+    engine_status.engine = "media-runner".to_string();
+    engine_status.mode = if state.config.dry_run {
+        EngineMode::DryRun
+    } else {
+        EngineMode::ExternalSidecar
+    };
+
+    RunnerStatus {
+        service: "vaexcore-media-runner".to_string(),
+        ready: true,
+        dry_run: state.config.dry_run,
+        pipeline_name: state.config.pipeline_name.clone(),
+        engine_status,
     }
 }
 

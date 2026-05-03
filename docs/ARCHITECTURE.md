@@ -43,7 +43,7 @@ Local API:
 - SQLite persistence
 - SecretStore implementation
 - Dry-run engine wiring
-- Optional sidecar supervision and health events
+- Optional sidecar supervision, command transport, and health events
 
 ### `vaexcore-media`
 
@@ -82,6 +82,8 @@ React UI
   -> SQLite profile/secret lookup
   -> MediaEngine trait
   -> SidecarMediaEngine when media-runner is available
+  -> media-runner HTTP command transport
+  -> dry-run lifecycle state in sidecar
   -> DryRunMediaEngine fallback
   -> StudioEvent
   -> EventBus

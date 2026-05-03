@@ -12,6 +12,8 @@ use vaexcore_core::{
 };
 use vaexcore_platforms::apply_platform_defaults;
 
+const CURRENT_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("sqlite error: {0}")]
@@ -478,55 +480,38 @@ impl ProfileStore {
             r#"
             PRAGMA journal_mode = WAL;
             PRAGMA foreign_keys = ON;
+            "#,
+        )?;
 
-            CREATE TABLE IF NOT EXISTS recording_profiles (
-              id TEXT PRIMARY KEY,
-              name TEXT NOT NULL,
-              output_folder TEXT NOT NULL,
-              filename_pattern TEXT NOT NULL,
-              container TEXT NOT NULL,
-              width INTEGER NOT NULL,
-              height INTEGER NOT NULL,
-              framerate INTEGER NOT NULL,
-              bitrate_kbps INTEGER NOT NULL,
-              encoder_preference_json TEXT NOT NULL,
-              created_at TEXT NOT NULL,
-              updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS stream_destinations (
-              id TEXT PRIMARY KEY,
-              name TEXT NOT NULL,
-              platform TEXT NOT NULL,
-              ingest_url TEXT NOT NULL,
-              stream_key_ref_provider TEXT,
-              stream_key_ref_id TEXT,
-              enabled INTEGER NOT NULL,
-              created_at TEXT NOT NULL,
-              updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS secrets (
-              id TEXT PRIMARY KEY,
-              scope TEXT NOT NULL,
-              secret TEXT NOT NULL,
-              created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS markers (
-              id TEXT PRIMARY KEY,
-              label TEXT,
-              created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS app_settings (
-              id TEXT PRIMARY KEY,
-              value_json TEXT NOT NULL,
-              updated_at TEXT NOT NULL
+        connection.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+              version INTEGER PRIMARY KEY,
+              applied_at TEXT NOT NULL
             );
             "#,
         )?;
+
+        let current_version = schema_version(&connection)?;
+        if current_version > CURRENT_SCHEMA_VERSION {
+            return Err(StoreError::InvalidValue(format!(
+                "database schema version {current_version} is newer than supported version {CURRENT_SCHEMA_VERSION}"
+            )));
+        }
+
+        if current_version < 1 {
+            apply_migration_1(&connection)?;
+        }
+
         Ok(())
+    }
+
+    pub fn schema_version(&self) -> Result<u32, StoreError> {
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        schema_version(&connection)
     }
 
     fn seed_defaults(&self) -> Result<(), StoreError> {
@@ -652,6 +637,74 @@ impl ProfileStore {
     }
 }
 
+fn apply_migration_1(connection: &Connection) -> Result<(), StoreError> {
+    connection.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS recording_profiles (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              output_folder TEXT NOT NULL,
+              filename_pattern TEXT NOT NULL,
+              container TEXT NOT NULL,
+              width INTEGER NOT NULL,
+              height INTEGER NOT NULL,
+              framerate INTEGER NOT NULL,
+              bitrate_kbps INTEGER NOT NULL,
+              encoder_preference_json TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS stream_destinations (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              platform TEXT NOT NULL,
+              ingest_url TEXT NOT NULL,
+              stream_key_ref_provider TEXT,
+              stream_key_ref_id TEXT,
+              enabled INTEGER NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS secrets (
+              id TEXT PRIMARY KEY,
+              scope TEXT NOT NULL,
+              secret TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS markers (
+              id TEXT PRIMARY KEY,
+              label TEXT,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS app_settings (
+              id TEXT PRIMARY KEY,
+              value_json TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            "#,
+    )?;
+    connection.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+        params![1_u32, now_utc().to_rfc3339()],
+    )?;
+    Ok(())
+}
+
+fn schema_version(connection: &Connection) -> Result<u32, StoreError> {
+    Ok(connection
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get::<_, u32>(0),
+        )
+        .optional()?
+        .unwrap_or(0))
+}
+
 impl SecretStore for ProfileStore {
     fn put_secret(
         &self,
@@ -743,5 +796,12 @@ mod tests {
         assert_eq!(saved.api_token, Some("updated-token".to_string()));
         assert_eq!(saved.log_level, "debug");
         assert_eq!(store.app_settings().unwrap(), saved);
+    }
+
+    #[test]
+    fn schema_migration_records_current_version() {
+        let store = ProfileStore::open_memory().unwrap();
+
+        assert_eq!(store.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
     }
 }

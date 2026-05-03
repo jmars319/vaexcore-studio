@@ -48,6 +48,7 @@ impl SharedAuthConfig {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct TokenQuery {
     pub token: Option<String>,
+    pub limit: Option<usize>,
 }
 
 pub fn authorize_headers(headers: &HeaderMap, auth: &SharedAuthConfig) -> Result<(), ApiError> {

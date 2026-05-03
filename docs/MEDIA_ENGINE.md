@@ -55,6 +55,11 @@ The placeholder compiles without requiring GStreamer to be installed. Real GStre
 - accepts JSON config via stdin or `--config`
 - supports `--dry-run`
 - can expose `/health` and `/status`
+- accepts lifecycle commands over localhost HTTP:
+  - `POST /recording/start`
+  - `POST /recording/stop`
+  - `POST /stream/start`
+  - `POST /stream/stop`
 - can later wrap GStreamer, FFmpeg, or native capture pipelines
 
 Example:
@@ -87,11 +92,11 @@ npm run prepare:sidecars -w apps/desktop
 
 Tauri bundles the staged binary through `bundle.externalBin`, which expects the `media-runner-<target-triple>` filename shape.
 
-If a runner is found, `vaexcore-api` wraps the dry-run lifecycle with `SidecarMediaEngine` and polls the runner `/status` endpoint. The command lifecycle remains idempotent and MVP-safe while the sidecar contract is still status-only.
+If a runner is found, `vaexcore-api` uses `SidecarMediaEngine` to forward recording and stream lifecycle commands to the runner over localhost HTTP. The runner owns dry-run lifecycle state, exposes `/status`, and preserves the same idempotent command semantics as `DryRunMediaEngine`.
 
-If the runner is missing, fails to start, or becomes unavailable, Studio stays usable with `DryRunMediaEngine`. Missing sidecars are logged, not surfaced as fatal startup errors.
+If the runner is missing or fails to start during desktop startup, Studio stays usable with `DryRunMediaEngine`. Missing sidecars are logged, not surfaced as fatal startup errors. If a managed runner exits after startup, command calls return explicit unavailable errors instead of silently switching engines mid-session.
 
-Quit App calls the supervisor shutdown path before exiting so a managed `media-runner` process is not left running.
+Quit App and app-level exit events call the supervisor shutdown path before exiting so a managed `media-runner` process is not left running.
 
 ## Future Real Pipeline Requirements
 

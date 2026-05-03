@@ -6,7 +6,7 @@ use std::{
 use tokio::sync::broadcast;
 use vaexcore_core::StudioEvent;
 
-const RECENT_EVENT_LIMIT: usize = 100;
+pub const RECENT_EVENT_LIMIT: usize = 100;
 
 #[derive(Clone)]
 pub struct EventBus {
@@ -40,11 +40,20 @@ impl EventBus {
     }
 
     pub fn recent(&self) -> Vec<StudioEvent> {
+        self.recent_limit(RECENT_EVENT_LIMIT)
+    }
+
+    pub fn recent_limit(&self, limit: usize) -> Vec<StudioEvent> {
         self.recent
             .lock()
             .expect("event bus mutex poisoned")
             .iter()
+            .rev()
+            .take(limit.min(RECENT_EVENT_LIMIT))
             .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
             .collect()
     }
 }
@@ -52,5 +61,22 @@ impl EventBus {
 impl Default for EventBus {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vaexcore_core::{StudioEvent, StudioEventKind};
+
+    #[test]
+    fn recent_limit_caps_replayed_events() {
+        let bus = EventBus::new();
+        for _ in 0..5 {
+            bus.emit(StudioEvent::simple(StudioEventKind::AppReady));
+        }
+
+        assert_eq!(bus.recent_limit(2).len(), 2);
+        assert_eq!(bus.recent_limit(RECENT_EVENT_LIMIT + 1).len(), 5);
     }
 }

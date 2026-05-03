@@ -20,4 +20,4 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 vaexcore-core = { path = "../../crates/vaexcore-core" }
-
+vaexcore-media = { path = "../../crates/vaexcore-media" }
