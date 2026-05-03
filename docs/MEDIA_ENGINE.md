@@ -12,6 +12,16 @@ The MVP media layer is intentionally dry-run. It validates lifecycle behavior an
 - `stop_stream()`
 - `status()`
 
+The shared contracts also define:
+
+- `CaptureSourceSelection`
+- `CaptureSourceInventory`
+- `MediaPipelinePlanRequest`
+- `MediaPipelinePlan`
+- `MediaPipelineValidation`
+
+These contracts let the UI, local API, sidecar, and future external tools agree on source selection and pipeline readiness before any real capture backend is started.
+
 Start and stop operations are idempotent:
 
 - Starting an already active recording returns the existing session.
@@ -60,6 +70,9 @@ The placeholder compiles without requiring GStreamer to be installed. Real GStre
   - `POST /recording/stop`
   - `POST /stream/start`
   - `POST /stream/stop`
+- accepts planning and validation commands:
+  - `POST /plan`
+  - `POST /validate`
 - can later wrap GStreamer, FFmpeg, or native capture pipelines
 
 Example:
@@ -96,11 +109,14 @@ If a runner is found, `vaexcore-api` uses `SidecarMediaEngine` to forward record
 
 If the runner is missing or fails to start during desktop startup, Studio stays usable with `DryRunMediaEngine`. Missing sidecars are logged, not surfaced as fatal startup errors. If a managed runner exits after startup, command calls return explicit unavailable errors instead of silently switching engines mid-session.
 
+The API asks the sidecar for `/plan` when it is available and falls back to the in-process dry-run planner if planning cannot reach the sidecar. This keeps the UI and external apps able to inspect readiness even when media execution is degraded.
+
 Quit App and app-level exit events call the supervisor shutdown path before exiting so a managed `media-runner` process is not left running.
 
 ## Future Real Pipeline Requirements
 
-- Capture permission diagnostics on macOS.
+- Native camera and microphone authorization status checks.
+- Window and device enumeration.
 - Encoder capability detection.
 - Container-specific recovery strategy.
 - Per-platform ingest validation.

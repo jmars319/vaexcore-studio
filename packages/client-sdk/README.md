@@ -13,8 +13,9 @@ const client = new VaexcoreStudioClient({
 });
 
 const status = await client.status();
+const plan = await client.mediaPlan();
 await client.createMarker("manual-marker");
-console.log(status.status.recording_active);
+console.log(status.status.recording_active, plan.ready);
 ```
 
 For WebSocket clients, use `client.eventSocketUrl()` and pass the returned URL to your WebSocket implementation.

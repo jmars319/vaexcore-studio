@@ -2,9 +2,10 @@ use std::{
     env,
     fs::OpenOptions,
     io::Write,
-    net::{SocketAddr, TcpListener},
+    net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     sync::Mutex,
+    time::Duration,
 };
 
 use tauri::{
@@ -17,7 +18,10 @@ use vaexcore_api::{
     default_auth_from_env, default_bind_addr, generate_token, serve_listener_with_shutdown,
     ApiServerConfig, AuthConfig, ProfileStore, SharedAuthConfig,
 };
-use vaexcore_core::{AppSettings, ProfileBundle};
+use vaexcore_core::{
+    AppSettings, CaptureSourceCandidate, CaptureSourceInventory, CaptureSourceKind,
+    CaptureSourceSelection, PreflightCheck, PreflightSnapshot, PreflightStatus, ProfileBundle,
+};
 use vaexcore_media::{MediaRunnerConfig, MediaRunnerSupervisor};
 
 const APP_NAME: &str = "vaexcore studio";
@@ -35,6 +39,12 @@ const MENU_VIEW_CONTROLS: &str = "view-controls";
 const MENU_VIEW_CONNECTED_APPS: &str = "view-connected-apps";
 const MENU_VIEW_LOGS: &str = "view-logs";
 const FRONTEND_OPEN_SECTION_EVENT: &str = "vaexcore://open-section";
+
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+}
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -217,6 +227,69 @@ fn open_data_directory(state: tauri::State<'_, AppRuntimeState>) -> Result<(), S
     {
         Err("opening the data directory is not implemented on this platform".to_string())
     }
+}
+
+#[tauri::command]
+fn capture_source_inventory(
+    state: tauri::State<'_, AppRuntimeState>,
+) -> Result<CaptureSourceInventory, String> {
+    let settings = state
+        .settings_store
+        .app_settings()
+        .map_err(|error| error.to_string())?;
+    Ok(CaptureSourceInventory {
+        candidates: capture_source_candidates(),
+        selected: settings.capture_sources,
+    })
+}
+
+#[tauri::command]
+async fn preflight_snapshot(
+    state: tauri::State<'_, AppRuntimeState>,
+) -> Result<PreflightSnapshot, String> {
+    let settings = state
+        .settings_store
+        .app_settings()
+        .map_err(|error| error.to_string())?;
+    let runner = state.media_runner.clone();
+    let mut checks = vec![
+        api_preflight_check(state.bind_addr),
+        token_preflight_check(&state.auth.get()),
+        output_folder_preflight_check(&settings.default_recording_profile.output_folder),
+        screen_recording_preflight_check(&settings.capture_sources),
+        camera_preflight_check(&settings.capture_sources),
+        microphone_preflight_check(&settings.capture_sources),
+        system_audio_preflight_check(&settings.capture_sources),
+    ];
+
+    checks.push(match runner {
+        Some(runner) => match runner.health().await {
+            Ok(()) => PreflightCheck {
+                id: "media.sidecar".to_string(),
+                label: "Media Runner".to_string(),
+                status: PreflightStatus::Ready,
+                detail: format!("Sidecar is reachable at {}.", runner.status_addr()),
+            },
+            Err(error) => PreflightCheck {
+                id: "media.sidecar".to_string(),
+                label: "Media Runner".to_string(),
+                status: PreflightStatus::Warning,
+                detail: format!("Sidecar is configured but not healthy: {error}"),
+            },
+        },
+        None => PreflightCheck {
+            id: "media.sidecar".to_string(),
+            label: "Media Runner".to_string(),
+            status: PreflightStatus::Warning,
+            detail: "Sidecar is not running; Studio will use in-process dry-run media.".to_string(),
+        },
+    });
+
+    Ok(PreflightSnapshot {
+        overall: aggregate_preflight_status(&checks),
+        checked_at: chrono::Utc::now(),
+        checks,
+    })
 }
 
 #[tauri::command]
@@ -564,6 +637,8 @@ pub fn run() {
             save_app_settings,
             regenerate_api_token,
             open_data_directory,
+            capture_source_inventory,
+            preflight_snapshot,
             export_profile_bundle,
             import_profile_bundle,
             open_settings_window,
@@ -920,6 +995,275 @@ fn write_app_log(log_dir: &Path, event: &str, fields: serde_json::Value) {
 fn daily_log_path(log_dir: &Path) -> PathBuf {
     let date = chrono::Utc::now().format("%Y-%m-%d");
     log_dir.join(format!("studio-{date}.jsonl"))
+}
+
+fn capture_source_candidates() -> Vec<CaptureSourceCandidate> {
+    vec![
+        CaptureSourceCandidate {
+            id: "display:main".to_string(),
+            kind: CaptureSourceKind::Display,
+            name: "Main Display".to_string(),
+            available: true,
+            notes: None,
+        },
+        CaptureSourceCandidate {
+            id: "window:selected".to_string(),
+            kind: CaptureSourceKind::Window,
+            name: "Window Capture".to_string(),
+            available: true,
+            notes: Some("Window enumeration is reserved for the real capture engine.".to_string()),
+        },
+        CaptureSourceCandidate {
+            id: "camera:default".to_string(),
+            kind: CaptureSourceKind::Camera,
+            name: "Default Camera".to_string(),
+            available: true,
+            notes: Some("Camera permission is requested by the real capture backend.".to_string()),
+        },
+        CaptureSourceCandidate {
+            id: "microphone:default".to_string(),
+            kind: CaptureSourceKind::Microphone,
+            name: "Default Microphone".to_string(),
+            available: true,
+            notes: Some(
+                "Microphone permission is requested by the real capture backend.".to_string(),
+            ),
+        },
+        CaptureSourceCandidate {
+            id: "system-audio:placeholder".to_string(),
+            kind: CaptureSourceKind::SystemAudio,
+            name: "System Audio".to_string(),
+            available: false,
+            notes: Some("System audio capture is a future macOS pipeline milestone.".to_string()),
+        },
+    ]
+}
+
+fn api_preflight_check(bind_addr: SocketAddr) -> PreflightCheck {
+    match TcpStream::connect_timeout(&bind_addr, Duration::from_millis(250)) {
+        Ok(_) => PreflightCheck {
+            id: "api.local".to_string(),
+            label: "Local API".to_string(),
+            status: PreflightStatus::Ready,
+            detail: format!("Listening at http://{bind_addr}."),
+        },
+        Err(error) => PreflightCheck {
+            id: "api.local".to_string(),
+            label: "Local API".to_string(),
+            status: PreflightStatus::Blocked,
+            detail: format!("Could not connect to http://{bind_addr}: {error}"),
+        },
+    }
+}
+
+fn token_preflight_check(auth: &AuthConfig) -> PreflightCheck {
+    if auth.dev_mode {
+        return PreflightCheck {
+            id: "api.auth".to_string(),
+            label: "API Token".to_string(),
+            status: PreflightStatus::Warning,
+            detail: "Dev auth bypass is enabled.".to_string(),
+        };
+    }
+
+    match auth
+        .token
+        .as_deref()
+        .filter(|token| !token.trim().is_empty())
+    {
+        Some(_) => PreflightCheck {
+            id: "api.auth".to_string(),
+            label: "API Token".to_string(),
+            status: PreflightStatus::Ready,
+            detail: "Token auth is configured.".to_string(),
+        },
+        None => PreflightCheck {
+            id: "api.auth".to_string(),
+            label: "API Token".to_string(),
+            status: PreflightStatus::Blocked,
+            detail: "Dev auth bypass is disabled and no API token is configured.".to_string(),
+        },
+    }
+}
+
+fn output_folder_preflight_check(output_folder: &str) -> PreflightCheck {
+    let path = expand_user_path(output_folder);
+    if let Err(error) = std::fs::create_dir_all(&path) {
+        return PreflightCheck {
+            id: "recording.output_folder".to_string(),
+            label: "Output Folder".to_string(),
+            status: PreflightStatus::Blocked,
+            detail: format!("Could not create '{}': {error}", path.display()),
+        };
+    }
+
+    let probe = path.join(".vaexcore-preflight-write-test");
+    match OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&probe)
+    {
+        Ok(mut file) => {
+            let write_result = file.write_all(b"ok");
+            drop(file);
+            let _ = std::fs::remove_file(&probe);
+            match write_result {
+                Ok(()) => PreflightCheck {
+                    id: "recording.output_folder".to_string(),
+                    label: "Output Folder".to_string(),
+                    status: PreflightStatus::Ready,
+                    detail: format!("Writable: {}", path.display()),
+                },
+                Err(error) => PreflightCheck {
+                    id: "recording.output_folder".to_string(),
+                    label: "Output Folder".to_string(),
+                    status: PreflightStatus::Blocked,
+                    detail: format!("Could not write to '{}': {error}", path.display()),
+                },
+            }
+        }
+        Err(error) => PreflightCheck {
+            id: "recording.output_folder".to_string(),
+            label: "Output Folder".to_string(),
+            status: PreflightStatus::Blocked,
+            detail: format!(
+                "Could not open write probe in '{}': {error}",
+                path.display()
+            ),
+        },
+    }
+}
+
+fn screen_recording_preflight_check(sources: &[CaptureSourceSelection]) -> PreflightCheck {
+    if !source_enabled(
+        sources,
+        &[CaptureSourceKind::Display, CaptureSourceKind::Window],
+    ) {
+        return not_required_check("macos.screen_recording", "Screen Recording");
+    }
+
+    if macos_screen_recording_granted() {
+        PreflightCheck {
+            id: "macos.screen_recording".to_string(),
+            label: "Screen Recording".to_string(),
+            status: PreflightStatus::Ready,
+            detail: "macOS reports screen capture permission is available.".to_string(),
+        }
+    } else {
+        PreflightCheck {
+            id: "macos.screen_recording".to_string(),
+            label: "Screen Recording".to_string(),
+            status: PreflightStatus::Blocked,
+            detail: "Grant Screen Recording permission in macOS Privacy & Security.".to_string(),
+        }
+    }
+}
+
+fn camera_preflight_check(sources: &[CaptureSourceSelection]) -> PreflightCheck {
+    if !source_enabled(sources, &[CaptureSourceKind::Camera]) {
+        return not_required_check("macos.camera", "Camera");
+    }
+
+    PreflightCheck {
+        id: "macos.camera".to_string(),
+        label: "Camera".to_string(),
+        status: PreflightStatus::Unknown,
+        detail: "Camera permission will be requested when a real capture backend opens the device."
+            .to_string(),
+    }
+}
+
+fn microphone_preflight_check(sources: &[CaptureSourceSelection]) -> PreflightCheck {
+    if !source_enabled(sources, &[CaptureSourceKind::Microphone]) {
+        return not_required_check("macos.microphone", "Microphone");
+    }
+
+    PreflightCheck {
+        id: "macos.microphone".to_string(),
+        label: "Microphone".to_string(),
+        status: PreflightStatus::Unknown,
+        detail:
+            "Microphone permission will be requested when a real capture backend opens the device."
+                .to_string(),
+    }
+}
+
+fn system_audio_preflight_check(sources: &[CaptureSourceSelection]) -> PreflightCheck {
+    if !source_enabled(sources, &[CaptureSourceKind::SystemAudio]) {
+        return not_required_check("macos.system_audio", "System Audio");
+    }
+
+    PreflightCheck {
+        id: "macos.system_audio".to_string(),
+        label: "System Audio".to_string(),
+        status: PreflightStatus::Blocked,
+        detail: "System audio capture is not implemented in the MVP media pipeline.".to_string(),
+    }
+}
+
+fn not_required_check(id: &str, label: &str) -> PreflightCheck {
+    PreflightCheck {
+        id: id.to_string(),
+        label: label.to_string(),
+        status: PreflightStatus::NotRequired,
+        detail: "No enabled capture source requires this permission.".to_string(),
+    }
+}
+
+fn source_enabled(sources: &[CaptureSourceSelection], kinds: &[CaptureSourceKind]) -> bool {
+    sources
+        .iter()
+        .any(|source| source.enabled && kinds.iter().any(|kind| kind == &source.kind))
+}
+
+fn aggregate_preflight_status(checks: &[PreflightCheck]) -> PreflightStatus {
+    if checks
+        .iter()
+        .any(|check| check.status == PreflightStatus::Blocked)
+    {
+        PreflightStatus::Blocked
+    } else if checks
+        .iter()
+        .any(|check| check.status == PreflightStatus::Warning)
+    {
+        PreflightStatus::Warning
+    } else if checks
+        .iter()
+        .any(|check| check.status == PreflightStatus::Unknown)
+    {
+        PreflightStatus::Unknown
+    } else {
+        PreflightStatus::Ready
+    }
+}
+
+fn expand_user_path(value: &str) -> PathBuf {
+    if value == "~" {
+        return home_dir();
+    }
+
+    if let Some(rest) = value.strip_prefix("~/") {
+        return home_dir().join(rest);
+    }
+
+    PathBuf::from(value)
+}
+
+fn home_dir() -> PathBuf {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+#[cfg(target_os = "macos")]
+fn macos_screen_recording_granted() -> bool {
+    unsafe { CGPreflightScreenCaptureAccess() }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_screen_recording_granted() -> bool {
+    true
 }
 
 fn profile_bundle_path(state: &AppRuntimeState) -> PathBuf {

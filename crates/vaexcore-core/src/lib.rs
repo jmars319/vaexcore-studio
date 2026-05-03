@@ -1,19 +1,30 @@
+pub mod capture;
 pub mod events;
+pub mod pipeline;
 pub mod profiles;
 pub mod responses;
 pub mod security;
 pub mod settings;
 pub mod status;
 
+pub use capture::{
+    default_capture_sources, CaptureSourceCandidate, CaptureSourceInventory, CaptureSourceKind,
+    CaptureSourceSelection,
+};
 pub use events::{StudioEvent, StudioEventKind};
+pub use pipeline::{
+    MediaPipelineConfig, MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep,
+    MediaPipelineValidation, PipelineIntent, PipelineStepStatus,
+};
 pub use profiles::{
     EncoderPreference, MediaProfile, MediaProfileInput, PlatformKind, RecordingContainer,
     Resolution, StreamDestination, StreamDestinationInput,
 };
 pub use responses::{
     ApiErrorBody, ApiResponse, AuditLogEntry, AuditLogSnapshot, CommandStatus, ConnectedClient,
-    ConnectedClientsSnapshot, HealthResponse, Marker, ProfileBundle, ProfileBundleImportResult,
-    ProfilesSnapshot, StreamDestinationBundleItem, StudioStatus,
+    ConnectedClientsSnapshot, HealthResponse, Marker, PreflightCheck, PreflightSnapshot,
+    PreflightStatus, ProfileBundle, ProfileBundleImportResult, ProfilesSnapshot,
+    StreamDestinationBundleItem, StudioStatus,
 };
 pub use security::{SecretRef, SecretStore, SecretStoreError, SensitiveString};
 pub use settings::AppSettings;

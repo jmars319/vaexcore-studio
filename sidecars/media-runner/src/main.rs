@@ -10,10 +10,13 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use vaexcore_core::{
-    ApiResponse, EngineMode, EngineStatus, MediaProfile, RecordingSession, StreamDestination,
-    StreamSession, APP_NAME,
+    ApiResponse, EngineMode, EngineStatus, MediaPipelineConfig, MediaPipelinePlan,
+    MediaPipelinePlanRequest, MediaPipelineValidation, MediaProfile, RecordingSession,
+    StreamDestination, StreamSession, APP_NAME,
 };
-use vaexcore_media::{DryRunMediaEngine, MediaEngine, MediaError, MediaTransition};
+use vaexcore_media::{
+    build_dry_run_pipeline_plan, DryRunMediaEngine, MediaEngine, MediaError, MediaTransition,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunnerConfig {
@@ -22,6 +25,8 @@ pub struct RunnerConfig {
     pub status_addr: Option<SocketAddr>,
     #[serde(default)]
     pub pipeline_name: Option<String>,
+    #[serde(default)]
+    pub pipeline: Option<MediaPipelineConfig>,
 }
 
 impl Default for RunnerConfig {
@@ -30,6 +35,7 @@ impl Default for RunnerConfig {
             dry_run: true,
             status_addr: None,
             pipeline_name: Some("dry-run".to_string()),
+            pipeline: None,
         }
     }
 }
@@ -82,6 +88,8 @@ async fn main() -> anyhow::Result<()> {
             .route("/recording/stop", post(stop_recording))
             .route("/stream/start", post(start_stream))
             .route("/stream/stop", post(stop_stream))
+            .route("/plan", post(plan_pipeline))
+            .route("/validate", post(validate_pipeline))
             .with_state(state);
 
         let listener = TcpListener::bind(addr).await?;
@@ -137,6 +145,20 @@ async fn stop_stream(
 ) -> Result<Json<ApiResponse<MediaTransition<StreamSession>>>, RunnerApiError> {
     let transition = state.engine.stop_stream().await?;
     Ok(Json(ApiResponse::ok(transition)))
+}
+
+async fn plan_pipeline(
+    Json(request): Json<MediaPipelinePlanRequest>,
+) -> Json<ApiResponse<MediaPipelinePlan>> {
+    Json(ApiResponse::ok(build_dry_run_pipeline_plan(request)))
+}
+
+async fn validate_pipeline(
+    Json(request): Json<MediaPipelinePlanRequest>,
+) -> Json<ApiResponse<MediaPipelineValidation>> {
+    Json(ApiResponse::ok(
+        build_dry_run_pipeline_plan(request).validation(),
+    ))
 }
 
 #[derive(Debug)]

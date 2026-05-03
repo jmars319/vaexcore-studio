@@ -48,6 +48,31 @@ pub struct HealthResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum PreflightStatus {
+    Ready,
+    Warning,
+    Blocked,
+    Unknown,
+    NotRequired,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct PreflightCheck {
+    pub id: String,
+    pub label: String,
+    pub status: PreflightStatus,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct PreflightSnapshot {
+    pub overall: PreflightStatus,
+    pub checked_at: DateTime<Utc>,
+    pub checks: Vec<PreflightCheck>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ProfilesSnapshot {
     pub recording_profiles: Vec<MediaProfile>,
     pub stream_destinations: Vec<StreamDestination>,

@@ -46,6 +46,7 @@ export interface AppSettings {
   dev_auth_bypass: boolean;
   log_level: "trace" | "debug" | "info" | "warn" | "error";
   default_recording_profile: MediaProfileInput;
+  capture_sources: CaptureSourceSelection[];
 }
 
 export interface StreamDestination {
@@ -194,6 +195,53 @@ export interface HealthResponse {
   dev_auth_bypass: boolean;
 }
 
+export type CaptureSourceKind =
+  | "display"
+  | "window"
+  | "camera"
+  | "microphone"
+  | "system_audio";
+
+export interface CaptureSourceSelection {
+  id: string;
+  kind: CaptureSourceKind;
+  name: string;
+  enabled: boolean;
+}
+
+export interface CaptureSourceCandidate {
+  id: string;
+  kind: CaptureSourceKind;
+  name: string;
+  available: boolean;
+  notes: string | null;
+}
+
+export interface CaptureSourceInventory {
+  candidates: CaptureSourceCandidate[];
+  selected: CaptureSourceSelection[];
+}
+
+export type PreflightStatus =
+  | "ready"
+  | "warning"
+  | "blocked"
+  | "unknown"
+  | "not_required";
+
+export interface PreflightCheck {
+  id: string;
+  label: string;
+  status: PreflightStatus;
+  detail: string;
+}
+
+export interface PreflightSnapshot {
+  overall: PreflightStatus;
+  checked_at: string;
+  checks: PreflightCheck[];
+}
+
 export interface ApiErrorBody {
   code: string;
   message: string;
@@ -212,6 +260,53 @@ export type CreateProfileRequest =
 export type CreatedProfile =
   | { kind: "recording_profile"; value: MediaProfile }
   | { kind: "stream_destination"; value: StreamDestination };
+
+export type PipelineIntent =
+  | "recording"
+  | "stream"
+  | "recording_and_stream";
+
+export interface MediaPipelineConfig {
+  version: number;
+  dry_run: boolean;
+  intent: PipelineIntent;
+  capture_sources: CaptureSourceSelection[];
+  recording_profile: MediaProfile | null;
+  stream_destinations: StreamDestination[];
+}
+
+export interface MediaPipelinePlanRequest {
+  dry_run: boolean;
+  intent: PipelineIntent;
+  capture_sources: CaptureSourceSelection[];
+  recording_profile: MediaProfile | null;
+  stream_destinations: StreamDestination[];
+}
+
+export type PipelineStepStatus = "ready" | "warning" | "blocked";
+
+export interface MediaPipelineStep {
+  id: string;
+  label: string;
+  status: PipelineStepStatus;
+  detail: string;
+}
+
+export interface MediaPipelinePlan {
+  pipeline_name: string;
+  dry_run: boolean;
+  ready: boolean;
+  config: MediaPipelineConfig;
+  steps: MediaPipelineStep[];
+  warnings: string[];
+  errors: string[];
+}
+
+export interface MediaPipelineValidation {
+  ready: boolean;
+  warnings: string[];
+  errors: string[];
+}
 
 export interface DeletedProfile {
   id: string;

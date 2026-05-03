@@ -23,11 +23,18 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import type {
   AppSettings,
   AuditLogEntry,
+  CaptureSourceCandidate,
+  CaptureSourceInventory,
+  CaptureSourceKind,
+  CaptureSourceSelection,
   ConnectedClient,
   HealthResponse,
+  MediaPipelinePlan,
   MediaProfile,
   MediaProfileInput,
   PlatformKind,
+  PreflightSnapshot,
+  PreflightStatus,
   ProfilesSnapshot,
   RecordingContainer,
   StudioEvent,
@@ -41,7 +48,9 @@ import {
   exportProfileBundle,
   importProfileBundle,
   LocalAppSettingsSnapshot,
+  loadCaptureSourceInventory,
   loadMediaRunnerInfo,
+  loadPreflightSnapshot,
   loadRuntimeConfig,
   loadAppSettings,
   MediaRunnerInfo,
@@ -107,6 +116,20 @@ const defaultAppSettings: AppSettings = {
   dev_auth_bypass: true,
   log_level: "info",
   default_recording_profile: defaultProfileForm,
+  capture_sources: [
+    {
+      id: "display:main",
+      kind: "display",
+      name: "Main Display",
+      enabled: true,
+    },
+    {
+      id: "microphone:default",
+      kind: "microphone",
+      name: "Default Microphone",
+      enabled: false,
+    },
+  ],
 };
 
 function hostFromUrl(url: string, fallback: string): string {
@@ -146,6 +169,10 @@ function App() {
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [mediaRunnerInfo, setMediaRunnerInfo] =
     useState<MediaRunnerInfo | null>(null);
+  const [preflight, setPreflight] = useState<PreflightSnapshot | null>(null);
+  const [captureInventory, setCaptureInventory] =
+    useState<CaptureSourceInventory | null>(null);
+  const [pipelinePlan, setPipelinePlan] = useState<MediaPipelinePlan | null>(null);
 
   useEffect(() => {
     loadRuntimeConfig().then(setConfig).catch((error: Error) => {
@@ -204,6 +231,7 @@ function App() {
           nextClients,
           nextAuditLog,
           nextMediaRunnerInfo,
+          nextPipelinePlan,
         ] = await Promise.all([
           StudioApi.health(runtimeConfig),
           StudioApi.status(runtimeConfig),
@@ -211,6 +239,7 @@ function App() {
           StudioApi.clients(runtimeConfig),
           StudioApi.auditLog(runtimeConfig),
           loadMediaRunnerInfo(),
+          StudioApi.mediaPlan(runtimeConfig),
         ]);
         if (cancelled) return;
         setHealth(nextHealth);
@@ -219,6 +248,17 @@ function App() {
         setClients(nextClients.clients);
         setAuditEntries(nextAuditLog.entries);
         setMediaRunnerInfo(nextMediaRunnerInfo);
+        setPipelinePlan(nextPipelinePlan);
+        loadPreflightSnapshot()
+          .then((snapshot) => {
+            if (!cancelled) setPreflight(snapshot);
+          })
+          .catch(() => undefined);
+        loadCaptureSourceInventory()
+          .then((inventory) => {
+            if (!cancelled) setCaptureInventory(inventory);
+          })
+          .catch(() => undefined);
         setEvents((current) =>
           mergeEvents([...nextStatus.recent_events, ...current]),
         );
@@ -549,6 +589,8 @@ function App() {
             activeDestination={activeDestination?.name ?? "None"}
             engine={activeStatus?.engine ?? "starting"}
             events={events}
+            pipelinePlan={pipelinePlan}
+            preflight={preflight}
             recordingActive={activeStatus?.recording_active ?? false}
             recordingPath={recordingPath ?? "No active recording"}
             streamActive={activeStatus?.stream_active ?? false}
@@ -640,6 +682,8 @@ function App() {
     events,
     markerLabel,
     mediaRunnerInfo,
+    pipelinePlan,
+    preflight,
     profileForm,
     profiles,
     recordingPath,
@@ -673,6 +717,7 @@ function App() {
           engine={activeStatus?.engine ?? "starting"}
           health={health}
           logoUrl={logoUrl}
+          captureInventory={captureInventory}
           mediaRunnerInfo={mediaRunnerInfo}
           mode={activeStatus?.mode ?? "dry_run"}
           onExportProfileBundle={handleExportProfileBundle}
@@ -768,6 +813,8 @@ function Dashboard(props: {
   activeDestination: string;
   engine: string;
   events: StudioEvent[];
+  pipelinePlan: MediaPipelinePlan | null;
+  preflight: PreflightSnapshot | null;
   recordingActive: boolean;
   recordingPath: string;
   streamActive: boolean;
@@ -814,6 +861,60 @@ function Dashboard(props: {
         <section className="panel">
           <PanelTitle title="Recent Events" />
           <EventList events={props.events.slice(0, 6)} compact />
+        </section>
+      </div>
+
+      <div className="two-column">
+        <section className="panel">
+          <PanelTitle title="Preflight" />
+          {props.preflight ? (
+            <div className="check-list">
+              <div className="check-row-compact">
+                <strong>Overall</strong>
+                <Pill tone={preflightTone(props.preflight.overall)}>
+                  {preflightLabel(props.preflight.overall)}
+                </Pill>
+              </div>
+              {props.preflight.checks.map((check) => (
+                <div className="check-row-compact" key={check.id}>
+                  <div>
+                    <strong>{check.label}</strong>
+                    <span>{check.detail}</span>
+                  </div>
+                  <Pill tone={preflightTone(check.status)}>
+                    {preflightLabel(check.status)}
+                  </Pill>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty">Preflight pending</div>
+          )}
+        </section>
+
+        <section className="panel">
+          <PanelTitle title="Pipeline Plan" />
+          {props.pipelinePlan ? (
+            <div className="check-list">
+              <div className="check-row-compact">
+                <strong>{props.pipelinePlan.pipeline_name}</strong>
+                <Pill tone={props.pipelinePlan.ready ? "green" : "red"}>
+                  {props.pipelinePlan.ready ? "ready" : "blocked"}
+                </Pill>
+              </div>
+              {props.pipelinePlan.steps.map((step) => (
+                <div className="check-row-compact" key={step.id}>
+                  <div>
+                    <strong>{step.label}</strong>
+                    <span>{step.detail}</span>
+                  </div>
+                  <Pill tone={stepTone(step.status)}>{step.status}</Pill>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty">Plan pending</div>
+          )}
         </section>
       </div>
     </div>
@@ -1322,6 +1423,7 @@ function LogsPage(props: {
 }
 
 function SettingsPage(props: {
+  captureInventory: CaptureSourceInventory | null;
   config: RuntimeApiConfig | null;
   engine: string;
   health: HealthResponse | null;
@@ -1353,6 +1455,38 @@ function SettingsPage(props: {
       },
     });
   }
+
+  function updateCaptureSource(
+    candidate: CaptureSourceCandidate,
+    enabled: boolean,
+  ) {
+    const existing = props.settings.capture_sources.find(
+      (source) => source.id === candidate.id,
+    );
+    const nextSource: CaptureSourceSelection = {
+      id: candidate.id,
+      kind: candidate.kind,
+      name: candidate.name,
+      enabled,
+    };
+    const nextSources = existing
+      ? props.settings.capture_sources.map((source) =>
+          source.id === candidate.id ? { ...source, enabled } : source,
+        )
+      : [...props.settings.capture_sources, nextSource];
+
+    updateSettings({ capture_sources: nextSources });
+  }
+
+  const sourceCandidates =
+    props.captureInventory?.candidates ??
+    props.settings.capture_sources.map((source) => ({
+      id: source.id,
+      kind: source.kind,
+      name: source.name,
+      available: true,
+      notes: null,
+    }));
 
   return (
     <form className="settings-grid" onSubmit={props.onSave}>
@@ -1453,6 +1587,35 @@ function SettingsPage(props: {
           label="Token"
           value={props.config?.token ? "generated" : "not configured"}
         />
+      </section>
+
+      <section className="panel settings-wide-panel">
+        <PanelTitle title="Capture Sources" />
+        <div className="source-grid">
+          {sourceCandidates.map((candidate) => {
+            const selected = props.settings.capture_sources.find(
+              (source) => source.id === candidate.id,
+            );
+            const checked = selected?.enabled ?? false;
+            return (
+              <label className="source-option" key={candidate.id}>
+                <input
+                  checked={checked}
+                  disabled={!candidate.available}
+                  onChange={(event) =>
+                    updateCaptureSource(candidate, event.target.checked)
+                  }
+                  type="checkbox"
+                />
+                <div>
+                  <strong>{candidate.name}</strong>
+                  <span>{captureSourceKindLabel(candidate.kind)}</span>
+                  {candidate.notes && <small>{candidate.notes}</small>}
+                </div>
+              </label>
+            );
+          })}
+        </div>
       </section>
 
       <section className="panel settings-wide-panel">
@@ -1818,6 +1981,41 @@ function mediaRunnerState(
   if (info?.running) return "running";
   if (engine === "starting") return "unavailable";
   return "fallback dry-run";
+}
+
+function preflightTone(status: PreflightStatus): "green" | "red" | "amber" | "muted" {
+  switch (status) {
+    case "ready":
+      return "green";
+    case "blocked":
+      return "red";
+    case "warning":
+    case "unknown":
+      return "amber";
+    case "not_required":
+      return "muted";
+  }
+}
+
+function preflightLabel(status: PreflightStatus): string {
+  return status.replace("_", " ");
+}
+
+function captureSourceKindLabel(kind: CaptureSourceKind): string {
+  return kind.replace("_", " ");
+}
+
+function stepTone(status: string): "green" | "red" | "amber" | "muted" {
+  switch (status) {
+    case "ready":
+      return "green";
+    case "blocked":
+      return "red";
+    case "warning":
+      return "amber";
+    default:
+      return "muted";
+  }
 }
 
 function mask(value: string): string {

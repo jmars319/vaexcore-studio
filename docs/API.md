@@ -126,6 +126,41 @@ Returns recent command audit entries:
 
 Audit entries include method, path, action, status, request ID, client label, and timestamp. Request bodies are not stored.
 
+### `GET /media/plan`
+
+Returns the current dry-run pipeline plan using the saved capture sources, first recording profile, and enabled stream destinations.
+
+### `POST /media/plan`
+
+Body:
+
+```json
+{
+  "dry_run": true,
+  "intent": "recording_and_stream",
+  "capture_sources": [
+    {
+      "id": "display:main",
+      "kind": "display",
+      "name": "Main Display",
+      "enabled": true
+    }
+  ],
+  "recording_profile": null,
+  "stream_destinations": []
+}
+```
+
+Returns a `MediaPipelinePlan` with resolved config, ordered steps, warnings, and blocking errors. Stream keys are never included; only secret references may appear inside destination objects.
+
+### `GET /media/validate`
+
+Returns validation for the current default plan.
+
+### `POST /media/validate`
+
+Accepts the same body as `/media/plan` and returns only `ready`, `warnings`, and `errors`.
+
 ### `POST /recording/start`
 
 Body:
@@ -239,3 +274,12 @@ Supported event types:
 - `stream.stopped`
 - `marker.created`
 - `error`
+
+## Desktop Preflight
+
+The desktop shell exposes Tauri commands for macOS-first readiness checks:
+
+- `preflight_snapshot`
+- `capture_source_inventory`
+
+Those include local API reachability, token mode, writable recording output folder, media-runner health, configured capture sources, and macOS capture permission readiness where it can be safely checked before the real media backend exists.

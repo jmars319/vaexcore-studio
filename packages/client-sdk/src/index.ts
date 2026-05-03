@@ -7,6 +7,9 @@ import type {
   CreatedProfile,
   HealthResponse,
   Marker,
+  MediaPipelinePlan,
+  MediaPipelinePlanRequest,
+  MediaPipelineValidation,
   MediaProfileInput,
   ProfilesSnapshot,
   StudioStatus,
@@ -79,6 +82,30 @@ export class VaexcoreStudioClient {
 
   auditLog(): Promise<AuditLogSnapshot> {
     return this.request<AuditLogSnapshot>("/audit-log");
+  }
+
+  mediaPlan(request?: MediaPipelinePlanRequest): Promise<MediaPipelinePlan> {
+    if (!request) {
+      return this.request<MediaPipelinePlan>("/media/plan");
+    }
+
+    return this.request<MediaPipelinePlan>("/media/plan", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  mediaValidate(
+    request?: MediaPipelinePlanRequest,
+  ): Promise<MediaPipelineValidation> {
+    if (!request) {
+      return this.request<MediaPipelineValidation>("/media/validate");
+    }
+
+    return this.request<MediaPipelineValidation>("/media/validate", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
   }
 
   createRecordingProfile(value: MediaProfileInput): Promise<CreatedProfile> {

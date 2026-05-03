@@ -5,8 +5,10 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use vaexcore_core::{
-    new_id, EngineMode, EngineStatus, MediaProfile, RecordingContainer, RecordingSession,
-    StreamDestination, StreamSession, StudioEvent, StudioEventKind,
+    new_id, CaptureSourceKind, EngineMode, EngineStatus, MediaPipelineConfig, MediaPipelinePlan,
+    MediaPipelinePlanRequest, MediaPipelineStep, MediaProfile, PipelineIntent, PipelineStepStatus,
+    RecordingContainer, RecordingSession, StreamDestination, StreamSession, StudioEvent,
+    StudioEventKind,
 };
 
 mod sidecar;
@@ -30,6 +32,33 @@ pub struct MediaTransition<T> {
     pub changed: bool,
     pub session: Option<T>,
     pub status: EngineStatus,
+}
+
+pub fn build_dry_run_pipeline_plan(request: MediaPipelinePlanRequest) -> MediaPipelinePlan {
+    let config = request.into_config();
+    let mut steps = Vec::new();
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+
+    validate_capture_sources(&config, &mut steps, &mut warnings, &mut errors);
+    validate_recording(&config, &mut steps, &mut errors);
+    validate_streaming(&config, &mut steps, &mut warnings, &mut errors);
+    steps.push(MediaPipelineStep {
+        id: "engine.dry_run".to_string(),
+        label: "Dry-run engine".to_string(),
+        status: PipelineStepStatus::Ready,
+        detail: "Pipeline will be simulated without starting a real capture backend.".to_string(),
+    });
+
+    MediaPipelinePlan {
+        pipeline_name: pipeline_name(&config),
+        dry_run: config.dry_run,
+        ready: errors.is_empty(),
+        config,
+        steps,
+        warnings,
+        errors,
+    }
 }
 
 #[async_trait]
@@ -260,6 +289,190 @@ fn build_output_path(profile: &MediaProfile) -> String {
     format!("{}/{}.{}", profile.output_folder, filename, extension)
 }
 
+fn validate_capture_sources(
+    config: &MediaPipelineConfig,
+    steps: &mut Vec<MediaPipelineStep>,
+    warnings: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    let enabled_sources = config
+        .capture_sources
+        .iter()
+        .filter(|source| source.enabled)
+        .collect::<Vec<_>>();
+
+    if enabled_sources.is_empty() {
+        errors.push("at least one capture source must be enabled".to_string());
+        steps.push(MediaPipelineStep {
+            id: "capture.sources".to_string(),
+            label: "Capture sources".to_string(),
+            status: PipelineStepStatus::Blocked,
+            detail: "No enabled capture sources were provided.".to_string(),
+        });
+        return;
+    }
+
+    let has_video = enabled_sources.iter().any(|source| {
+        matches!(
+            source.kind,
+            CaptureSourceKind::Display | CaptureSourceKind::Window | CaptureSourceKind::Camera
+        )
+    });
+    if !has_video {
+        warnings.push("pipeline has audio sources but no video source".to_string());
+    }
+
+    steps.push(MediaPipelineStep {
+        id: "capture.sources".to_string(),
+        label: "Capture sources".to_string(),
+        status: if has_video {
+            PipelineStepStatus::Ready
+        } else {
+            PipelineStepStatus::Warning
+        },
+        detail: format!("{} enabled source(s).", enabled_sources.len()),
+    });
+}
+
+fn validate_recording(
+    config: &MediaPipelineConfig,
+    steps: &mut Vec<MediaPipelineStep>,
+    errors: &mut Vec<String>,
+) {
+    let needs_recording = matches!(
+        config.intent,
+        PipelineIntent::Recording | PipelineIntent::RecordingAndStream
+    );
+    if !needs_recording {
+        return;
+    }
+
+    let Some(profile) = &config.recording_profile else {
+        errors.push("recording intent requires a recording profile".to_string());
+        steps.push(MediaPipelineStep {
+            id: "recording.profile".to_string(),
+            label: "Recording profile".to_string(),
+            status: PipelineStepStatus::Blocked,
+            detail: "No recording profile was provided.".to_string(),
+        });
+        return;
+    };
+
+    let mut local_errors = Vec::new();
+    if profile.output_folder.trim().is_empty() {
+        local_errors.push("output folder is empty");
+    }
+    if profile.filename_pattern.trim().is_empty() {
+        local_errors.push("filename pattern is empty");
+    }
+    if profile.resolution.width == 0 || profile.resolution.height == 0 {
+        local_errors.push("resolution is invalid");
+    }
+    if profile.framerate == 0 {
+        local_errors.push("framerate is invalid");
+    }
+    if profile.bitrate_kbps == 0 {
+        local_errors.push("bitrate is invalid");
+    }
+
+    if local_errors.is_empty() {
+        steps.push(MediaPipelineStep {
+            id: "recording.profile".to_string(),
+            label: "Recording profile".to_string(),
+            status: PipelineStepStatus::Ready,
+            detail: format!(
+                "{} {}x{} {}fps {}kbps",
+                profile.name,
+                profile.resolution.width,
+                profile.resolution.height,
+                profile.framerate,
+                profile.bitrate_kbps
+            ),
+        });
+    } else {
+        errors.extend(local_errors.into_iter().map(str::to_string));
+        steps.push(MediaPipelineStep {
+            id: "recording.profile".to_string(),
+            label: "Recording profile".to_string(),
+            status: PipelineStepStatus::Blocked,
+            detail: "Recording profile has invalid required fields.".to_string(),
+        });
+    }
+}
+
+fn validate_streaming(
+    config: &MediaPipelineConfig,
+    steps: &mut Vec<MediaPipelineStep>,
+    warnings: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    let needs_stream = matches!(
+        config.intent,
+        PipelineIntent::Stream | PipelineIntent::RecordingAndStream
+    );
+    if !needs_stream {
+        return;
+    }
+
+    let enabled_destinations = config
+        .stream_destinations
+        .iter()
+        .filter(|destination| destination.enabled)
+        .collect::<Vec<_>>();
+    if enabled_destinations.is_empty() {
+        errors.push("stream intent requires at least one enabled destination".to_string());
+        steps.push(MediaPipelineStep {
+            id: "stream.destinations".to_string(),
+            label: "Stream destinations".to_string(),
+            status: PipelineStepStatus::Blocked,
+            detail: "No enabled stream destinations were provided.".to_string(),
+        });
+        return;
+    }
+
+    let missing_ingest = enabled_destinations
+        .iter()
+        .filter(|destination| destination.ingest_url.trim().is_empty())
+        .count();
+    let missing_keys = enabled_destinations
+        .iter()
+        .filter(|destination| destination.stream_key_ref.is_none())
+        .count();
+
+    if missing_ingest > 0 {
+        errors.push(format!(
+            "{missing_ingest} enabled stream destination(s) are missing ingest URLs"
+        ));
+    }
+    if missing_keys > 0 {
+        warnings.push(format!(
+            "{missing_keys} enabled stream destination(s) do not have stored stream keys"
+        ));
+    }
+
+    steps.push(MediaPipelineStep {
+        id: "stream.destinations".to_string(),
+        label: "Stream destinations".to_string(),
+        status: if missing_ingest > 0 {
+            PipelineStepStatus::Blocked
+        } else if missing_keys > 0 {
+            PipelineStepStatus::Warning
+        } else {
+            PipelineStepStatus::Ready
+        },
+        detail: format!("{} enabled destination(s).", enabled_destinations.len()),
+    });
+}
+
+fn pipeline_name(config: &MediaPipelineConfig) -> String {
+    let intent = match config.intent {
+        PipelineIntent::Recording => "recording",
+        PipelineIntent::Stream => "stream",
+        PipelineIntent::RecordingAndStream => "recording-stream",
+    };
+    format!("dry-run-{intent}-v{}", config.version)
+}
+
 fn slug(value: &str) -> String {
     let mut slug = value
         .chars()
@@ -330,7 +543,9 @@ impl MediaEngine for GStreamerMediaEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vaexcore_core::{PlatformKind, StreamDestinationInput};
+    use vaexcore_core::{
+        default_capture_sources, PipelineIntent, PlatformKind, StreamDestinationInput,
+    };
 
     #[tokio::test]
     async fn recording_lifecycle_is_idempotent() {
@@ -383,5 +598,50 @@ mod tests {
         let stopped_again = engine.stop_stream().await.unwrap();
         assert!(!stopped_again.changed);
         assert!(stopped_again.session.is_none());
+    }
+
+    #[test]
+    fn dry_run_pipeline_plan_reports_missing_stream_key_as_warning() {
+        let destination = StreamDestination::from_input(
+            StreamDestinationInput {
+                name: "Dry Run".to_string(),
+                platform: PlatformKind::CustomRtmp,
+                ingest_url: Some("rtmp://localhost/live".to_string()),
+                stream_key: None,
+                enabled: Some(true),
+            },
+            None,
+        );
+
+        let plan = build_dry_run_pipeline_plan(MediaPipelinePlanRequest {
+            dry_run: true,
+            intent: PipelineIntent::RecordingAndStream,
+            capture_sources: default_capture_sources(),
+            recording_profile: Some(MediaProfile::default_local()),
+            stream_destinations: vec![destination],
+        });
+
+        assert!(plan.ready);
+        assert!(plan
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("stored stream keys")));
+    }
+
+    #[test]
+    fn dry_run_pipeline_plan_blocks_without_capture_source() {
+        let plan = build_dry_run_pipeline_plan(MediaPipelinePlanRequest {
+            dry_run: true,
+            intent: PipelineIntent::Recording,
+            capture_sources: vec![],
+            recording_profile: Some(MediaProfile::default_local()),
+            stream_destinations: vec![],
+        });
+
+        assert!(!plan.ready);
+        assert!(plan
+            .errors
+            .iter()
+            .any(|error| error.contains("capture source")));
     }
 }

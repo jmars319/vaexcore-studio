@@ -34,6 +34,7 @@ docs/
   ARCHITECTURE.md
   API.md
   MEDIA_ENGINE.md
+  RELEASE.md
   ROADMAP.md
 ```
 
@@ -144,6 +145,8 @@ await client.createMarker("manual-marker");
 - Record a bounded command audit log without storing request bodies.
 - Export/import profile bundles without raw stream keys.
 - Write structured JSONL app logs under the local app data directory.
+- Run macOS-first preflight checks for API, token, output folder, capture readiness, and sidecar health.
+- Build and validate dry-run media pipeline plans through the API and sidecar.
 - Simulate media execution with `DryRunMediaEngine`.
 - Prefer supervised `media-runner` dry-run execution when the sidecar is available, with in-process dry-run fallback when it is missing during startup.
 

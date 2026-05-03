@@ -2,6 +2,7 @@ import type {
   ApiResponse,
   AppSettings,
   AuditLogSnapshot,
+  CaptureSourceInventory,
   CommandStatus,
   ConnectedClientsSnapshot,
   CreatedProfile,
@@ -9,7 +10,9 @@ import type {
   DeletedProfile,
   HealthResponse,
   Marker,
+  MediaPipelinePlan,
   MediaProfileInput,
+  PreflightSnapshot,
   ProfilesSnapshot,
   StudioStatus,
   StreamDestinationInput,
@@ -104,6 +107,16 @@ export async function openDataDirectory(): Promise<void> {
   return invoke<void>("open_data_directory");
 }
 
+export async function loadCaptureSourceInventory(): Promise<CaptureSourceInventory> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<CaptureSourceInventory>("capture_source_inventory");
+}
+
+export async function loadPreflightSnapshot(): Promise<PreflightSnapshot> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<PreflightSnapshot>("preflight_snapshot");
+}
+
 export async function exportProfileBundle(): Promise<ProfileBundleFileResult> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<ProfileBundleFileResult>("export_profile_bundle");
@@ -166,6 +179,8 @@ export const StudioApi = {
     apiRequest<ConnectedClientsSnapshot>(config, "/clients"),
   auditLog: (config: RuntimeApiConfig) =>
     apiRequest<AuditLogSnapshot>(config, "/audit-log"),
+  mediaPlan: (config: RuntimeApiConfig) =>
+    apiRequest<MediaPipelinePlan>(config, "/media/plan"),
   profiles: (config: RuntimeApiConfig) =>
     apiRequest<ProfilesSnapshot>(config, "/profiles"),
   createProfile: (config: RuntimeApiConfig, request: CreateProfileRequest) =>

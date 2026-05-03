@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{MediaProfileInput, DEFAULT_API_HOST, DEFAULT_API_PORT};
+use crate::{
+    default_capture_sources, CaptureSourceSelection, MediaProfileInput, DEFAULT_API_HOST,
+    DEFAULT_API_PORT,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct AppSettings {
@@ -10,6 +13,8 @@ pub struct AppSettings {
     pub dev_auth_bypass: bool,
     pub log_level: String,
     pub default_recording_profile: MediaProfileInput,
+    #[serde(default = "default_capture_sources")]
+    pub capture_sources: Vec<CaptureSourceSelection>,
 }
 
 impl Default for AppSettings {
@@ -21,6 +26,7 @@ impl Default for AppSettings {
             dev_auth_bypass: cfg!(debug_assertions),
             log_level: "info".to_string(),
             default_recording_profile: MediaProfileInput::default(),
+            capture_sources: default_capture_sources(),
         }
     }
 }
@@ -66,6 +72,14 @@ impl AppSettings {
             .is_empty()
         {
             return Err("default recording filename pattern is required".to_string());
+        }
+
+        if self
+            .capture_sources
+            .iter()
+            .any(|source| source.id.trim().is_empty())
+        {
+            return Err("capture source IDs cannot be empty".to_string());
         }
 
         Ok(())

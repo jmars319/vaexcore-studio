@@ -466,6 +466,54 @@ nav {
   gap: 9px;
 }
 
+.check-list,
+.source-grid {
+  display: grid;
+  gap: 9px;
+}
+
+.check-row-compact,
+.source-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0b0c13;
+}
+
+.check-row-compact strong,
+.check-row-compact span,
+.source-option strong,
+.source-option span,
+.source-option small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.check-row-compact span,
+.source-option span,
+.source-option small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.source-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.source-option {
+  grid-template-columns: auto minmax(0, 1fr);
+  color: var(--text);
+}
+
+.source-option input {
+  width: 18px;
+  min-height: 18px;
+}
+
 .table-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto auto;
@@ -755,6 +803,7 @@ select:focus {
 
   .runtime-row,
   .form-grid,
+  .source-grid,
   .identity-panel {
     grid-template-columns: 1fr;
   }

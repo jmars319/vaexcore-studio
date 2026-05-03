@@ -19,20 +19,24 @@
 
 ## Next Milestone: Runtime Hardening
 
-- API port fallback and frontend discovery.
-- Structured app log file rotation.
-- Import/export profile bundle.
-- Sidecar restart policy after crashes.
+- API port fallback and frontend discovery. Done.
+- Structured app log file rotation. Done.
+- Import/export profile bundle. Done.
+- Sidecar restart policy after crashes. Done.
+- macOS preflight checks. Done for API, token, output folder, sidecar, screen recording, and source-gated placeholders.
+- Capture source model. Done with display, window, camera, microphone, and system-audio source kinds.
+- Dry-run media pipeline planning and validation. Done through API and sidecar contracts.
 
 ## Real Media Engine Milestone
 
 - GStreamer pipeline builder behind `MediaEngine`.
-- macOS capture permission checks.
+- Camera and microphone authorization checks through AVFoundation.
 - Audio/video source enumeration.
 - Encoder and muxer capability discovery.
 - Recording container safety checks.
 - RTMP/RTMPS connection status events.
 - Real pipeline execution behind the existing `media-runner` command transport.
+- System audio capture strategy for macOS.
 
 ## Platform Milestone
 

@@ -11,8 +11,9 @@ use std::{
     time::{Duration, Instant},
 };
 use vaexcore_core::{
-    ApiResponse, EngineMode, EngineStatus, MediaProfile, RecordingSession, StreamDestination,
-    StreamSession, StudioEvent, StudioEventKind,
+    ApiResponse, EngineMode, EngineStatus, MediaPipelinePlan, MediaPipelinePlanRequest,
+    MediaPipelineValidation, MediaProfile, RecordingSession, StreamDestination, StreamSession,
+    StudioEvent, StudioEventKind,
 };
 
 #[derive(Clone, Debug)]
@@ -157,6 +158,26 @@ impl MediaRunnerSupervisor {
     pub async fn stop_stream(&self) -> Result<MediaTransition<StreamSession>, SidecarError> {
         let supervisor = self.clone();
         tokio::task::spawn_blocking(move || supervisor.post_empty_blocking("/stream/stop"))
+            .await
+            .map_err(|error| SidecarError::Join(error.to_string()))?
+    }
+
+    pub async fn plan_pipeline(
+        &self,
+        request: MediaPipelinePlanRequest,
+    ) -> Result<MediaPipelinePlan, SidecarError> {
+        let supervisor = self.clone();
+        tokio::task::spawn_blocking(move || supervisor.post_blocking("/plan", &request))
+            .await
+            .map_err(|error| SidecarError::Join(error.to_string()))?
+    }
+
+    pub async fn validate_pipeline(
+        &self,
+        request: MediaPipelinePlanRequest,
+    ) -> Result<MediaPipelineValidation, SidecarError> {
+        let supervisor = self.clone();
+        tokio::task::spawn_blocking(move || supervisor.post_blocking("/validate", &request))
             .await
             .map_err(|error| SidecarError::Join(error.to_string()))?
     }

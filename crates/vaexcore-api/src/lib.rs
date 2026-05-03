@@ -23,11 +23,13 @@ use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use vaexcore_core::{
     new_id, now_utc, ApiResponse, AuditLogEntry, AuditLogSnapshot, CommandStatus,
-    ConnectedClientsSnapshot, HealthResponse, Marker, MediaProfileInput, ProfilesSnapshot,
+    ConnectedClientsSnapshot, HealthResponse, Marker, MediaPipelinePlan, MediaPipelinePlanRequest,
+    MediaPipelineValidation, MediaProfileInput, PipelineIntent, ProfilesSnapshot,
     StreamDestinationInput, StudioEvent, StudioEventKind, StudioStatus, APP_NAME,
 };
 use vaexcore_media::{
-    DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor, SidecarMediaEngine,
+    build_dry_run_pipeline_plan, DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor,
+    SidecarMediaEngine,
 };
 
 pub use auth::{AuthConfig, SharedAuthConfig};
@@ -54,6 +56,7 @@ pub struct ApiState {
     pub engine: Arc<dyn MediaEngine>,
     pub events: EventBus,
     pub clients: ClientRegistry,
+    pub media_runner: Option<MediaRunnerSupervisor>,
 }
 
 impl ApiState {
@@ -74,6 +77,7 @@ impl ApiState {
             engine,
             events,
             clients: ClientRegistry::new(),
+            media_runner: config.media_runner.clone(),
         });
 
         state
@@ -102,6 +106,7 @@ impl ApiState {
             engine,
             events,
             clients: ClientRegistry::new(),
+            media_runner: None,
         });
 
         state
@@ -247,6 +252,14 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .route("/recording/stop", post(stop_recording))
         .route("/stream/start", post(start_stream))
         .route("/stream/stop", post(stop_stream))
+        .route(
+            "/media/plan",
+            get(default_pipeline_plan).post(post_pipeline_plan),
+        )
+        .route(
+            "/media/validate",
+            get(default_pipeline_validation).post(post_pipeline_validation),
+        )
         .route("/marker/create", post(create_marker))
         .route("/profiles", get(get_profiles).post(post_profiles))
         .route(
@@ -392,6 +405,8 @@ fn command_action(method: &Method, path: &str) -> Option<String> {
         ("POST", "/recording/stop") => "recording.stop",
         ("POST", "/stream/start") => "stream.start",
         ("POST", "/stream/stop") => "stream.stop",
+        ("POST", "/media/plan") => "media.plan",
+        ("POST", "/media/validate") => "media.validate",
         ("POST", "/marker/create") => "marker.create",
         ("POST", "/profiles") => "profiles.create",
         ("PUT", path) if path.starts_with("/profiles/recording/") => "profiles.recording.update",
@@ -534,6 +549,46 @@ async fn get_audit_log(
     Ok(Json(ApiResponse::ok(AuditLogSnapshot {
         entries: state.store.list_audit_log_entries(100)?,
     })))
+}
+
+async fn default_pipeline_plan(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<MediaPipelinePlan>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let request = default_pipeline_plan_request(&state)?;
+    Ok(Json(ApiResponse::ok(plan_pipeline(&state, request).await)))
+}
+
+async fn post_pipeline_plan(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(request): Json<MediaPipelinePlanRequest>,
+) -> Result<Json<ApiResponse<MediaPipelinePlan>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    Ok(Json(ApiResponse::ok(plan_pipeline(&state, request).await)))
+}
+
+async fn default_pipeline_validation(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<MediaPipelineValidation>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let request = default_pipeline_plan_request(&state)?;
+    Ok(Json(ApiResponse::ok(
+        plan_pipeline(&state, request).await.validation(),
+    )))
+}
+
+async fn post_pipeline_validation(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(request): Json<MediaPipelinePlanRequest>,
+) -> Result<Json<ApiResponse<MediaPipelineValidation>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    Ok(Json(ApiResponse::ok(
+        plan_pipeline(&state, request).await.validation(),
+    )))
 }
 
 async fn post_profiles(
@@ -890,6 +945,47 @@ async fn stream_events(mut socket: WebSocket, state: Arc<ApiState>, replay_limit
     }
 }
 
+fn default_pipeline_plan_request(state: &ApiState) -> Result<MediaPipelinePlanRequest, StoreError> {
+    let settings = state.store.app_settings()?;
+    let recording_profile = state.store.recording_profile_by_id(None)?;
+    let stream_destinations = state
+        .store
+        .list_stream_destinations()?
+        .into_iter()
+        .filter(|destination| destination.enabled)
+        .collect::<Vec<_>>();
+    let intent = if stream_destinations.is_empty() {
+        PipelineIntent::Recording
+    } else {
+        PipelineIntent::RecordingAndStream
+    };
+
+    Ok(MediaPipelinePlanRequest {
+        dry_run: true,
+        intent,
+        capture_sources: settings.capture_sources,
+        recording_profile,
+        stream_destinations,
+    })
+}
+
+async fn plan_pipeline(state: &ApiState, request: MediaPipelinePlanRequest) -> MediaPipelinePlan {
+    if let Some(runner) = &state.media_runner {
+        match runner.plan_pipeline(request.clone()).await {
+            Ok(plan) => return plan,
+            Err(error) => {
+                let mut plan = build_dry_run_pipeline_plan(request);
+                plan.warnings.push(format!(
+                    "media runner plan unavailable; using local dry-run planner: {error}"
+                ));
+                return plan;
+            }
+        }
+    }
+
+    build_dry_run_pipeline_plan(request)
+}
+
 pub fn generate_token() -> String {
     new_id("token")
 }
@@ -1163,6 +1259,50 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response_body(response).await;
         assert_eq!(body["data"]["status"]["stream_active"], false);
+    }
+
+    #[tokio::test]
+    async fn default_pipeline_plan_smoke_test() {
+        let app = test_app();
+
+        let (status, body) = request_json(app, "GET", "/media/plan".to_string(), None).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["dry_run"], true);
+        assert!(body["data"]["steps"].as_array().unwrap().len() >= 2);
+    }
+
+    #[tokio::test]
+    async fn pipeline_validation_blocks_missing_capture_sources() {
+        let app = test_app();
+        let profile_id = first_recording_profile_id(app.clone()).await;
+        let (status, profiles) =
+            request_json(app.clone(), "GET", "/profiles".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let profile = profiles["data"]["recording_profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|profile| profile["id"].as_str() == Some(profile_id.as_str()))
+            .unwrap()
+            .clone();
+
+        let (status, body) = request_json(
+            app,
+            "POST",
+            "/media/validate".to_string(),
+            Some(json!({
+                "dry_run": true,
+                "intent": "recording",
+                "capture_sources": [],
+                "recording_profile": profile,
+                "stream_destinations": []
+            })),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["ready"], false);
     }
 
     #[tokio::test]
