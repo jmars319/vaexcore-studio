@@ -26,9 +26,18 @@ or:
 x-vaexcore-token: <token>
 ```
 
-For WebSocket clients, pass `?token=<token>` or the token header.
+For WebSocket clients, pass `?token=<token>` or the token header. Browser clients that cannot send headers may pass `?client_id=<id>&client_name=<name>` for the recent client registry.
 
 HTTP responses include `x-vaexcore-request-id`. Clients may send this header on requests to correlate their own logs with Studio logs; otherwise the API generates one.
+
+Clients may also send:
+
+```http
+x-vaexcore-client-id: stable-client-id
+x-vaexcore-client-name: Human Friendly Client Name
+```
+
+These headers feed the recent client registry. They are labels only, not auth credentials.
 
 ## Response Envelope
 
@@ -71,6 +80,28 @@ Returns `StudioStatus`:
 - active destination
 - recording path
 - recent events
+
+### `GET /clients`
+
+Returns recent localhost clients observed through HTTP and WebSocket traffic:
+
+```json
+{
+  "clients": []
+}
+```
+
+### `GET /audit-log`
+
+Returns recent command audit entries:
+
+```json
+{
+  "entries": []
+}
+```
+
+Audit entries include method, path, action, status, request ID, client label, and timestamp. Request bodies are not stored.
 
 ### `POST /recording/start`
 

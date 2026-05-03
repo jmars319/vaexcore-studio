@@ -70,3 +70,40 @@ pub struct StudioStatus {
     pub status: EngineStatus,
     pub recent_events: Vec<StudioEvent>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct ConnectedClient {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub user_agent: Option<String>,
+    pub last_request_id: Option<String>,
+    pub last_path: Option<String>,
+    pub request_count: u64,
+    pub connected_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct ConnectedClientsSnapshot {
+    pub clients: Vec<ConnectedClient>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct AuditLogEntry {
+    pub id: String,
+    pub request_id: String,
+    pub method: String,
+    pub path: String,
+    pub action: String,
+    pub status_code: u16,
+    pub ok: bool,
+    pub client_id: Option<String>,
+    pub client_name: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct AuditLogSnapshot {
+    pub entries: Vec<AuditLogEntry>,
+}

@@ -1,7 +1,9 @@
 import type {
   ApiResponse,
   AppSettings,
+  AuditLogSnapshot,
   CommandStatus,
+  ConnectedClientsSnapshot,
   CreatedProfile,
   CreateProfileRequest,
   DeletedProfile,
@@ -36,6 +38,9 @@ export interface MediaRunnerInfo {
   statusAddr: string | null;
   executablePath: string | null;
 }
+
+const UI_CLIENT_ID = "vaexcore-studio-ui";
+const UI_CLIENT_NAME = "vaexcore studio UI";
 
 export async function loadRuntimeConfig(): Promise<RuntimeApiConfig> {
   try {
@@ -103,6 +108,8 @@ export async function apiRequest<T>(
   if (config.token) {
     headers.set("x-vaexcore-token", config.token);
   }
+  headers.set("x-vaexcore-client-id", UI_CLIENT_ID);
+  headers.set("x-vaexcore-client-name", UI_CLIENT_NAME);
 
   const response = await fetch(`${config.apiUrl}${path}`, {
     ...init,
@@ -122,6 +129,10 @@ export const StudioApi = {
     apiRequest<HealthResponse>(config, "/health"),
   status: (config: RuntimeApiConfig) =>
     apiRequest<StudioStatus>(config, "/status"),
+  clients: (config: RuntimeApiConfig) =>
+    apiRequest<ConnectedClientsSnapshot>(config, "/clients"),
+  auditLog: (config: RuntimeApiConfig) =>
+    apiRequest<AuditLogSnapshot>(config, "/audit-log"),
   profiles: (config: RuntimeApiConfig) =>
     apiRequest<ProfilesSnapshot>(config, "/profiles"),
   createProfile: (config: RuntimeApiConfig, request: CreateProfileRequest) =>
@@ -189,11 +200,11 @@ export const StudioApi = {
 };
 
 export function eventSocketUrl(config: RuntimeApiConfig): string {
-  if (!config.token || config.devAuthBypass) {
-    return config.wsUrl;
-  }
-
   const url = new URL(config.wsUrl);
-  url.searchParams.set("token", config.token);
+  url.searchParams.set("client_id", `${UI_CLIENT_ID}-events`);
+  url.searchParams.set("client_name", `${UI_CLIENT_NAME} events`);
+  if (config.token && !config.devAuthBypass) {
+    url.searchParams.set("token", config.token);
+  }
   return url.toString();
 }

@@ -6,13 +6,14 @@ use std::{
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use vaexcore_core::{
-    new_id, now_utc, AppSettings, Marker, MediaProfile, MediaProfileInput, PlatformKind,
-    ProfilesSnapshot, RecordingContainer, Resolution, SecretRef, SecretStore, SecretStoreError,
-    SensitiveString, StreamDestination, StreamDestinationInput,
+    new_id, now_utc, AppSettings, AuditLogEntry, Marker, MediaProfile, MediaProfileInput,
+    PlatformKind, ProfilesSnapshot, RecordingContainer, Resolution, SecretRef, SecretStore,
+    SecretStoreError, SensitiveString, StreamDestination, StreamDestinationInput,
 };
 use vaexcore_platforms::apply_platform_defaults;
 
-const CURRENT_SCHEMA_VERSION: u32 = 1;
+const CURRENT_SCHEMA_VERSION: u32 = 2;
+const AUDIT_LOG_LIMIT: usize = 200;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -471,6 +472,98 @@ impl ProfileStore {
         Ok(marker)
     }
 
+    pub fn insert_audit_log_entry(&self, entry: &AuditLogEntry) -> Result<(), StoreError> {
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        connection.execute(
+            "INSERT INTO command_audit_log
+             (id, request_id, method, path, action, status_code, ok, client_id, client_name, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                &entry.id,
+                &entry.request_id,
+                &entry.method,
+                &entry.path,
+                &entry.action,
+                entry.status_code,
+                entry.ok,
+                &entry.client_id,
+                &entry.client_name,
+                entry.created_at.to_rfc3339(),
+            ],
+        )?;
+        connection.execute(
+            "DELETE FROM command_audit_log
+             WHERE id NOT IN (
+               SELECT id FROM command_audit_log
+               ORDER BY created_at DESC
+               LIMIT ?1
+             )",
+            params![AUDIT_LOG_LIMIT as u32],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_audit_log_entries(&self, limit: usize) -> Result<Vec<AuditLogEntry>, StoreError> {
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        let mut statement = connection.prepare(
+            "SELECT id, request_id, method, path, action, status_code, ok, client_id, client_name, created_at
+             FROM command_audit_log
+             ORDER BY created_at DESC
+             LIMIT ?1",
+        )?;
+
+        let rows = statement.query_map(params![limit.min(AUDIT_LOG_LIMIT) as u32], |row| {
+            let created_at: String = row.get(9)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, u16>(5)?,
+                row.get::<_, bool>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                created_at,
+            ))
+        })?;
+
+        rows.map(|row| {
+            let (
+                id,
+                request_id,
+                method,
+                path,
+                action,
+                status_code,
+                ok,
+                client_id,
+                client_name,
+                created_at,
+            ) = row?;
+
+            Ok(AuditLogEntry {
+                id,
+                request_id,
+                method,
+                path,
+                action,
+                status_code,
+                ok,
+                client_id,
+                client_name,
+                created_at: parse_time(&created_at)?,
+            })
+        })
+        .collect()
+    }
+
     fn migrate(&self) -> Result<(), StoreError> {
         let connection = self
             .connection
@@ -501,6 +594,9 @@ impl ProfileStore {
 
         if current_version < 1 {
             apply_migration_1(&connection)?;
+        }
+        if current_version < 2 {
+            apply_migration_2(&connection)?;
         }
 
         Ok(())
@@ -694,6 +790,33 @@ fn apply_migration_1(connection: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+fn apply_migration_2(connection: &Connection) -> Result<(), StoreError> {
+    connection.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS command_audit_log (
+              id TEXT PRIMARY KEY,
+              request_id TEXT NOT NULL,
+              method TEXT NOT NULL,
+              path TEXT NOT NULL,
+              action TEXT NOT NULL,
+              status_code INTEGER NOT NULL,
+              ok INTEGER NOT NULL,
+              client_id TEXT,
+              client_name TEXT,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_command_audit_log_created_at
+            ON command_audit_log(created_at DESC);
+            "#,
+    )?;
+    connection.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+        params![2_u32, now_utc().to_rfc3339()],
+    )?;
+    Ok(())
+}
+
 fn schema_version(connection: &Connection) -> Result<u32, StoreError> {
     Ok(connection
         .query_row(
@@ -803,5 +926,27 @@ mod tests {
         let store = ProfileStore::open_memory().unwrap();
 
         assert_eq!(store.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn audit_log_round_trip() {
+        let store = ProfileStore::open_memory().unwrap();
+        let entry = AuditLogEntry {
+            id: new_id("audit"),
+            request_id: "req_test".to_string(),
+            method: "POST".to_string(),
+            path: "/recording/start".to_string(),
+            action: "recording.start".to_string(),
+            status_code: 200,
+            ok: true,
+            client_id: Some("client-test".to_string()),
+            client_name: Some("Test Client".to_string()),
+            created_at: now_utc(),
+        };
+
+        store.insert_audit_log_entry(&entry).unwrap();
+
+        let entries = store.list_audit_log_entries(10).unwrap();
+        assert_eq!(entries, vec![entry]);
     }
 }

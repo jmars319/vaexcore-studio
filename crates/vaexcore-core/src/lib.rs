@@ -11,8 +11,8 @@ pub use profiles::{
     Resolution, StreamDestination, StreamDestinationInput,
 };
 pub use responses::{
-    ApiErrorBody, ApiResponse, CommandStatus, HealthResponse, Marker, ProfilesSnapshot,
-    StudioStatus,
+    ApiErrorBody, ApiResponse, AuditLogEntry, AuditLogSnapshot, CommandStatus, ConnectedClient,
+    ConnectedClientsSnapshot, HealthResponse, Marker, ProfilesSnapshot, StudioStatus,
 };
 pub use security::{SecretRef, SecretStore, SecretStoreError, SensitiveString};
 pub use settings::AppSettings;

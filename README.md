@@ -13,6 +13,7 @@ It is not a giveaway, moderation, highlight detection, scene editing, cloud, or 
 - Local HTTP + WebSocket API
 - Dry-run media engine behind a media abstraction
 - Supervised, replaceable `media-runner` sidecar with HTTP command transport
+- Recent client registry and command audit log for localhost integrations
 
 ## Repository Layout
 
@@ -107,6 +108,7 @@ curl -H "x-vaexcore-token: replace-with-a-local-token" http://127.0.0.1:51287/st
 ```
 
 HTTP responses include an `x-vaexcore-request-id` header. Local clients may send their own request ID with the same header for log correlation.
+External clients can identify themselves with `x-vaexcore-client-id` and `x-vaexcore-client-name`; Studio shows recent clients on the Connected Apps page.
 
 ## MVP Behavior
 
@@ -115,6 +117,8 @@ HTTP responses include an `x-vaexcore-request-id` header. Local clients may send
 - Start/stop recording and streaming independently or together.
 - Create manual markers.
 - Stream lifecycle events over WebSocket.
+- Track recent localhost clients.
+- Record a bounded command audit log without storing request bodies.
 - Simulate media execution with `DryRunMediaEngine`.
 - Prefer supervised `media-runner` dry-run execution when the sidecar is available, with in-process dry-run fallback when it is missing during startup.
 

@@ -1,4 +1,5 @@
 mod auth;
+mod client_registry;
 mod event_bus;
 mod store;
 
@@ -21,18 +22,22 @@ use serde_json::json;
 use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use vaexcore_core::{
-    new_id, ApiResponse, CommandStatus, HealthResponse, Marker, MediaProfileInput,
-    ProfilesSnapshot, StreamDestinationInput, StudioEvent, StudioEventKind, StudioStatus, APP_NAME,
+    new_id, now_utc, ApiResponse, AuditLogEntry, AuditLogSnapshot, CommandStatus,
+    ConnectedClientsSnapshot, HealthResponse, Marker, MediaProfileInput, ProfilesSnapshot,
+    StreamDestinationInput, StudioEvent, StudioEventKind, StudioStatus, APP_NAME,
 };
 use vaexcore_media::{
     DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor, SidecarMediaEngine,
 };
 
 pub use auth::{AuthConfig, SharedAuthConfig};
+use client_registry::{ClientRegistry, ClientSeen};
 pub use event_bus::EventBus;
 pub use store::{ProfileStore, StoreError};
 
 const REQUEST_ID_HEADER: &str = "x-vaexcore-request-id";
+const CLIENT_ID_HEADER: &str = "x-vaexcore-client-id";
+const CLIENT_NAME_HEADER: &str = "x-vaexcore-client-name";
 const DEFAULT_EVENT_REPLAY_LIMIT: usize = 100;
 
 #[derive(Clone, Debug)]
@@ -48,6 +53,7 @@ pub struct ApiState {
     pub store: ProfileStore,
     pub engine: Arc<dyn MediaEngine>,
     pub events: EventBus,
+    pub clients: ClientRegistry,
 }
 
 impl ApiState {
@@ -67,6 +73,7 @@ impl ApiState {
             store: ProfileStore::open(&config.database_path)?,
             engine,
             events,
+            clients: ClientRegistry::new(),
         });
 
         state
@@ -94,6 +101,7 @@ impl ApiState {
             store: ProfileStore::open_memory()?,
             engine,
             events,
+            clients: ClientRegistry::new(),
         });
 
         state
@@ -182,6 +190,8 @@ pub fn router(state: Arc<ApiState>) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/status", get(status))
+        .route("/clients", get(get_clients))
+        .route("/audit-log", get(get_audit_log))
         .route("/recording/start", post(start_recording))
         .route("/recording/stop", post(stop_recording))
         .route("/stream/start", post(start_stream))
@@ -203,12 +213,19 @@ pub fn router(state: Arc<ApiState>) -> Router {
                 .allow_methods([Method::DELETE, Method::GET, Method::POST, Method::PUT])
                 .allow_headers(tower_http::cors::Any),
         )
-        .layer(middleware::from_fn(request_id_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            request_context_middleware,
+        ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 
-async fn request_id_middleware(request: Request<Body>, next: Next) -> Response {
+async fn request_context_middleware(
+    State(state): State<Arc<ApiState>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
     let request_id = request
         .headers()
         .get(REQUEST_ID_HEADER)
@@ -219,10 +236,31 @@ async fn request_id_middleware(request: Request<Body>, next: Next) -> Response {
         .unwrap_or_else(|| new_id("req"));
     let method = request.method().clone();
     let path = request.uri().path().to_string();
+    let client = client_seen_from_headers(request.headers(), &path, Some(request_id.clone()));
+    state.clients.register(client.clone());
 
     let mut response = next.run(request).await;
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         response.headers_mut().insert(REQUEST_ID_HEADER, value);
+    }
+
+    if let Some(action) = command_action(&method, &path) {
+        let status_code = response.status().as_u16();
+        let entry = AuditLogEntry {
+            id: new_id("audit"),
+            request_id: request_id.clone(),
+            method: method.to_string(),
+            path: path.clone(),
+            action,
+            status_code,
+            ok: response.status().is_success(),
+            client_id: client.client_id,
+            client_name: Some(client.name),
+            created_at: now_utc(),
+        };
+        if let Err(error) = state.store.insert_audit_log_entry(&entry) {
+            tracing::warn!(%error, "failed to write command audit entry");
+        }
     }
 
     tracing::info!(
@@ -241,6 +279,81 @@ fn is_valid_request_id(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+}
+
+fn client_seen_from_headers(
+    headers: &HeaderMap,
+    path: &str,
+    request_id: Option<String>,
+) -> ClientSeen {
+    let user_agent = header_string(headers, axum::http::header::USER_AGENT.as_str(), 240);
+    let client_id = header_string(headers, CLIENT_ID_HEADER, 128).filter(|value| {
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    });
+    let name = header_string(headers, CLIENT_NAME_HEADER, 96)
+        .or_else(|| user_agent.as_ref().map(|value| compact_user_agent(value)))
+        .unwrap_or_else(|| {
+            if path == "/events" {
+                "WebSocket client".to_string()
+            } else {
+                "Local HTTP client".to_string()
+            }
+        });
+
+    ClientSeen {
+        client_id,
+        name,
+        kind: if path == "/events" {
+            "websocket".to_string()
+        } else {
+            "http".to_string()
+        },
+        user_agent,
+        request_id,
+        path: Some(path.to_string()),
+    }
+}
+
+fn header_string(headers: &HeaderMap, name: &str, max_len: usize) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(max_len).collect())
+}
+
+fn compact_user_agent(value: &str) -> String {
+    value
+        .split_whitespace()
+        .next()
+        .unwrap_or("Local client")
+        .chars()
+        .take(96)
+        .collect()
+}
+
+fn command_action(method: &Method, path: &str) -> Option<String> {
+    let action = match (method.as_str(), path) {
+        ("POST", "/recording/start") => "recording.start",
+        ("POST", "/recording/stop") => "recording.stop",
+        ("POST", "/stream/start") => "stream.start",
+        ("POST", "/stream/stop") => "stream.stop",
+        ("POST", "/marker/create") => "marker.create",
+        ("POST", "/profiles") => "profiles.create",
+        ("PUT", path) if path.starts_with("/profiles/recording/") => "profiles.recording.update",
+        ("DELETE", path) if path.starts_with("/profiles/recording/") => "profiles.recording.delete",
+        ("PUT", path) if path.starts_with("/profiles/destinations/") => {
+            "profiles.destination.update"
+        }
+        ("DELETE", path) if path.starts_with("/profiles/destinations/") => {
+            "profiles.destination.delete"
+        }
+        _ => return None,
+    };
+    Some(action.to_string())
 }
 
 #[derive(Debug)]
@@ -350,6 +463,26 @@ async fn get_profiles(
 ) -> Result<Json<ApiResponse<ProfilesSnapshot>>, ApiError> {
     auth::authorize_headers(&headers, &state.auth)?;
     Ok(Json(ApiResponse::ok(state.store.profiles_snapshot()?)))
+}
+
+async fn get_clients(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<ConnectedClientsSnapshot>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    Ok(Json(ApiResponse::ok(ConnectedClientsSnapshot {
+        clients: state.clients.recent(),
+    })))
+}
+
+async fn get_audit_log(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<AuditLogSnapshot>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    Ok(Json(ApiResponse::ok(AuditLogSnapshot {
+        entries: state.store.list_audit_log_entries(100)?,
+    })))
 }
 
 async fn post_profiles(
@@ -629,6 +762,20 @@ async fn events_ws(
         return error.into_response();
     }
 
+    if query.client_id.is_some() || query.client_name.is_some() {
+        state.clients.register(ClientSeen {
+            client_id: query.client_id.clone(),
+            name: query
+                .client_name
+                .clone()
+                .unwrap_or_else(|| "WebSocket client".to_string()),
+            kind: "websocket".to_string(),
+            user_agent: header_string(&headers, axum::http::header::USER_AGENT.as_str(), 240),
+            request_id: header_string(&headers, REQUEST_ID_HEADER, 128),
+            path: Some("/events".to_string()),
+        });
+    }
+
     let replay_limit = query
         .limit
         .unwrap_or(DEFAULT_EVENT_REPLAY_LIMIT)
@@ -840,6 +987,61 @@ mod tests {
             .and_then(|value| value.to_str().ok())
             .unwrap();
         assert!(request_id.starts_with("req_"));
+    }
+
+    #[tokio::test]
+    async fn client_registry_records_request_headers() {
+        let app = test_app();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/status")
+                    .header("x-vaexcore-client-id", "test-client")
+                    .header("x-vaexcore-client-name", "Test Client")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let (status, body) = request_json(app, "GET", "/clients".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let clients = body["data"]["clients"].as_array().unwrap();
+        assert!(clients.iter().any(|client| {
+            client["id"].as_str() == Some("test-client")
+                && client["name"].as_str() == Some("Test Client")
+        }));
+    }
+
+    #[tokio::test]
+    async fn command_audit_log_records_mutating_requests() {
+        let app = test_app();
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/recording/start")
+                    .header("content-type", "application/json")
+                    .header("x-vaexcore-request-id", "audit.req-1")
+                    .header("x-vaexcore-client-name", "Audit Test Client")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let (status, body) = request_json(app, "GET", "/audit-log".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["entries"][0]["action"], "recording.start");
+        assert_eq!(body["data"]["entries"][0]["request_id"], "audit.req-1");
+        assert_eq!(
+            body["data"]["entries"][0]["client_name"],
+            "Audit Test Client"
+        );
     }
 
     #[tokio::test]
@@ -1116,6 +1318,7 @@ mod tests {
             &auth::TokenQuery {
                 token: None,
                 limit: Some(1),
+                ..Default::default()
             },
             &auth,
         );
@@ -1133,6 +1336,7 @@ mod tests {
             &auth::TokenQuery {
                 token: Some("test-token".to_string()),
                 limit: Some(1),
+                ..Default::default()
             },
             &auth,
         )

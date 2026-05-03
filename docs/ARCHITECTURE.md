@@ -42,6 +42,8 @@ Local API:
 - Token auth with dev bypass
 - SQLite persistence
 - SecretStore implementation
+- Command audit persistence
+- Recent client registry
 - Dry-run engine wiring
 - Optional sidecar supervision, command transport, and health events
 
@@ -79,6 +81,7 @@ TypeScript contracts mirrored from the API. External clients can use this packag
 React UI
   -> HTTP command
   -> vaexcore-api
+  -> request ID/client registry/audit middleware
   -> SQLite profile/secret lookup
   -> MediaEngine trait
   -> SidecarMediaEngine when media-runner is available
@@ -95,5 +98,6 @@ React UI
 - Start/stop commands are idempotent.
 - Events emit only on actual lifecycle transitions.
 - Secrets do not appear in logs, status, or events.
+- Command audit entries never store request bodies.
 - API responses use structured JSON envelopes.
 - Partial failures return explicit errors and do not mutate unrelated state.

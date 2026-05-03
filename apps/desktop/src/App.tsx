@@ -22,6 +22,8 @@ import {
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import type {
   AppSettings,
+  AuditLogEntry,
+  ConnectedClient,
   HealthResponse,
   MediaProfile,
   MediaProfileInput,
@@ -116,6 +118,8 @@ function App() {
   const [status, setStatus] = useState<StudioStatus | null>(null);
   const [profiles, setProfiles] = useState<ProfilesSnapshot | null>(null);
   const [events, setEvents] = useState<StudioEvent[]>([]);
+  const [clients, setClients] = useState<ConnectedClient[]>([]);
+  const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>();
   const [selectedDestinationId, setSelectedDestinationId] = useState<string | undefined>();
@@ -183,16 +187,27 @@ function App() {
 
     async function refresh() {
       try {
-        const [nextHealth, nextStatus, nextProfiles, nextMediaRunnerInfo] = await Promise.all([
+        const [
+          nextHealth,
+          nextStatus,
+          nextProfiles,
+          nextClients,
+          nextAuditLog,
+          nextMediaRunnerInfo,
+        ] = await Promise.all([
           StudioApi.health(runtimeConfig),
           StudioApi.status(runtimeConfig),
           StudioApi.profiles(runtimeConfig),
+          StudioApi.clients(runtimeConfig),
+          StudioApi.auditLog(runtimeConfig),
           loadMediaRunnerInfo(),
         ]);
         if (cancelled) return;
         setHealth(nextHealth);
         setStatus(nextStatus);
         setProfiles(nextProfiles);
+        setClients(nextClients.clients);
+        setAuditEntries(nextAuditLog.entries);
         setMediaRunnerInfo(nextMediaRunnerInfo);
         setEvents((current) =>
           mergeEvents([...nextStatus.recent_events, ...current]),
@@ -549,19 +564,22 @@ function App() {
       case "apps":
         return (
           <ConnectedAppsPage
+            clients={clients}
             config={config}
             engine={activeStatus?.engine ?? "starting"}
             mediaRunnerInfo={mediaRunnerInfo}
           />
         );
       case "logs":
-        return <LogsPage events={events} />;
+        return <LogsPage auditEntries={auditEntries} events={events} />;
     }
   }, [
     activeDestination?.name,
     activeStatus?.engine,
     activeStatus?.recording_active,
     activeStatus?.stream_active,
+    auditEntries,
+    clients,
     config,
     destinationForm,
     editingDestinationId,
@@ -1167,6 +1185,7 @@ function ControlsPage(props: {
 }
 
 function ConnectedAppsPage(props: {
+  clients: ConnectedClient[];
   config: RuntimeApiConfig | null;
   engine: string;
   mediaRunnerInfo: MediaRunnerInfo | null;
@@ -1198,30 +1217,45 @@ function ConnectedAppsPage(props: {
       </section>
       <section className="panel">
         <PanelTitle title="Recent Clients" />
-        <div className="table">
-          {["Twitch bot", "Highlight locator", "Stream deck bridge"].map(
-            (client) => (
-              <div className="table-row" key={client}>
+        {props.clients.length === 0 ? (
+          <div className="empty">No clients yet</div>
+        ) : (
+          <div className="table">
+            {props.clients.map((client) => (
+              <div className="table-row" key={`${client.kind}-${client.id}`}>
                 <div>
-                  <strong>{client}</strong>
-                  <span>placeholder client registry</span>
+                  <strong>{client.name}</strong>
+                  <span>{client.last_path ?? "local API"}</span>
                 </div>
-                <Pill tone="muted">not connected</Pill>
+                <Pill tone={client.kind === "websocket" ? "green" : "amber"}>
+                  {client.kind}
+                </Pill>
+                <Pill tone="muted">{client.request_count} req</Pill>
+                <span>{new Date(client.last_seen_at).toLocaleTimeString()}</span>
               </div>
-            ),
-          )}
-        </div>
+            ))}
+          </div>
+        )}
       </section>
     </div>
   );
 }
 
-function LogsPage(props: { events: StudioEvent[] }) {
+function LogsPage(props: {
+  auditEntries: AuditLogEntry[];
+  events: StudioEvent[];
+}) {
   return (
-    <section className="panel">
-      <PanelTitle title="Event Log" />
-      <EventList events={props.events} />
-    </section>
+    <div className="stack">
+      <section className="panel">
+        <PanelTitle title="Command Audit" />
+        <AuditList entries={props.auditEntries} />
+      </section>
+      <section className="panel">
+        <PanelTitle title="Event Log" />
+        <EventList events={props.events} />
+      </section>
+    </div>
   );
 }
 
@@ -1512,6 +1546,33 @@ function PanelTitle(props: { title: string }) {
   return (
     <div className="panel-title">
       <h3>{props.title}</h3>
+    </div>
+  );
+}
+
+function AuditList(props: { entries: AuditLogEntry[] }) {
+  if (props.entries.length === 0) {
+    return <div className="empty">No commands yet</div>;
+  }
+
+  return (
+    <div className="event-list">
+      {props.entries.map((entry) => (
+        <div className="audit-row" key={entry.id}>
+          <div>
+            <strong>{entry.action}</strong>
+            <span>
+              {entry.method} {entry.path}
+            </span>
+            <code>{entry.request_id}</code>
+          </div>
+          <div className="audit-meta">
+            <Pill tone={entry.ok ? "green" : "red"}>{entry.status_code}</Pill>
+            <span>{entry.client_name ?? "Local client"}</span>
+            <span>{new Date(entry.created_at).toLocaleTimeString()}</span>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

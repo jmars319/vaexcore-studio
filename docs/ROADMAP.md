@@ -14,12 +14,12 @@
 - Sidecar dry-run command transport.
 - SQLite schema migration tracking.
 - API request ID headers and bounded WebSocket replay.
+- Recent client registry.
+- Bounded command audit log.
 
 ## Next Milestone: Runtime Hardening
 
 - API port fallback and frontend discovery.
-- More detailed command audit log.
-- Recent client registry.
 - Structured app log file rotation.
 - Import/export profile bundle.
 - Sidecar restart policy after crashes.

@@ -110,6 +110,7 @@ button:disabled {
 .metric span,
 .runtime-row span,
 .event-row span,
+.audit-row span,
 .copy-line span,
 .key-value span,
 .table-row span {
@@ -620,6 +621,33 @@ select:focus {
   background: #0b0c13;
 }
 
+.audit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0b0c13;
+}
+
+.audit-row strong,
+.audit-row span,
+.audit-row code {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.audit-meta {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 220px;
+  text-align: right;
+}
+
 .event-row svg {
   color: var(--cyan);
   margin-top: 2px;
@@ -713,6 +741,16 @@ select:focus {
 
   .table-actions {
     justify-content: flex-start;
+  }
+
+  .audit-row {
+    grid-template-columns: 1fr;
+  }
+
+  .audit-meta {
+    justify-content: flex-start;
+    min-width: 0;
+    text-align: left;
   }
 
   .runtime-row,

@@ -116,6 +116,39 @@ export interface StudioStatus {
   recent_events: StudioEvent[];
 }
 
+export interface ConnectedClient {
+  id: string;
+  name: string;
+  kind: string;
+  user_agent: string | null;
+  last_request_id: string | null;
+  last_path: string | null;
+  request_count: number;
+  connected_at: string;
+  last_seen_at: string;
+}
+
+export interface ConnectedClientsSnapshot {
+  clients: ConnectedClient[];
+}
+
+export interface AuditLogEntry {
+  id: string;
+  request_id: string;
+  method: string;
+  path: string;
+  action: string;
+  status_code: number;
+  ok: boolean;
+  client_id: string | null;
+  client_name: string | null;
+  created_at: string;
+}
+
+export interface AuditLogSnapshot {
+  entries: AuditLogEntry[];
+}
+
 export interface ProfilesSnapshot {
   recording_profiles: MediaProfile[];
   stream_destinations: StreamDestination[];
