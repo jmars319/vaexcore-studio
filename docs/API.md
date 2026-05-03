@@ -65,7 +65,10 @@ const client = new VaexcoreStudioClient({
   clientName: "My Control Tool",
 });
 
-await client.createMarker("manual-marker");
+await client.createMarker({
+  label: "manual-marker",
+  source_app: "my-control-tool",
+});
 const status = await client.status();
 ```
 
@@ -132,6 +135,25 @@ Returns recent command audit entries:
 ```
 
 Audit entries include method, path, action, status, request ID, client label, and timestamp. Request bodies are not stored.
+
+### `GET /recordings/recent`
+
+Returns completed recording sessions, newest first:
+
+```json
+{
+  "recordings": [
+    {
+      "session_id": "rec_...",
+      "output_path": "/Users/me/Movies/vaexcore studio/clip.mkv",
+      "profile_id": "rec_profile_...",
+      "profile_name": "1080p60 Local",
+      "started_at": "2026-05-02T12:00:00Z",
+      "stopped_at": "2026-05-02T12:05:00Z"
+    }
+  ]
+}
+```
 
 ### `GET /media/plan`
 
@@ -210,11 +232,20 @@ Body:
 
 ```json
 {
-  "label": "manual-marker"
+  "label": "Pulse keep: opener",
+  "source_app": "vaexcore-pulse",
+  "source_event_id": "pulse:session:candidate",
+  "recording_session_id": "rec_...",
+  "media_path": "/Users/me/Movies/vaexcore studio/clip.mkv",
+  "start_seconds": 12.5,
+  "end_seconds": 24,
+  "metadata": {
+    "confidenceBand": "high"
+  }
 }
 ```
 
-Emits `marker.created`.
+All fields except `label` are optional. External apps should set `source_app` to a stable app identifier and `source_event_id` to an idempotency-friendly event reference when one exists. Emits `marker.created` with the saved marker payload.
 
 ### `GET /profiles`
 

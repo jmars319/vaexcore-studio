@@ -24,7 +24,7 @@ pub use responses::{
     ApiErrorBody, ApiResponse, AuditLogEntry, AuditLogSnapshot, CommandStatus, ConnectedClient,
     ConnectedClientsSnapshot, HealthResponse, Marker, PreflightCheck, PreflightSnapshot,
     PreflightStatus, ProfileBundle, ProfileBundleImportResult, ProfilesSnapshot,
-    StreamDestinationBundleItem, StudioStatus,
+    RecentRecordingsSnapshot, RecordingHistoryEntry, StreamDestinationBundleItem, StudioStatus,
 };
 pub use security::{SecretRef, SecretStore, SecretStoreError, SensitiveString};
 pub use settings::AppSettings;

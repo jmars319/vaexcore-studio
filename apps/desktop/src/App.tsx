@@ -37,6 +37,7 @@ import type {
   PreflightStatus,
   ProfilesSnapshot,
   RecordingContainer,
+  RecordingHistoryEntry,
   StudioEvent,
   StudioStatus,
   StreamDestination,
@@ -159,6 +160,7 @@ function App() {
   const [events, setEvents] = useState<StudioEvent[]>([]);
   const [clients, setClients] = useState<ConnectedClient[]>([]);
   const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([]);
+  const [recentRecordings, setRecentRecordings] = useState<RecordingHistoryEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>();
   const [selectedDestinationId, setSelectedDestinationId] = useState<string | undefined>();
@@ -244,6 +246,7 @@ function App() {
           nextProfiles,
           nextClients,
           nextAuditLog,
+          nextRecentRecordings,
           nextMediaRunnerInfo,
           nextPipelinePlan,
         ] = await Promise.all([
@@ -252,6 +255,7 @@ function App() {
           StudioApi.profiles(runtimeConfig),
           StudioApi.clients(runtimeConfig),
           StudioApi.auditLog(runtimeConfig),
+          StudioApi.recentRecordings(runtimeConfig),
           loadMediaRunnerInfo(),
           StudioApi.mediaPlan(runtimeConfig),
         ]);
@@ -261,6 +265,7 @@ function App() {
         setProfiles(nextProfiles);
         setClients(nextClients.clients);
         setAuditEntries(nextAuditLog.entries);
+        setRecentRecordings(nextRecentRecordings.recordings);
         setMediaRunnerInfo(nextMediaRunnerInfo);
         setPipelinePlan(nextPipelinePlan);
         loadPreflightSnapshot()
@@ -315,6 +320,11 @@ function App() {
         event.type === "stream.stopped"
       ) {
         StudioApi.status(config).then(setStatus).catch(() => undefined);
+      }
+      if (event.type === "recording.stopped") {
+        StudioApi.recentRecordings(config)
+          .then((snapshot) => setRecentRecordings(snapshot.recordings))
+          .catch(() => undefined);
       }
     };
     socket.onerror = () => setError("WebSocket event stream unavailable");
@@ -684,6 +694,7 @@ function App() {
             config={config}
             engine={activeStatus?.engine ?? "starting"}
             mediaRunnerInfo={mediaRunnerInfo}
+            recentRecordings={recentRecordings}
           />
         );
       case "logs":
@@ -707,6 +718,7 @@ function App() {
     preflight,
     profileForm,
     profiles,
+    recentRecordings,
     recordingPath,
     section,
     selectedDestinationId,
@@ -1371,6 +1383,7 @@ function ConnectedAppsPage(props: {
   config: RuntimeApiConfig | null;
   engine: string;
   mediaRunnerInfo: MediaRunnerInfo | null;
+  recentRecordings: RecordingHistoryEntry[];
 }) {
   const apiUrl = props.config?.apiUrl ?? "http://127.0.0.1:51287";
   const wsUrl = props.config?.wsUrl ?? "ws://127.0.0.1:51287/events";
@@ -1413,14 +1426,41 @@ function ConnectedAppsPage(props: {
             {props.clients.map((client) => (
               <div className="table-row" key={`${client.kind}-${client.id}`}>
                 <div>
-                  <strong>{client.name}</strong>
+                  <strong>{connectedClientName(client)}</strong>
                   <span>{client.last_path ?? "local API"}</span>
                 </div>
+                <Pill tone={connectedClientTone(client)}>
+                  {connectedClientApp(client)}
+                </Pill>
                 <Pill tone={client.kind === "websocket" ? "green" : "amber"}>
                   {client.kind}
                 </Pill>
-                <Pill tone="muted">{client.request_count} req</Pill>
-                <span>{new Date(client.last_seen_at).toLocaleTimeString()}</span>
+                <span>
+                  {client.request_count} req,{" "}
+                  {new Date(client.last_seen_at).toLocaleTimeString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+      <section className="panel">
+        <PanelTitle title="Recent Recordings" />
+        {props.recentRecordings.length === 0 ? (
+          <div className="empty">No completed recordings yet</div>
+        ) : (
+          <div className="table">
+            {props.recentRecordings.map((recording) => (
+              <div className="table-row" key={recording.session_id}>
+                <div>
+                  <strong>{recording.profile_name}</strong>
+                  <span>{recording.session_id}</span>
+                  <code>{recording.output_path}</code>
+                </div>
+                <Pill tone="amber">
+                  {new Date(recording.stopped_at).toLocaleTimeString()}
+                </Pill>
+                <Pill tone="muted">{recording.profile_id}</Pill>
               </div>
             ))}
           </div>
@@ -1428,6 +1468,29 @@ function ConnectedAppsPage(props: {
       </section>
     </div>
   );
+}
+
+function connectedClientName(client: ConnectedClient): string {
+  if (client.id.includes("vaexcore-pulse")) return "vaexcore pulse";
+  if (client.id.includes("vaexcore-console")) return "VaexCore Console";
+  return client.name;
+}
+
+function connectedClientApp(client: ConnectedClient): string {
+  const label = `${client.id} ${client.name}`.toLowerCase();
+  if (label.includes("pulse")) return "Pulse";
+  if (label.includes("console")) return "Console";
+  if (label.includes("studio")) return "Studio";
+  return "External";
+}
+
+function connectedClientTone(
+  client: ConnectedClient,
+): "green" | "red" | "amber" | "muted" {
+  const app = connectedClientApp(client);
+  if (app === "Pulse" || app === "Console") return "green";
+  if (app === "Studio") return "muted";
+  return "amber";
 }
 
 function LogsPage(props: {

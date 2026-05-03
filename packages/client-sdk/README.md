@@ -14,7 +14,10 @@ const client = new VaexcoreStudioClient({
 
 const status = await client.status();
 const plan = await client.mediaPlan();
-await client.createMarker("manual-marker");
+await client.createMarker({
+  label: "manual-marker",
+  source_app: "my-control-tool",
+});
 console.log(status.status.recording_active, plan.ready);
 ```
 

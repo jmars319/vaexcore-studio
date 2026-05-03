@@ -5,6 +5,7 @@ import type {
   CommandStatus,
   ConnectedClientsSnapshot,
   CreatedProfile,
+  CreateMarkerRequestInput,
   HealthResponse,
   Marker,
   MediaPipelinePlan,
@@ -12,6 +13,7 @@ import type {
   MediaPipelineValidation,
   MediaProfileInput,
   ProfilesSnapshot,
+  RecentRecordingsSnapshot,
   StudioStatus,
   StreamDestinationInput,
 } from "@vaexcore/shared-types";
@@ -84,6 +86,10 @@ export class VaexcoreStudioClient {
     return this.request<AuditLogSnapshot>("/audit-log");
   }
 
+  recentRecordings(): Promise<RecentRecordingsSnapshot> {
+    return this.request<RecentRecordingsSnapshot>("/recordings/recent");
+  }
+
   mediaPlan(request?: MediaPipelinePlanRequest): Promise<MediaPipelinePlan> {
     if (!request) {
       return this.request<MediaPipelinePlan>("/media/plan");
@@ -144,10 +150,12 @@ export class VaexcoreStudioClient {
     return this.request<CommandStatus>("/stream/stop", { method: "POST" });
   }
 
-  createMarker(label?: string): Promise<Marker> {
+  createMarker(request?: string | CreateMarkerRequestInput): Promise<Marker> {
     return this.request<Marker>("/marker/create", {
       method: "POST",
-      body: JSON.stringify({ label }),
+      body: JSON.stringify(
+        typeof request === "string" ? { label: request } : (request ?? {}),
+      ),
     });
   }
 

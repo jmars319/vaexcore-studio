@@ -3,6 +3,7 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct ApiResponse<T> {
@@ -85,11 +86,33 @@ pub struct CommandStatus {
     pub status: EngineStatus,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Marker {
     pub id: String,
     pub label: Option<String>,
+    pub source_app: Option<String>,
+    pub source_event_id: Option<String>,
+    pub recording_session_id: Option<String>,
+    pub media_path: Option<String>,
+    pub start_seconds: Option<f64>,
+    pub end_seconds: Option<f64>,
+    pub metadata: Value,
     pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RecordingHistoryEntry {
+    pub session_id: String,
+    pub output_path: String,
+    pub profile_id: String,
+    pub profile_name: String,
+    pub started_at: DateTime<Utc>,
+    pub stopped_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RecentRecordingsSnapshot {
+    pub recordings: Vec<RecordingHistoryEntry>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

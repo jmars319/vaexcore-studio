@@ -184,7 +184,38 @@ export interface CommandStatus {
 export interface Marker {
   id: string;
   label: string | null;
+  source_app: string | null;
+  source_event_id: string | null;
+  recording_session_id: string | null;
+  media_path: string | null;
+  start_seconds: number | null;
+  end_seconds: number | null;
+  metadata: Record<string, unknown>;
   created_at: string;
+}
+
+export interface CreateMarkerRequestInput {
+  label?: string | null;
+  source_app?: string | null;
+  source_event_id?: string | null;
+  recording_session_id?: string | null;
+  media_path?: string | null;
+  start_seconds?: number | null;
+  end_seconds?: number | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface RecordingHistoryEntry {
+  session_id: string;
+  output_path: string;
+  profile_id: string;
+  profile_name: string;
+  started_at: string;
+  stopped_at: string;
+}
+
+export interface RecentRecordingsSnapshot {
+  recordings: RecordingHistoryEntry[];
 }
 
 export interface HealthResponse {

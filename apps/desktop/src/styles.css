@@ -543,7 +543,8 @@ nav {
 }
 
 .table-row strong,
-.table-row span {
+.table-row span,
+.table-row code {
   display: block;
   overflow-wrap: anywhere;
 }

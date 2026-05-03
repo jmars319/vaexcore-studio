@@ -6,6 +6,7 @@ import type {
   CommandStatus,
   ConnectedClientsSnapshot,
   CreatedProfile,
+  CreateMarkerRequestInput,
   CreateProfileRequest,
   DeletedProfile,
   HealthResponse,
@@ -14,6 +15,7 @@ import type {
   MediaProfileInput,
   PreflightSnapshot,
   ProfilesSnapshot,
+  RecentRecordingsSnapshot,
   StudioStatus,
   StreamDestinationInput,
 } from "@vaexcore/shared-types";
@@ -212,6 +214,8 @@ export const StudioApi = {
     apiRequest<ConnectedClientsSnapshot>(config, "/clients"),
   auditLog: (config: RuntimeApiConfig) =>
     apiRequest<AuditLogSnapshot>(config, "/audit-log"),
+  recentRecordings: (config: RuntimeApiConfig) =>
+    apiRequest<RecentRecordingsSnapshot>(config, "/recordings/recent"),
   mediaPlan: (config: RuntimeApiConfig) =>
     apiRequest<MediaPipelinePlan>(config, "/media/plan"),
   profiles: (config: RuntimeApiConfig) =>
@@ -273,10 +277,15 @@ export const StudioApi = {
     }),
   stopStream: (config: RuntimeApiConfig) =>
     apiRequest<CommandStatus>(config, "/stream/stop", { method: "POST" }),
-  createMarker: (config: RuntimeApiConfig, label?: string) =>
+  createMarker: (
+    config: RuntimeApiConfig,
+    request?: string | CreateMarkerRequestInput,
+  ) =>
     apiRequest<Marker>(config, "/marker/create", {
       method: "POST",
-      body: JSON.stringify({ label }),
+      body: JSON.stringify(
+        typeof request === "string" ? { label: request } : (request ?? {}),
+      ),
     }),
 };
 

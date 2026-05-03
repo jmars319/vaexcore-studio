@@ -5,15 +5,16 @@ use std::{
 
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
+use serde_json::{json, Value};
 use vaexcore_core::{
     new_id, now_utc, AppSettings, AuditLogEntry, Marker, MediaProfile, MediaProfileInput,
     PlatformKind, ProfileBundle, ProfileBundleImportResult, ProfilesSnapshot, RecordingContainer,
-    Resolution, SecretRef, SecretStore, SecretStoreError, SensitiveString, StreamDestination,
-    StreamDestinationBundleItem, StreamDestinationInput,
+    RecordingHistoryEntry, RecordingSession, Resolution, SecretRef, SecretStore, SecretStoreError,
+    SensitiveString, StreamDestination, StreamDestinationBundleItem, StreamDestinationInput,
 };
 use vaexcore_platforms::apply_platform_defaults;
 
-const CURRENT_SCHEMA_VERSION: u32 = 2;
+const CURRENT_SCHEMA_VERSION: u32 = 3;
 const AUDIT_LOG_LIMIT: usize = 200;
 
 #[derive(Debug, thiserror::Error)]
@@ -515,10 +516,27 @@ impl ProfileStore {
             .find(|destination| destination.id == id))
     }
 
-    pub fn create_marker(&self, label: Option<String>) -> Result<Marker, StoreError> {
+    pub fn create_marker(
+        &self,
+        label: Option<String>,
+        source_app: Option<String>,
+        source_event_id: Option<String>,
+        recording_session_id: Option<String>,
+        media_path: Option<String>,
+        start_seconds: Option<f64>,
+        end_seconds: Option<f64>,
+        metadata: Option<Value>,
+    ) -> Result<Marker, StoreError> {
         let marker = Marker {
             id: new_id("marker"),
             label,
+            source_app,
+            source_event_id,
+            recording_session_id,
+            media_path,
+            start_seconds,
+            end_seconds,
+            metadata: metadata.unwrap_or_else(|| json!({})),
             created_at: now_utc(),
         };
 
@@ -527,11 +545,106 @@ impl ProfileStore {
             .lock()
             .expect("profile store mutex poisoned");
         connection.execute(
-            "INSERT INTO markers (id, label, created_at) VALUES (?1, ?2, ?3)",
-            params![marker.id, marker.label, marker.created_at.to_rfc3339()],
+            "INSERT INTO markers
+             (id, label, source_app, source_event_id, recording_session_id, media_path, start_seconds, end_seconds, metadata_json, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                marker.id,
+                marker.label,
+                marker.source_app,
+                marker.source_event_id,
+                marker.recording_session_id,
+                marker.media_path,
+                marker.start_seconds,
+                marker.end_seconds,
+                serde_json::to_string(&marker.metadata)?,
+                marker.created_at.to_rfc3339()
+            ],
         )?;
 
         Ok(marker)
+    }
+
+    pub fn record_stopped_recording(
+        &self,
+        session: &RecordingSession,
+    ) -> Result<RecordingHistoryEntry, StoreError> {
+        let entry = RecordingHistoryEntry {
+            session_id: session.id.clone(),
+            output_path: session.output_path.clone(),
+            profile_id: session.profile.id.clone(),
+            profile_name: session.profile.name.clone(),
+            started_at: session.started_at,
+            stopped_at: now_utc(),
+        };
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        connection.execute(
+            "INSERT INTO recording_history
+             (session_id, output_path, profile_id, profile_name, started_at, stopped_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(session_id) DO UPDATE SET
+               output_path = excluded.output_path,
+               profile_id = excluded.profile_id,
+               profile_name = excluded.profile_name,
+               started_at = excluded.started_at,
+               stopped_at = excluded.stopped_at",
+            params![
+                entry.session_id,
+                entry.output_path,
+                entry.profile_id,
+                entry.profile_name,
+                entry.started_at.to_rfc3339(),
+                entry.stopped_at.to_rfc3339()
+            ],
+        )?;
+
+        Ok(entry)
+    }
+
+    pub fn list_recent_recordings(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<RecordingHistoryEntry>, StoreError> {
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        let mut statement = connection.prepare(
+            "SELECT session_id, output_path, profile_id, profile_name, started_at, stopped_at
+             FROM recording_history
+             ORDER BY stopped_at DESC
+             LIMIT ?1",
+        )?;
+
+        let entries = statement
+            .query_map([limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            })?
+            .map(|entry| {
+                let (session_id, output_path, profile_id, profile_name, started_at, stopped_at) =
+                    entry?;
+                Ok(RecordingHistoryEntry {
+                    session_id,
+                    output_path,
+                    profile_id,
+                    profile_name,
+                    started_at: parse_time(&started_at)?,
+                    stopped_at: parse_time(&stopped_at)?,
+                })
+            })
+            .collect::<Result<Vec<_>, StoreError>>()?;
+
+        Ok(entries)
     }
 
     pub fn insert_audit_log_entry(&self, entry: &AuditLogEntry) -> Result<(), StoreError> {
@@ -659,6 +772,9 @@ impl ProfileStore {
         }
         if current_version < 2 {
             apply_migration_2(&connection)?;
+        }
+        if current_version < 3 {
+            apply_migration_3(&connection)?;
         }
 
         Ok(())
@@ -879,6 +995,37 @@ fn apply_migration_2(connection: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+fn apply_migration_3(connection: &Connection) -> Result<(), StoreError> {
+    connection.execute_batch(
+        r#"
+            ALTER TABLE markers ADD COLUMN source_app TEXT;
+            ALTER TABLE markers ADD COLUMN source_event_id TEXT;
+            ALTER TABLE markers ADD COLUMN recording_session_id TEXT;
+            ALTER TABLE markers ADD COLUMN media_path TEXT;
+            ALTER TABLE markers ADD COLUMN start_seconds REAL;
+            ALTER TABLE markers ADD COLUMN end_seconds REAL;
+            ALTER TABLE markers ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}';
+
+            CREATE TABLE IF NOT EXISTS recording_history (
+              session_id TEXT PRIMARY KEY,
+              output_path TEXT NOT NULL,
+              profile_id TEXT NOT NULL,
+              profile_name TEXT NOT NULL,
+              started_at TEXT NOT NULL,
+              stopped_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_recording_history_stopped_at
+            ON recording_history(stopped_at DESC);
+            "#,
+    )?;
+    connection.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+        params![3_u32, now_utc().to_rfc3339()],
+    )?;
+    Ok(())
+}
+
 fn schema_version(connection: &Connection) -> Result<u32, StoreError> {
     Ok(connection
         .query_row(
@@ -1023,6 +1170,59 @@ mod tests {
 
         let entries = store.list_audit_log_entries(10).unwrap();
         assert_eq!(entries, vec![entry]);
+    }
+
+    #[test]
+    fn marker_round_trip_accepts_connected_app_fields() {
+        let store = ProfileStore::open_memory().unwrap();
+
+        let marker = store
+            .create_marker(
+                Some("Pulse keep: opener".to_string()),
+                Some("vaexcore-pulse".to_string()),
+                Some("pulse:session:candidate".to_string()),
+                Some("rec_123".to_string()),
+                Some("/tmp/recording.mkv".to_string()),
+                Some(12.5),
+                Some(24.0),
+                Some(serde_json::json!({ "confidenceBand": "high" })),
+            )
+            .unwrap();
+
+        assert_eq!(marker.label.as_deref(), Some("Pulse keep: opener"));
+        assert_eq!(marker.source_app.as_deref(), Some("vaexcore-pulse"));
+        assert_eq!(marker.recording_session_id.as_deref(), Some("rec_123"));
+        assert_eq!(marker.start_seconds, Some(12.5));
+        assert_eq!(marker.end_seconds, Some(24.0));
+        assert_eq!(marker.metadata["confidenceBand"], "high");
+    }
+
+    #[test]
+    fn recording_history_lists_newest_recordings_first() {
+        let store = ProfileStore::open_memory().unwrap();
+        let profile = store.recording_profile_by_id(None).unwrap().unwrap();
+        let first = RecordingSession {
+            id: "rec_first".to_string(),
+            profile: profile.clone(),
+            output_path: "/tmp/first.mkv".to_string(),
+            started_at: now_utc(),
+        };
+        let second = RecordingSession {
+            id: "rec_second".to_string(),
+            profile,
+            output_path: "/tmp/second.mkv".to_string(),
+            started_at: now_utc(),
+        };
+
+        store.record_stopped_recording(&first).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        store.record_stopped_recording(&second).unwrap();
+
+        let recordings = store.list_recent_recordings(2).unwrap();
+        assert_eq!(recordings.len(), 2);
+        assert_eq!(recordings[0].session_id, "rec_second");
+        assert_eq!(recordings[0].output_path, "/tmp/second.mkv");
+        assert_eq!(recordings[1].session_id, "rec_first");
     }
 
     #[test]

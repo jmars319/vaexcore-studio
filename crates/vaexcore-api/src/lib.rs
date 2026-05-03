@@ -24,14 +24,15 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use vaexcore_core::{
     new_id, now_utc, ApiResponse, AuditLogEntry, AuditLogSnapshot, CommandStatus,
     ConnectedClientsSnapshot, HealthResponse, Marker, MediaPipelinePlan, MediaPipelinePlanRequest,
     MediaPipelineValidation, MediaProfileInput, PipelineIntent, ProfilesSnapshot,
-    StreamDestinationInput, StudioEvent, StudioEventKind, StudioStatus, APP_NAME,
+    RecentRecordingsSnapshot, StreamDestinationInput, StudioEvent, StudioEventKind, StudioStatus,
+    APP_NAME,
 };
 use vaexcore_media::{
     build_dry_run_pipeline_plan, DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor,
@@ -265,6 +266,7 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .route("/status", get(status))
         .route("/clients", get(get_clients))
         .route("/audit-log", get(get_audit_log))
+        .route("/recordings/recent", get(get_recent_recordings))
         .route("/recording/start", post(start_recording))
         .route("/recording/stop", post(stop_recording))
         .route("/stream/start", post(start_stream))
@@ -496,6 +498,13 @@ pub struct StartStreamRequest {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct CreateMarkerRequest {
     pub label: Option<String>,
+    pub source_app: Option<String>,
+    pub source_event_id: Option<String>,
+    pub recording_session_id: Option<String>,
+    pub media_path: Option<String>,
+    pub start_seconds: Option<f64>,
+    pub end_seconds: Option<f64>,
+    pub metadata: Option<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -565,6 +574,16 @@ async fn get_audit_log(
     auth::authorize_headers(&headers, &state.auth)?;
     Ok(Json(ApiResponse::ok(AuditLogSnapshot {
         entries: state.store.list_audit_log_entries(100)?,
+    })))
+}
+
+async fn get_recent_recordings(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<RecentRecordingsSnapshot>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    Ok(Json(ApiResponse::ok(RecentRecordingsSnapshot {
+        recordings: state.store.list_recent_recordings(20)?,
     })))
 }
 
@@ -781,16 +800,24 @@ async fn stop_recording(
     auth::authorize_headers(&headers, &state.auth)?;
 
     match state.engine.stop_recording().await {
-        Ok(transition) => Ok(Json(ApiResponse::ok(CommandStatus {
-            changed: transition.changed,
-            message: if transition.changed {
-                "recording stopped"
-            } else {
-                "recording already stopped"
+        Ok(transition) => {
+            if transition.changed {
+                if let Some(session) = &transition.session {
+                    state.store.record_stopped_recording(session)?;
+                }
             }
-            .to_string(),
-            status: transition.status,
-        }))),
+
+            Ok(Json(ApiResponse::ok(CommandStatus {
+                changed: transition.changed,
+                message: if transition.changed {
+                    "recording stopped"
+                } else {
+                    "recording already stopped"
+                }
+                .to_string(),
+                status: transition.status,
+            })))
+        }
         Err(error) => {
             state.events.emit(StudioEvent::error(error.to_string()));
             Err(error.into())
@@ -865,12 +892,28 @@ async fn create_marker(
 ) -> Result<Json<ApiResponse<Marker>>, ApiError> {
     auth::authorize_headers(&headers, &state.auth)?;
     let request = payload.map(|Json(payload)| payload).unwrap_or_default();
-    let marker = state.store.create_marker(request.label)?;
+    let marker = state.store.create_marker(
+        request.label,
+        request.source_app,
+        request.source_event_id,
+        request.recording_session_id,
+        request.media_path,
+        request.start_seconds,
+        request.end_seconds,
+        request.metadata,
+    )?;
     state.events.emit(StudioEvent::new(
         StudioEventKind::MarkerCreated,
         json!({
             "marker_id": marker.id,
             "label": marker.label,
+            "source_app": marker.source_app,
+            "source_event_id": marker.source_event_id,
+            "recording_session_id": marker.recording_session_id,
+            "media_path": marker.media_path,
+            "start_seconds": marker.start_seconds,
+            "end_seconds": marker.end_seconds,
+            "metadata": marker.metadata,
             "created_at": marker.created_at,
         }),
     ));
