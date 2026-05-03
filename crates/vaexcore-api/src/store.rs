@@ -14,8 +14,23 @@ use vaexcore_core::{
 };
 use vaexcore_platforms::apply_platform_defaults;
 
-const CURRENT_SCHEMA_VERSION: u32 = 3;
+const CURRENT_SCHEMA_VERSION: u32 = 4;
 const AUDIT_LOG_LIMIT: usize = 200;
+const MARKER_LIST_LIMIT: usize = 200;
+
+#[derive(Clone, Debug, Default)]
+pub struct MarkerFilters {
+    pub source_app: Option<String>,
+    pub source_event_id: Option<String>,
+    pub recording_session_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MarkerWriteResult {
+    pub marker: Marker,
+    pub created: bool,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -526,7 +541,22 @@ impl ProfileStore {
         start_seconds: Option<f64>,
         end_seconds: Option<f64>,
         metadata: Option<Value>,
-    ) -> Result<Marker, StoreError> {
+    ) -> Result<MarkerWriteResult, StoreError> {
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+
+        if let (Some(source_app), Some(source_event_id)) = (&source_app, &source_event_id) {
+            if let Some(marker) = marker_by_source_event(&connection, source_app, source_event_id)?
+            {
+                return Ok(MarkerWriteResult {
+                    marker,
+                    created: false,
+                });
+            }
+        }
+
         let marker = Marker {
             id: new_id("marker"),
             label,
@@ -540,21 +570,17 @@ impl ProfileStore {
             created_at: now_utc(),
         };
 
-        let connection = self
-            .connection
-            .lock()
-            .expect("profile store mutex poisoned");
         connection.execute(
             "INSERT INTO markers
              (id, label, source_app, source_event_id, recording_session_id, media_path, start_seconds, end_seconds, metadata_json, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
-                marker.id,
-                marker.label,
-                marker.source_app,
-                marker.source_event_id,
-                marker.recording_session_id,
-                marker.media_path,
+                &marker.id,
+                &marker.label,
+                &marker.source_app,
+                &marker.source_event_id,
+                &marker.recording_session_id,
+                &marker.media_path,
                 marker.start_seconds,
                 marker.end_seconds,
                 serde_json::to_string(&marker.metadata)?,
@@ -562,7 +588,40 @@ impl ProfileStore {
             ],
         )?;
 
-        Ok(marker)
+        Ok(MarkerWriteResult {
+            marker,
+            created: true,
+        })
+    }
+
+    pub fn list_markers(&self, filters: MarkerFilters) -> Result<Vec<Marker>, StoreError> {
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        let limit = filters.limit.unwrap_or(100).clamp(1, MARKER_LIST_LIMIT);
+        let mut statement = connection.prepare(
+            "SELECT id, label, source_app, source_event_id, recording_session_id, media_path,
+                    start_seconds, end_seconds, metadata_json, created_at
+             FROM markers
+             WHERE (?1 IS NULL OR source_app = ?1)
+               AND (?2 IS NULL OR source_event_id = ?2)
+               AND (?3 IS NULL OR recording_session_id = ?3)
+             ORDER BY created_at DESC
+             LIMIT ?4",
+        )?;
+
+        let rows = statement.query_map(
+            params![
+                filters.source_app,
+                filters.source_event_id,
+                filters.recording_session_id,
+                limit as u32,
+            ],
+            marker_record_from_row,
+        )?;
+
+        rows.map(|row| marker_from_record(row?)).collect()
     }
 
     pub fn record_stopped_recording(
@@ -775,6 +834,9 @@ impl ProfileStore {
         }
         if current_version < 3 {
             apply_migration_3(&connection)?;
+        }
+        if current_version < 4 {
+            apply_migration_4(&connection)?;
         }
 
         Ok(())
@@ -1026,6 +1088,26 @@ fn apply_migration_3(connection: &Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+fn apply_migration_4(connection: &Connection) -> Result<(), StoreError> {
+    connection.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_markers_source_event
+            ON markers(source_app, source_event_id);
+
+            CREATE INDEX IF NOT EXISTS idx_markers_recording_session
+            ON markers(recording_session_id, created_at DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_markers_created_at
+            ON markers(created_at DESC);
+            "#,
+    )?;
+    connection.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+        params![4_u32, now_utc().to_rfc3339()],
+    )?;
+    Ok(())
+}
+
 fn schema_version(connection: &Connection) -> Result<u32, StoreError> {
     Ok(connection
         .query_row(
@@ -1096,6 +1178,83 @@ fn media_profile_input_from_model(profile: MediaProfile) -> MediaProfileInput {
         bitrate_kbps: profile.bitrate_kbps,
         encoder_preference: profile.encoder_preference,
     }
+}
+
+type MarkerRecord = (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<f64>,
+    Option<f64>,
+    String,
+    String,
+);
+
+fn marker_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MarkerRecord> {
+    Ok((
+        row.get::<_, String>(0)?,
+        row.get::<_, Option<String>>(1)?,
+        row.get::<_, Option<String>>(2)?,
+        row.get::<_, Option<String>>(3)?,
+        row.get::<_, Option<String>>(4)?,
+        row.get::<_, Option<String>>(5)?,
+        row.get::<_, Option<f64>>(6)?,
+        row.get::<_, Option<f64>>(7)?,
+        row.get::<_, String>(8)?,
+        row.get::<_, String>(9)?,
+    ))
+}
+
+fn marker_from_record(record: MarkerRecord) -> Result<Marker, StoreError> {
+    let (
+        id,
+        label,
+        source_app,
+        source_event_id,
+        recording_session_id,
+        media_path,
+        start_seconds,
+        end_seconds,
+        metadata_json,
+        created_at,
+    ) = record;
+
+    Ok(Marker {
+        id,
+        label,
+        source_app,
+        source_event_id,
+        recording_session_id,
+        media_path,
+        start_seconds,
+        end_seconds,
+        metadata: serde_json::from_str(&metadata_json)?,
+        created_at: parse_time(&created_at)?,
+    })
+}
+
+fn marker_by_source_event(
+    connection: &Connection,
+    source_app: &str,
+    source_event_id: &str,
+) -> Result<Option<Marker>, StoreError> {
+    let record = connection
+        .query_row(
+            "SELECT id, label, source_app, source_event_id, recording_session_id, media_path,
+                    start_seconds, end_seconds, metadata_json, created_at
+             FROM markers
+             WHERE source_app = ?1 AND source_event_id = ?2
+             ORDER BY created_at DESC
+             LIMIT 1",
+            params![source_app, source_event_id],
+            marker_record_from_row,
+        )
+        .optional()?;
+
+    record.map(marker_from_record).transpose()
 }
 
 fn parse_time(value: &str) -> Result<DateTime<Utc>, StoreError> {
@@ -1176,7 +1335,7 @@ mod tests {
     fn marker_round_trip_accepts_connected_app_fields() {
         let store = ProfileStore::open_memory().unwrap();
 
-        let marker = store
+        let result = store
             .create_marker(
                 Some("Pulse keep: opener".to_string()),
                 Some("vaexcore-pulse".to_string()),
@@ -1188,13 +1347,83 @@ mod tests {
                 Some(serde_json::json!({ "confidenceBand": "high" })),
             )
             .unwrap();
+        let marker = result.marker;
 
+        assert!(result.created);
         assert_eq!(marker.label.as_deref(), Some("Pulse keep: opener"));
         assert_eq!(marker.source_app.as_deref(), Some("vaexcore-pulse"));
         assert_eq!(marker.recording_session_id.as_deref(), Some("rec_123"));
         assert_eq!(marker.start_seconds, Some(12.5));
         assert_eq!(marker.end_seconds, Some(24.0));
         assert_eq!(marker.metadata["confidenceBand"], "high");
+
+        let duplicate = store
+            .create_marker(
+                Some("Pulse keep: duplicate".to_string()),
+                Some("vaexcore-pulse".to_string()),
+                Some("pulse:session:candidate".to_string()),
+                Some("rec_123".to_string()),
+                Some("/tmp/recording.mkv".to_string()),
+                Some(12.5),
+                Some(24.0),
+                Some(serde_json::json!({ "confidenceBand": "low" })),
+            )
+            .unwrap();
+
+        assert!(!duplicate.created);
+        assert_eq!(duplicate.marker.id, marker.id);
+        assert_eq!(
+            duplicate.marker.label.as_deref(),
+            Some("Pulse keep: opener")
+        );
+    }
+
+    #[test]
+    fn marker_list_filters_by_source_and_recording() {
+        let store = ProfileStore::open_memory().unwrap();
+
+        let pulse_marker = store
+            .create_marker(
+                Some("Pulse keep".to_string()),
+                Some("vaexcore-pulse".to_string()),
+                Some("pulse:one".to_string()),
+                Some("rec_123".to_string()),
+                Some("/tmp/recording.mkv".to_string()),
+                Some(1.0),
+                Some(2.0),
+                None,
+            )
+            .unwrap()
+            .marker;
+        store
+            .create_marker(
+                Some("Console marker".to_string()),
+                Some("vaexcore-console".to_string()),
+                Some("chat:one".to_string()),
+                Some("rec_123".to_string()),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+
+        let pulse_markers = store
+            .list_markers(MarkerFilters {
+                source_app: Some("vaexcore-pulse".to_string()),
+                ..MarkerFilters::default()
+            })
+            .unwrap();
+        assert_eq!(pulse_markers, vec![pulse_marker]);
+
+        let recording_markers = store
+            .list_markers(MarkerFilters {
+                recording_session_id: Some("rec_123".to_string()),
+                limit: Some(10),
+                ..MarkerFilters::default()
+            })
+            .unwrap();
+        assert_eq!(recording_markers.len(), 2);
     }
 
     #[test]

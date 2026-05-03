@@ -17,7 +17,9 @@ const plan = await client.mediaPlan();
 await client.createMarker({
   label: "manual-marker",
   source_app: "my-control-tool",
+  source_event_id: "my-control-tool:event-123",
 });
+const markers = await client.markers({ sourceApp: "my-control-tool" });
 console.log(status.status.recording_active, plan.ready);
 ```
 

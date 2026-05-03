@@ -29,6 +29,7 @@ import type {
   CaptureSourceSelection,
   ConnectedClient,
   HealthResponse,
+  Marker,
   MediaPipelinePlan,
   MediaProfile,
   MediaProfileInput,
@@ -161,6 +162,7 @@ function App() {
   const [clients, setClients] = useState<ConnectedClient[]>([]);
   const [auditEntries, setAuditEntries] = useState<AuditLogEntry[]>([]);
   const [recentRecordings, setRecentRecordings] = useState<RecordingHistoryEntry[]>([]);
+  const [recentMarkers, setRecentMarkers] = useState<Marker[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>();
   const [selectedDestinationId, setSelectedDestinationId] = useState<string | undefined>();
@@ -247,6 +249,7 @@ function App() {
           nextClients,
           nextAuditLog,
           nextRecentRecordings,
+          nextMarkers,
           nextMediaRunnerInfo,
           nextPipelinePlan,
         ] = await Promise.all([
@@ -256,6 +259,7 @@ function App() {
           StudioApi.clients(runtimeConfig),
           StudioApi.auditLog(runtimeConfig),
           StudioApi.recentRecordings(runtimeConfig),
+          StudioApi.markers(runtimeConfig, { limit: 20 }),
           loadMediaRunnerInfo(),
           StudioApi.mediaPlan(runtimeConfig),
         ]);
@@ -266,6 +270,7 @@ function App() {
         setClients(nextClients.clients);
         setAuditEntries(nextAuditLog.entries);
         setRecentRecordings(nextRecentRecordings.recordings);
+        setRecentMarkers(nextMarkers.markers);
         setMediaRunnerInfo(nextMediaRunnerInfo);
         setPipelinePlan(nextPipelinePlan);
         loadPreflightSnapshot()
@@ -324,6 +329,11 @@ function App() {
       if (event.type === "recording.stopped") {
         StudioApi.recentRecordings(config)
           .then((snapshot) => setRecentRecordings(snapshot.recordings))
+          .catch(() => undefined);
+      }
+      if (event.type === "marker.created") {
+        StudioApi.markers(config, { limit: 20 })
+          .then((snapshot) => setRecentMarkers(snapshot.markers))
           .catch(() => undefined);
       }
     };
@@ -694,6 +704,7 @@ function App() {
             config={config}
             engine={activeStatus?.engine ?? "starting"}
             mediaRunnerInfo={mediaRunnerInfo}
+            recentMarkers={recentMarkers}
             recentRecordings={recentRecordings}
           />
         );
@@ -718,6 +729,7 @@ function App() {
     preflight,
     profileForm,
     profiles,
+    recentMarkers,
     recentRecordings,
     recordingPath,
     section,
@@ -1383,6 +1395,7 @@ function ConnectedAppsPage(props: {
   config: RuntimeApiConfig | null;
   engine: string;
   mediaRunnerInfo: MediaRunnerInfo | null;
+  recentMarkers: Marker[];
   recentRecordings: RecordingHistoryEntry[];
 }) {
   const apiUrl = props.config?.apiUrl ?? "http://127.0.0.1:51287";
@@ -1466,8 +1479,51 @@ function ConnectedAppsPage(props: {
           </div>
         )}
       </section>
+      <section className="panel">
+        <PanelTitle title="Recent Markers" />
+        {props.recentMarkers.length === 0 ? (
+          <div className="empty">No markers yet</div>
+        ) : (
+          <div className="table">
+            {props.recentMarkers.map((marker) => (
+              <div className="table-row" key={marker.id}>
+                <div>
+                  <strong>{marker.label ?? "Untitled marker"}</strong>
+                  <span>{marker.source_event_id ?? marker.id}</span>
+                  {marker.media_path && <code>{marker.media_path}</code>}
+                </div>
+                <Pill tone={markerSourceTone(marker.source_app)}>
+                  {markerSourceLabel(marker.source_app)}
+                </Pill>
+                <Pill tone="muted">
+                  {marker.start_seconds !== null && marker.end_seconds !== null
+                    ? `${marker.start_seconds.toFixed(1)}-${marker.end_seconds.toFixed(1)}s`
+                    : new Date(marker.created_at).toLocaleTimeString()}
+                </Pill>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
+}
+
+function markerSourceLabel(sourceApp: string | null): string {
+  if (sourceApp === "vaexcore-pulse") return "Pulse";
+  if (sourceApp === "vaexcore-console") return "Console";
+  if (sourceApp) return sourceApp;
+  return "Studio";
+}
+
+function markerSourceTone(
+  sourceApp: string | null,
+): "green" | "red" | "amber" | "muted" {
+  if (sourceApp === "vaexcore-pulse" || sourceApp === "vaexcore-console") {
+    return "green";
+  }
+  if (sourceApp) return "amber";
+  return "muted";
 }
 
 function connectedClientName(client: ConnectedClient): string {

@@ -29,10 +29,10 @@ use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use vaexcore_core::{
     new_id, now_utc, ApiResponse, AuditLogEntry, AuditLogSnapshot, CommandStatus,
-    ConnectedClientsSnapshot, HealthResponse, Marker, MediaPipelinePlan, MediaPipelinePlanRequest,
-    MediaPipelineValidation, MediaProfileInput, PipelineIntent, ProfilesSnapshot,
-    RecentRecordingsSnapshot, StreamDestinationInput, StudioEvent, StudioEventKind, StudioStatus,
-    APP_NAME,
+    ConnectedClientsSnapshot, HealthResponse, Marker, MarkersSnapshot, MediaPipelinePlan,
+    MediaPipelinePlanRequest, MediaPipelineValidation, MediaProfileInput, PipelineIntent,
+    ProfilesSnapshot, RecentRecordingsSnapshot, StreamDestinationInput, StudioEvent,
+    StudioEventKind, StudioStatus, APP_NAME,
 };
 use vaexcore_media::{
     build_dry_run_pipeline_plan, DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor,
@@ -42,6 +42,7 @@ use vaexcore_media::{
 pub use auth::{AuthConfig, SharedAuthConfig};
 use client_registry::{ClientRegistry, ClientSeen};
 pub use event_bus::EventBus;
+use store::MarkerFilters;
 pub use store::{ProfileStore, StoreError};
 
 const REQUEST_ID_HEADER: &str = "x-vaexcore-request-id";
@@ -279,6 +280,7 @@ pub fn router(state: Arc<ApiState>) -> Router {
             "/media/validate",
             get(default_pipeline_validation).post(post_pipeline_validation),
         )
+        .route("/markers", get(get_markers))
         .route("/marker/create", post(create_marker))
         .route("/profiles", get(get_profiles).post(post_profiles))
         .route(
@@ -408,6 +410,12 @@ fn header_string(headers: &HeaderMap, name: &str, max_len: usize) -> Option<Stri
         .map(|value| value.chars().take(max_len).collect())
 }
 
+fn normalize_optional_query(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 fn compact_user_agent(value: &str) -> String {
     value
         .split_whitespace()
@@ -505,6 +513,14 @@ pub struct CreateMarkerRequest {
     pub start_seconds: Option<f64>,
     pub end_seconds: Option<f64>,
     pub metadata: Option<Value>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct MarkerQuery {
+    pub source_app: Option<String>,
+    pub source_event_id: Option<String>,
+    pub recording_session_id: Option<String>,
+    pub limit: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -885,6 +901,22 @@ async fn stop_stream(
     }
 }
 
+async fn get_markers(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Query(query): Query<MarkerQuery>,
+) -> Result<Json<ApiResponse<MarkersSnapshot>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    Ok(Json(ApiResponse::ok(MarkersSnapshot {
+        markers: state.store.list_markers(MarkerFilters {
+            source_app: normalize_optional_query(query.source_app),
+            source_event_id: normalize_optional_query(query.source_event_id),
+            recording_session_id: normalize_optional_query(query.recording_session_id),
+            limit: query.limit,
+        })?,
+    })))
+}
+
 async fn create_marker(
     State(state): State<Arc<ApiState>>,
     headers: HeaderMap,
@@ -892,7 +924,7 @@ async fn create_marker(
 ) -> Result<Json<ApiResponse<Marker>>, ApiError> {
     auth::authorize_headers(&headers, &state.auth)?;
     let request = payload.map(|Json(payload)| payload).unwrap_or_default();
-    let marker = state.store.create_marker(
+    let result = state.store.create_marker(
         request.label,
         request.source_app,
         request.source_event_id,
@@ -902,21 +934,24 @@ async fn create_marker(
         request.end_seconds,
         request.metadata,
     )?;
-    state.events.emit(StudioEvent::new(
-        StudioEventKind::MarkerCreated,
-        json!({
-            "marker_id": marker.id,
-            "label": marker.label,
-            "source_app": marker.source_app,
-            "source_event_id": marker.source_event_id,
-            "recording_session_id": marker.recording_session_id,
-            "media_path": marker.media_path,
-            "start_seconds": marker.start_seconds,
-            "end_seconds": marker.end_seconds,
-            "metadata": marker.metadata,
-            "created_at": marker.created_at,
-        }),
-    ));
+    let marker = result.marker;
+    if result.created {
+        state.events.emit(StudioEvent::new(
+            StudioEventKind::MarkerCreated,
+            json!({
+                "marker_id": marker.id,
+                "label": marker.label,
+                "source_app": marker.source_app,
+                "source_event_id": marker.source_event_id,
+                "recording_session_id": marker.recording_session_id,
+                "media_path": marker.media_path,
+                "start_seconds": marker.start_seconds,
+                "end_seconds": marker.end_seconds,
+                "metadata": marker.metadata,
+                "created_at": marker.created_at,
+            }),
+        ));
+    }
 
     Ok(Json(ApiResponse::ok(marker)))
 }
@@ -1381,6 +1416,70 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = response_body(response).await;
         assert_eq!(body["data"]["status"]["stream_active"], false);
+    }
+
+    #[tokio::test]
+    async fn marker_create_is_idempotent_and_listable() {
+        let app = test_app();
+        let marker_body = json!({
+            "label": "Pulse keep: opener",
+            "source_app": "vaexcore-pulse",
+            "source_event_id": "pulse:session:candidate",
+            "recording_session_id": "rec_123",
+            "media_path": "/tmp/recording.mkv",
+            "start_seconds": 12.5,
+            "end_seconds": 24.0,
+            "metadata": {
+                "confidenceBand": "high"
+            }
+        });
+
+        let (status, first) = request_json(
+            app.clone(),
+            "POST",
+            "/marker/create".to_string(),
+            Some(marker_body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let first_id = first["data"]["id"].as_str().unwrap().to_string();
+
+        let (status, duplicate) = request_json(
+            app.clone(),
+            "POST",
+            "/marker/create".to_string(),
+            Some(json!({
+                "label": "Pulse keep: duplicate",
+                "source_app": "vaexcore-pulse",
+                "source_event_id": "pulse:session:candidate",
+                "recording_session_id": "rec_123"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(duplicate["data"]["id"].as_str().unwrap(), first_id);
+        assert_eq!(duplicate["data"]["label"], "Pulse keep: opener");
+
+        let (status, markers) = request_json(
+            app.clone(),
+            "GET",
+            "/markers?source_app=vaexcore-pulse".to_string(),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(markers["data"]["markers"].as_array().unwrap().len(), 1);
+        assert_eq!(markers["data"]["markers"][0]["id"], first_id);
+
+        let (status, status_body) = request_json(app, "GET", "/status".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let marker_events = status_body["data"]["recent_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["type"] == "marker.created")
+            .count();
+        assert_eq!(marker_events, 1);
     }
 
     #[tokio::test]

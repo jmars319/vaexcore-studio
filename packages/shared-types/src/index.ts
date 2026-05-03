@@ -194,6 +194,10 @@ export interface Marker {
   created_at: string;
 }
 
+export interface MarkersSnapshot {
+  markers: Marker[];
+}
+
 export interface CreateMarkerRequestInput {
   label?: string | null;
   source_app?: string | null;

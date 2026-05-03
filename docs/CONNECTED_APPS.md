@@ -88,4 +88,13 @@ Apps should send durable highlights, moments, or bot annotations back through
 ```
 
 `source_app` should be stable across versions. `source_event_id` should be
-stable for a source result so Studio can later de-duplicate or reconcile markers.
+stable for a source result. Studio uses `source_app + source_event_id` as the
+idempotency key and returns the existing marker on repeated submissions.
+
+Apps can verify marker handoff through `GET /markers`:
+
+```text
+GET /markers?source_app=vaexcore-pulse
+GET /markers?recording_session_id=rec_...
+GET /markers?source_event_id=pulse:session:candidate
+```

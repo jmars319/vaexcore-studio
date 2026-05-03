@@ -101,6 +101,11 @@ pub struct Marker {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct MarkersSnapshot {
+    pub markers: Vec<Marker>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RecordingHistoryEntry {
     pub session_id: String,
     pub output_path: String,

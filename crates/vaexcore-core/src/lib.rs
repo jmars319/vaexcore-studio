@@ -22,8 +22,8 @@ pub use profiles::{
 };
 pub use responses::{
     ApiErrorBody, ApiResponse, AuditLogEntry, AuditLogSnapshot, CommandStatus, ConnectedClient,
-    ConnectedClientsSnapshot, HealthResponse, Marker, PreflightCheck, PreflightSnapshot,
-    PreflightStatus, ProfileBundle, ProfileBundleImportResult, ProfilesSnapshot,
+    ConnectedClientsSnapshot, HealthResponse, Marker, MarkersSnapshot, PreflightCheck,
+    PreflightSnapshot, PreflightStatus, ProfileBundle, ProfileBundleImportResult, ProfilesSnapshot,
     RecentRecordingsSnapshot, RecordingHistoryEntry, StreamDestinationBundleItem, StudioStatus,
 };
 pub use security::{SecretRef, SecretStore, SecretStoreError, SensitiveString};

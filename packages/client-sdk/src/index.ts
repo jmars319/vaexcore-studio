@@ -8,6 +8,7 @@ import type {
   CreateMarkerRequestInput,
   HealthResponse,
   Marker,
+  MarkersSnapshot,
   MediaPipelinePlan,
   MediaPipelinePlanRequest,
   MediaPipelineValidation,
@@ -30,6 +31,13 @@ export interface EventSocketUrlOptions {
   clientId?: string;
   clientName?: string;
   includeToken?: boolean;
+  limit?: number;
+}
+
+export interface MarkerListOptions {
+  sourceApp?: string;
+  sourceEventId?: string;
+  recordingSessionId?: string;
   limit?: number;
 }
 
@@ -88,6 +96,10 @@ export class VaexcoreStudioClient {
 
   recentRecordings(): Promise<RecentRecordingsSnapshot> {
     return this.request<RecentRecordingsSnapshot>("/recordings/recent");
+  }
+
+  markers(options?: MarkerListOptions): Promise<MarkersSnapshot> {
+    return this.request<MarkersSnapshot>(markerListPath(options));
   }
 
   mediaPlan(request?: MediaPipelinePlanRequest): Promise<MediaPipelinePlan> {
@@ -228,4 +240,16 @@ async function parseResponse<T>(response: Response, path: string): Promise<ApiRe
 
 function normalizeApiUrl(apiUrl: string): string {
   return apiUrl.replace(/\/+$/, "");
+}
+
+function markerListPath(options: MarkerListOptions = {}): string {
+  const params = new URLSearchParams();
+  if (options.sourceApp) params.set("source_app", options.sourceApp);
+  if (options.sourceEventId) params.set("source_event_id", options.sourceEventId);
+  if (options.recordingSessionId) {
+    params.set("recording_session_id", options.recordingSessionId);
+  }
+  if (typeof options.limit === "number") params.set("limit", String(options.limit));
+  const query = params.toString();
+  return query ? `/markers?${query}` : "/markers";
 }

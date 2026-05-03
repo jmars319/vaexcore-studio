@@ -155,6 +155,23 @@ Returns completed recording sessions, newest first:
 }
 ```
 
+### `GET /markers`
+
+Returns recent markers created by Studio or connected apps:
+
+```json
+{
+  "markers": []
+}
+```
+
+Supported query parameters:
+
+- `source_app`
+- `source_event_id`
+- `recording_session_id`
+- `limit`
+
 ### `GET /media/plan`
 
 Returns the current dry-run pipeline plan using the saved capture sources, first recording profile, and enabled stream destinations.
@@ -245,7 +262,7 @@ Body:
 }
 ```
 
-All fields except `label` are optional. External apps should set `source_app` to a stable app identifier and `source_event_id` to an idempotency-friendly event reference when one exists. Emits `marker.created` with the saved marker payload.
+All fields except `label` are optional. External apps should set `source_app` to a stable app identifier and `source_event_id` to an idempotency-friendly event reference when one exists. If a marker already exists for the same `source_app + source_event_id`, Studio returns the existing marker instead of creating a duplicate. New markers emit `marker.created` with the saved marker payload.
 
 ### `GET /profiles`
 

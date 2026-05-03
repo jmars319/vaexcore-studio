@@ -11,6 +11,7 @@ import type {
   DeletedProfile,
   HealthResponse,
   Marker,
+  MarkersSnapshot,
   MediaPipelinePlan,
   MediaProfileInput,
   PreflightSnapshot,
@@ -67,6 +68,13 @@ export interface PermissionStatus {
   service: string;
   status: "authorized" | "denied" | "restricted" | "not_determined" | "unknown";
   detail: string;
+}
+
+export interface MarkerListOptions {
+  sourceApp?: string;
+  sourceEventId?: string;
+  recordingSessionId?: string;
+  limit?: number;
 }
 
 const UI_CLIENT_ID = "vaexcore-studio-ui";
@@ -216,6 +224,8 @@ export const StudioApi = {
     apiRequest<AuditLogSnapshot>(config, "/audit-log"),
   recentRecordings: (config: RuntimeApiConfig) =>
     apiRequest<RecentRecordingsSnapshot>(config, "/recordings/recent"),
+  markers: (config: RuntimeApiConfig, options?: MarkerListOptions) =>
+    apiRequest<MarkersSnapshot>(config, markerListPath(options)),
   mediaPlan: (config: RuntimeApiConfig) =>
     apiRequest<MediaPipelinePlan>(config, "/media/plan"),
   profiles: (config: RuntimeApiConfig) =>
@@ -288,6 +298,18 @@ export const StudioApi = {
       ),
     }),
 };
+
+function markerListPath(options: MarkerListOptions = {}): string {
+  const params = new URLSearchParams();
+  if (options.sourceApp) params.set("source_app", options.sourceApp);
+  if (options.sourceEventId) params.set("source_event_id", options.sourceEventId);
+  if (options.recordingSessionId) {
+    params.set("recording_session_id", options.recordingSessionId);
+  }
+  if (typeof options.limit === "number") params.set("limit", String(options.limit));
+  const query = params.toString();
+  return query ? `/markers?${query}` : "/markers";
+}
 
 export function eventSocketUrl(config: RuntimeApiConfig): string {
   const url = new URL(config.wsUrl);
