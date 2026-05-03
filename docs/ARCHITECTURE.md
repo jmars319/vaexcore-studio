@@ -14,10 +14,13 @@ The Tauri desktop process starts:
 
 1. React UI in the WebView.
 2. Rust local API on `127.0.0.1:51287`.
-3. A supervised bundled `media-runner` sidecar when available.
-4. `DryRunMediaEngine` in-process as the fallback and MVP simulation layer.
+3. App-data discovery and media planning files.
+4. A supervised bundled `media-runner` sidecar when available.
+5. `DryRunMediaEngine` in-process as the fallback and MVP simulation layer.
 
 The UI does not depend on the sidecar being present. If `media-runner` is missing or unhealthy, the app remains usable through dry-run media execution. Release builds stage `media-runner` as a Tauri external binary.
+
+The local API refreshes `pipeline-plan.json` and `pipeline-config.json` when the default media plan is requested or profile data changes. The sidecar is launched with the generated config path so future media backends can move from dry-run planning to real execution without changing the UI contract.
 
 ## Crate Responsibilities
 
@@ -46,6 +49,7 @@ Local API:
 - Recent client registry
 - Dry-run engine wiring
 - Optional sidecar supervision, command transport, and health events
+- Pipeline plan/config file contract
 
 ### `vaexcore-media`
 

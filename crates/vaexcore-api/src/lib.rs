@@ -3,7 +3,13 @@ mod client_registry;
 mod event_bus;
 mod store;
 
-use std::{future::Future, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    future::Future,
+    net::SocketAddr,
+    path::{Path as FsPath, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use axum::{
     body::Body,
@@ -48,6 +54,8 @@ pub struct ApiServerConfig {
     pub database_path: PathBuf,
     pub auth: SharedAuthConfig,
     pub media_runner: Option<MediaRunnerSupervisor>,
+    pub pipeline_plan_path: Option<PathBuf>,
+    pub pipeline_config_path: Option<PathBuf>,
 }
 
 pub struct ApiState {
@@ -57,6 +65,8 @@ pub struct ApiState {
     pub events: EventBus,
     pub clients: ClientRegistry,
     pub media_runner: Option<MediaRunnerSupervisor>,
+    pub pipeline_plan_path: Option<PathBuf>,
+    pub pipeline_config_path: Option<PathBuf>,
 }
 
 impl ApiState {
@@ -78,6 +88,8 @@ impl ApiState {
             events,
             clients: ClientRegistry::new(),
             media_runner: config.media_runner.clone(),
+            pipeline_plan_path: config.pipeline_plan_path.clone(),
+            pipeline_config_path: config.pipeline_config_path.clone(),
         });
 
         state
@@ -107,6 +119,8 @@ impl ApiState {
             events,
             clients: ClientRegistry::new(),
             media_runner: None,
+            pipeline_plan_path: None,
+            pipeline_config_path: None,
         });
 
         state
@@ -227,6 +241,9 @@ where
     let local_addr = listener.local_addr()?;
     config.bind_addr = local_addr;
     let state = ApiState::new(&config)?;
+    if let Ok(request) = default_pipeline_plan_request(&state) {
+        let _ = plan_pipeline(&state, request).await;
+    }
 
     let auth_snapshot = config.auth.get();
     tracing::info!(
@@ -606,6 +623,7 @@ async fn post_profiles(
             CreatedProfile::StreamDestination(state.store.insert_stream_destination(input)?)
         }
     };
+    refresh_default_pipeline_contract(&state).await;
 
     Ok(Json(ApiResponse::ok(created)))
 }
@@ -627,6 +645,7 @@ async fn put_recording_profile(
                 "recording profile not found",
             )
         })?;
+    refresh_default_pipeline_contract(&state).await;
 
     Ok(Json(ApiResponse::ok(CreatedProfile::RecordingProfile(
         profile,
@@ -659,6 +678,7 @@ async fn delete_recording_profile(
             "recording profile not found",
         ));
     }
+    refresh_default_pipeline_contract(&state).await;
 
     Ok(Json(ApiResponse::ok(DeletedProfile { id, deleted: true })))
 }
@@ -680,6 +700,7 @@ async fn put_stream_destination(
                 "stream destination not found",
             )
         })?;
+    refresh_default_pipeline_contract(&state).await;
 
     Ok(Json(ApiResponse::ok(CreatedProfile::StreamDestination(
         destination,
@@ -712,6 +733,7 @@ async fn delete_stream_destination(
             "stream destination not found",
         ));
     }
+    refresh_default_pipeline_contract(&state).await;
 
     Ok(Json(ApiResponse::ok(DeletedProfile { id, deleted: true })))
 }
@@ -970,20 +992,77 @@ fn default_pipeline_plan_request(state: &ApiState) -> Result<MediaPipelinePlanRe
 }
 
 async fn plan_pipeline(state: &ApiState, request: MediaPipelinePlanRequest) -> MediaPipelinePlan {
-    if let Some(runner) = &state.media_runner {
+    let plan = if let Some(runner) = &state.media_runner {
         match runner.plan_pipeline(request.clone()).await {
-            Ok(plan) => return plan,
+            Ok(plan) => plan,
             Err(error) => {
                 let mut plan = build_dry_run_pipeline_plan(request);
                 plan.warnings.push(format!(
                     "media runner plan unavailable; using local dry-run planner: {error}"
                 ));
-                return plan;
+                plan
             }
         }
+    } else {
+        build_dry_run_pipeline_plan(request)
+    };
+
+    if let Err(error) = write_pipeline_files(state, &plan) {
+        tracing::warn!(%error, "failed to write pipeline contract files");
     }
 
-    build_dry_run_pipeline_plan(request)
+    plan
+}
+
+async fn refresh_default_pipeline_contract(state: &ApiState) {
+    match default_pipeline_plan_request(state) {
+        Ok(request) => {
+            let _ = plan_pipeline(state, request).await;
+        }
+        Err(error) => tracing::warn!(%error, "failed to refresh default pipeline contract"),
+    }
+}
+
+#[derive(Serialize)]
+struct RunnerPipelineConfig<'a> {
+    dry_run: bool,
+    status_addr: Option<SocketAddr>,
+    pipeline_name: &'a str,
+    pipeline: &'a vaexcore_core::MediaPipelineConfig,
+}
+
+fn write_pipeline_files(state: &ApiState, plan: &MediaPipelinePlan) -> anyhow::Result<()> {
+    if let Some(path) = &state.pipeline_plan_path {
+        write_json_file(path, plan)?;
+    }
+
+    if let Some(path) = &state.pipeline_config_path {
+        write_json_file(
+            path,
+            &RunnerPipelineConfig {
+                dry_run: plan.config.dry_run,
+                status_addr: state
+                    .media_runner
+                    .as_ref()
+                    .map(MediaRunnerSupervisor::status_addr),
+                pipeline_name: &plan.pipeline_name,
+                pipeline: &plan.config,
+            },
+        )?;
+    }
+
+    Ok(())
+}
+
+fn write_json_file<T>(path: &FsPath, value: &T) -> anyhow::Result<()>
+where
+    T: Serialize,
+{
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, serde_json::to_vec_pretty(value)?)?;
+    Ok(())
 }
 
 pub fn generate_token() -> String {
@@ -1270,6 +1349,48 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["data"]["dry_run"], true);
         assert!(body["data"]["steps"].as_array().unwrap().len() >= 2);
+    }
+
+    #[tokio::test]
+    async fn default_pipeline_plan_writes_contract_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let database_path = temp.path().join("studio.sqlite");
+        let plan_path = temp.path().join("pipeline-plan.json");
+        let config_path = temp.path().join("pipeline-config.json");
+        let state = ApiState::new(&ApiServerConfig {
+            bind_addr: default_bind_addr(),
+            database_path,
+            auth: SharedAuthConfig::new(AuthConfig {
+                token: Some("test-token".to_string()),
+                dev_mode: true,
+            }),
+            media_runner: None,
+            pipeline_plan_path: Some(plan_path.clone()),
+            pipeline_config_path: Some(config_path.clone()),
+        })
+        .unwrap();
+        state
+            .store
+            .initialize_app_settings(vaexcore_core::AppSettings::default())
+            .unwrap();
+
+        let request = default_pipeline_plan_request(&state).unwrap();
+        let plan = plan_pipeline(&state, request).await;
+
+        let plan_json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&plan_path).unwrap()).unwrap();
+        let config_json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+
+        assert_eq!(plan_json["pipeline_name"], plan.pipeline_name);
+        assert_eq!(config_json["pipeline_name"], plan.pipeline_name);
+        assert_eq!(config_json["dry_run"], true);
+        assert_eq!(config_json["pipeline"]["version"], 1);
+        assert!(config_json["pipeline"]["capture_sources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|source| source["id"].as_str() == Some("display:main")));
     }
 
     #[tokio::test]

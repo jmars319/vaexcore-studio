@@ -22,6 +22,17 @@ The shared contracts also define:
 
 These contracts let the UI, local API, sidecar, and future external tools agree on source selection and pipeline readiness before any real capture backend is started.
 
+## macOS Source Inventory
+
+The desktop backend now enumerates macOS capture inputs before a real capture backend is selected:
+
+- displays through CoreGraphics, preserving `display:main` for the default main display selection
+- visible windows through CoreGraphics window metadata when Screen Recording access allows useful names
+- cameras through `system_profiler SPCameraDataType`
+- microphone-capable CoreAudio devices through `system_profiler SPAudioDataType`
+
+Camera and microphone preflight checks use AVFoundation authorization status. The Settings window exposes privacy shortcuts for Camera, Microphone, and Screen Recording so operators can resolve blocked permissions before starting a real pipeline.
+
 Start and stop operations are idempotent:
 
 - Starting an already active recording returns the existing session.
@@ -75,6 +86,13 @@ The placeholder compiles without requiring GStreamer to be installed. Real GStre
   - `POST /validate`
 - can later wrap GStreamer, FFmpeg, or native capture pipelines
 
+The desktop process writes two files in the app data directory:
+
+- `pipeline-plan.json`: full `MediaPipelinePlan` for diagnostics and UI/external inspection
+- `pipeline-config.json`: runner config shape consumed by `media-runner --config`
+
+The config file includes the dry-run flag, sidecar status address when known, pipeline name, and resolved `MediaPipelineConfig`. It contains stream secret references only, not raw stream keys.
+
 Example:
 
 ```bash
@@ -115,8 +133,6 @@ Quit App and app-level exit events call the supervisor shutdown path before exit
 
 ## Future Real Pipeline Requirements
 
-- Native camera and microphone authorization status checks.
-- Window and device enumeration.
 - Encoder capability detection.
 - Container-specific recovery strategy.
 - Per-platform ingest validation.

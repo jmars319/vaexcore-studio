@@ -21,6 +21,7 @@ pub struct MediaRunnerConfig {
     pub executable_path: PathBuf,
     pub status_addr: SocketAddr,
     pub dry_run: bool,
+    pub config_path: Option<PathBuf>,
     pub startup_timeout: Duration,
 }
 
@@ -30,6 +31,7 @@ impl MediaRunnerConfig {
             executable_path,
             status_addr,
             dry_run: true,
+            config_path: None,
             startup_timeout: Duration::from_secs(2),
         }
     }
@@ -78,6 +80,7 @@ struct MediaRunnerSupervisorInner {
     executable_path: PathBuf,
     status_addr: SocketAddr,
     dry_run: bool,
+    config_path: Option<PathBuf>,
     startup_timeout: Duration,
     require_child: bool,
 }
@@ -88,8 +91,12 @@ impl MediaRunnerSupervisor {
             return Err(SidecarError::MissingExecutable(config.executable_path));
         }
 
-        let child =
-            spawn_media_runner_child(&config.executable_path, config.status_addr, config.dry_run)?;
+        let child = spawn_media_runner_child(
+            &config.executable_path,
+            config.status_addr,
+            config.dry_run,
+            config.config_path.as_ref(),
+        )?;
 
         let supervisor = Self {
             inner: Arc::new(MediaRunnerSupervisorInner {
@@ -97,6 +104,7 @@ impl MediaRunnerSupervisor {
                 executable_path: config.executable_path,
                 status_addr: config.status_addr,
                 dry_run: config.dry_run,
+                config_path: config.config_path,
                 startup_timeout: config.startup_timeout,
                 require_child: true,
             }),
@@ -199,6 +207,7 @@ impl MediaRunnerSupervisor {
             &self.inner.executable_path,
             self.inner.status_addr,
             self.inner.dry_run,
+            self.inner.config_path.as_ref(),
         )?;
         *self
             .inner
@@ -307,6 +316,7 @@ fn spawn_media_runner_child(
     executable_path: &PathBuf,
     status_addr: SocketAddr,
     dry_run: bool,
+    config_path: Option<&PathBuf>,
 ) -> Result<Child, SidecarError> {
     let mut command = Command::new(executable_path);
     command
@@ -315,6 +325,10 @@ fn spawn_media_runner_child(
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+
+    if let Some(config_path) = config_path {
+        command.arg("--config").arg(config_path);
+    }
 
     if dry_run {
         command.arg("--dry-run");
@@ -737,6 +751,7 @@ mod tests {
                     executable_path: PathBuf::from("fake-media-runner"),
                     status_addr: addr,
                     dry_run: true,
+                    config_path: None,
                     startup_timeout: Duration::from_secs(2),
                     require_child: false,
                 }),

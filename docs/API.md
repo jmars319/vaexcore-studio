@@ -17,6 +17,13 @@ The desktop app writes an API discovery document to its app data directory at
 because vaexcore studio can fall back to an available port if the configured
 port is already occupied.
 
+The same app data directory also contains media planning files:
+
+- `pipeline-plan.json`
+- `pipeline-config.json`
+
+External tools may read these files for diagnostics, but should use the HTTP API as the source of truth while Studio is running.
+
 ## Auth
 
 Debug builds enable dev auth bypass by default. When auth is required, pass either:
@@ -130,6 +137,8 @@ Audit entries include method, path, action, status, request ID, client label, an
 
 Returns the current dry-run pipeline plan using the saved capture sources, first recording profile, and enabled stream destinations.
 
+Also refreshes `pipeline-plan.json` and `pipeline-config.json` in the app data directory.
+
 ### `POST /media/plan`
 
 Body:
@@ -152,6 +161,8 @@ Body:
 ```
 
 Returns a `MediaPipelinePlan` with resolved config, ordered steps, warnings, and blocking errors. Stream keys are never included; only secret references may appear inside destination objects.
+
+Also refreshes the media planning files with the supplied request.
 
 ### `GET /media/validate`
 

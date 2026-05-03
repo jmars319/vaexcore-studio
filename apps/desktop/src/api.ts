@@ -42,6 +42,8 @@ export interface LocalAppSettingsSnapshot {
   databasePath: string;
   discoveryFile: string;
   logDir: string;
+  pipelinePlanPath: string;
+  pipelineConfigPath: string;
   restartRequired: boolean;
 }
 
@@ -57,6 +59,12 @@ export interface ProfileBundleFileResult {
   path: string;
   recordingProfiles: number;
   streamDestinations: number;
+}
+
+export interface PermissionStatus {
+  service: string;
+  status: "authorized" | "denied" | "restricted" | "not_determined" | "unknown";
+  detail: string;
 }
 
 const UI_CLIENT_ID = "vaexcore-studio-ui";
@@ -115,6 +123,31 @@ export async function loadCaptureSourceInventory(): Promise<CaptureSourceInvento
 export async function loadPreflightSnapshot(): Promise<PreflightSnapshot> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<PreflightSnapshot>("preflight_snapshot");
+}
+
+export async function loadCameraPermissionStatus(): Promise<PermissionStatus> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<PermissionStatus>("camera_permission_status");
+}
+
+export async function loadMicrophonePermissionStatus(): Promise<PermissionStatus> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<PermissionStatus>("microphone_permission_status");
+}
+
+export async function openCameraPrivacySettings(): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("open_camera_privacy_settings");
+}
+
+export async function openMicrophonePrivacySettings(): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("open_microphone_privacy_settings");
+}
+
+export async function openScreenRecordingPrivacySettings(): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<void>("open_screen_recording_privacy_settings");
 }
 
 export async function exportProfileBundle(): Promise<ProfileBundleFileResult> {

@@ -8,6 +8,8 @@
 .npmrc
 .yarnrc.yml
 *.local.json
+pipeline-config*.json
+pipeline-plan*.json
 profile-bundle*.json
 secrets.*
 

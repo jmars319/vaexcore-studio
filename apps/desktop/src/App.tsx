@@ -48,13 +48,19 @@ import {
   exportProfileBundle,
   importProfileBundle,
   LocalAppSettingsSnapshot,
+  loadCameraPermissionStatus,
   loadCaptureSourceInventory,
   loadMediaRunnerInfo,
+  loadMicrophonePermissionStatus,
   loadPreflightSnapshot,
   loadRuntimeConfig,
   loadAppSettings,
   MediaRunnerInfo,
   openDataDirectory,
+  openCameraPrivacySettings,
+  openMicrophonePrivacySettings,
+  openScreenRecordingPrivacySettings,
+  PermissionStatus,
   regenerateApiToken,
   RuntimeApiConfig,
   saveAppSettings,
@@ -172,6 +178,10 @@ function App() {
   const [preflight, setPreflight] = useState<PreflightSnapshot | null>(null);
   const [captureInventory, setCaptureInventory] =
     useState<CaptureSourceInventory | null>(null);
+  const [permissionStatuses, setPermissionStatuses] = useState<{
+    camera: PermissionStatus | null;
+    microphone: PermissionStatus | null;
+  }>({ camera: null, microphone: null });
   const [pipelinePlan, setPipelinePlan] = useState<MediaPipelinePlan | null>(null);
 
   useEffect(() => {
@@ -187,6 +197,10 @@ function App() {
         setProfileForm(snapshot.settings.default_recording_profile);
       })
       .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    refreshCaptureContext().catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -252,11 +266,6 @@ function App() {
         loadPreflightSnapshot()
           .then((snapshot) => {
             if (!cancelled) setPreflight(snapshot);
-          })
-          .catch(() => undefined);
-        loadCaptureSourceInventory()
-          .then((inventory) => {
-            if (!cancelled) setCaptureInventory(inventory);
           })
           .catch(() => undefined);
         setEvents((current) =>
@@ -349,6 +358,16 @@ function App() {
         ? current
         : null,
     );
+  }
+
+  async function refreshCaptureContext() {
+    const [inventory, camera, microphone] = await Promise.all([
+      loadCaptureSourceInventory(),
+      loadCameraPermissionStatus(),
+      loadMicrophonePermissionStatus(),
+    ]);
+    setCaptureInventory(inventory);
+    setPermissionStatuses({ camera, microphone });
   }
 
   async function runCommand(action: () => Promise<{ status: StudioStatus["status"] }>) {
@@ -516,6 +535,8 @@ function App() {
       const snapshot = await saveAppSettings(settingsForm);
       applySettingsSnapshot(snapshot);
       setProfileForm(snapshot.settings.default_recording_profile);
+      await refreshCaptureContext();
+      loadPreflightSnapshot().then(setPreflight).catch(() => undefined);
       setSettingsMessage(
         snapshot.restartRequired
           ? "Saved. Host or port changes apply after restart."
@@ -720,12 +741,17 @@ function App() {
           captureInventory={captureInventory}
           mediaRunnerInfo={mediaRunnerInfo}
           mode={activeStatus?.mode ?? "dry_run"}
+          onOpenCameraPrivacy={openCameraPrivacySettings}
           onExportProfileBundle={handleExportProfileBundle}
           onImportProfileBundle={handleImportProfileBundle}
           onOpenDataDirectory={handleOpenDataDirectory}
+          onOpenMicrophonePrivacy={openMicrophonePrivacySettings}
+          onOpenScreenRecordingPrivacy={openScreenRecordingPrivacySettings}
           onRegenerateToken={handleRegenerateApiToken}
+          onRefreshCaptureContext={refreshCaptureContext}
           onSave={handleSaveSettings}
           onSettingsChange={setSettingsForm}
+          permissionStatuses={permissionStatuses}
           settings={settingsForm}
           snapshot={settingsSnapshot}
           statusMessage={settingsMessage}
@@ -1432,10 +1458,18 @@ function SettingsPage(props: {
   mode: string;
   onExportProfileBundle: () => void;
   onImportProfileBundle: () => void;
+  onOpenCameraPrivacy: () => Promise<void>;
   onOpenDataDirectory: () => void;
+  onOpenMicrophonePrivacy: () => Promise<void>;
+  onOpenScreenRecordingPrivacy: () => Promise<void>;
   onRegenerateToken: () => void;
+  onRefreshCaptureContext: () => Promise<void>;
   onSave: (event: FormEvent) => void;
   onSettingsChange: (settings: AppSettings) => void;
+  permissionStatuses: {
+    camera: PermissionStatus | null;
+    microphone: PermissionStatus | null;
+  };
   settings: AppSettings;
   snapshot: LocalAppSettingsSnapshot | null;
   statusMessage: string | null;
@@ -1590,7 +1624,45 @@ function SettingsPage(props: {
       </section>
 
       <section className="panel settings-wide-panel">
-        <PanelTitle title="Capture Sources" />
+        <PanelTitle
+          action={
+            <button
+              className="secondary-button compact"
+              onClick={() => props.onRefreshCaptureContext().catch(() => undefined)}
+              type="button"
+            >
+              Refresh
+            </button>
+          }
+          title="Capture Sources"
+        />
+        <div className="permission-grid">
+          <PermissionStatusLine
+            label="Camera"
+            onOpen={() => props.onOpenCameraPrivacy().catch(() => undefined)}
+            status={props.permissionStatuses.camera}
+          />
+          <PermissionStatusLine
+            label="Microphone"
+            onOpen={() => props.onOpenMicrophonePrivacy().catch(() => undefined)}
+            status={props.permissionStatuses.microphone}
+          />
+          <div className="permission-line">
+            <div>
+              <strong>Screen Recording</strong>
+              <span>Required for display and window capture.</span>
+            </div>
+            <button
+              className="secondary-button compact"
+              onClick={() =>
+                props.onOpenScreenRecordingPrivacy().catch(() => undefined)
+              }
+              type="button"
+            >
+              Open Privacy
+            </button>
+          </div>
+        </div>
         <div className="source-grid">
           {sourceCandidates.map((candidate) => {
             const selected = props.settings.capture_sources.find(
@@ -1720,6 +1792,14 @@ function SettingsPage(props: {
           label="Database"
           value={props.snapshot?.databasePath ?? ""}
         />
+        <CopyLine
+          label="Pipeline Plan"
+          value={props.snapshot?.pipelinePlanPath ?? ""}
+        />
+        <CopyLine
+          label="Pipeline Config"
+          value={props.snapshot?.pipelineConfigPath ?? ""}
+        />
         <button
           className="secondary-button full"
           onClick={props.onOpenDataDirectory}
@@ -1803,10 +1883,37 @@ function RuntimeCounter(props: { label: string; value: string }) {
   );
 }
 
-function PanelTitle(props: { title: string }) {
+function PermissionStatusLine(props: {
+  label: string;
+  onOpen: () => void;
+  status: PermissionStatus | null;
+}) {
+  const status = props.status?.status ?? "unknown";
+  return (
+    <div className="permission-line">
+      <div>
+        <strong>{props.label}</strong>
+        <span>{props.status?.detail ?? "Permission status pending."}</span>
+      </div>
+      <div className="permission-actions">
+        <Pill tone={permissionTone(status)}>{permissionLabel(status)}</Pill>
+        <button
+          className="secondary-button compact"
+          onClick={props.onOpen}
+          type="button"
+        >
+          Open Privacy
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PanelTitle(props: { action?: ReactNode; title: string }) {
   return (
     <div className="panel-title">
       <h3>{props.title}</h3>
+      {props.action}
     </div>
   );
 }
@@ -1998,6 +2105,19 @@ function preflightTone(status: PreflightStatus): "green" | "red" | "amber" | "mu
 }
 
 function preflightLabel(status: PreflightStatus): string {
+  return status.replace("_", " ");
+}
+
+function permissionTone(
+  status: PermissionStatus["status"],
+): "green" | "red" | "amber" | "muted" {
+  if (status === "authorized") return "green";
+  if (status === "denied" || status === "restricted") return "red";
+  if (status === "not_determined") return "amber";
+  return "muted";
+}
+
+function permissionLabel(status: PermissionStatus["status"]): string {
   return status.replace("_", " ");
 }
 

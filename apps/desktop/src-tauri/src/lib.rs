@@ -1,5 +1,6 @@
 use std::{
     env,
+    ffi::{c_char, c_void},
     fs::OpenOptions,
     io::Write,
     net::{SocketAddr, TcpListener, TcpStream},
@@ -44,6 +45,55 @@ const FRONTEND_OPEN_SECTION_EVENT: &str = "vaexcore://open-section";
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGGetActiveDisplayList(
+        max_displays: u32,
+        active_displays: *mut u32,
+        display_count: *mut u32,
+    ) -> i32;
+    fn CGMainDisplayID() -> u32;
+    fn CGDisplayPixelsWide(display: u32) -> usize;
+    fn CGDisplayPixelsHigh(display: u32) -> usize;
+    fn CGWindowListCopyWindowInfo(option: u32, relative_to_window: u32) -> *const c_void;
+    static kCGWindowName: *const c_void;
+    static kCGWindowNumber: *const c_void;
+    static kCGWindowOwnerName: *const c_void;
+    static kCGWindowLayer: *const c_void;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    fn CFArrayGetCount(array: *const c_void) -> isize;
+    fn CFArrayGetValueAtIndex(array: *const c_void, index: isize) -> *const c_void;
+    fn CFDictionaryGetValueIfPresent(
+        dictionary: *const c_void,
+        key: *const c_void,
+        value: *mut *const c_void,
+    ) -> u8;
+    fn CFNumberGetValue(number: *const c_void, number_type: i32, value: *mut c_void) -> u8;
+    fn CFRelease(value: *const c_void);
+    fn CFStringGetCString(
+        string: *const c_void,
+        buffer: *mut i8,
+        buffer_size: isize,
+        encoding: u32,
+    ) -> u8;
+    fn CFStringGetLength(string: *const c_void) -> isize;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "AVFoundation", kind = "framework")]
+extern "C" {
+    static AVMediaTypeAudio: *const c_void;
+    static AVMediaTypeVideo: *const c_void;
+}
+
+#[cfg(target_os = "macos")]
+#[link(name = "objc")]
+extern "C" {
+    fn objc_getClass(name: *const c_char) -> *mut c_void;
+    fn sel_registerName(name: *const c_char) -> *mut c_void;
+    fn objc_msgSend();
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -74,6 +124,8 @@ struct FrontendAppSettings {
     database_path: String,
     discovery_file: String,
     log_dir: String,
+    pipeline_plan_path: String,
+    pipeline_config_path: String,
     restart_required: bool,
 }
 
@@ -110,6 +162,14 @@ struct FrontendProfileBundleResult {
     stream_destinations: usize,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FrontendPermissionStatus {
+    service: String,
+    status: String,
+    detail: String,
+}
+
 #[derive(Clone)]
 struct DailyLogWriter {
     directory: PathBuf,
@@ -125,6 +185,8 @@ struct AppRuntimeState {
     database_path: PathBuf,
     discovery_file: PathBuf,
     log_dir: PathBuf,
+    pipeline_plan_path: PathBuf,
+    pipeline_config_path: PathBuf,
     media_runner: Option<MediaRunnerSupervisor>,
     api_shutdown: Mutex<Option<oneshot::Sender<()>>>,
 }
@@ -241,6 +303,31 @@ fn capture_source_inventory(
         candidates: capture_source_candidates(),
         selected: settings.capture_sources,
     })
+}
+
+#[tauri::command]
+fn camera_permission_status() -> FrontendPermissionStatus {
+    permission_status_response("camera")
+}
+
+#[tauri::command]
+fn microphone_permission_status() -> FrontendPermissionStatus {
+    permission_status_response("microphone")
+}
+
+#[tauri::command]
+fn open_camera_privacy_settings() -> Result<(), String> {
+    open_macos_privacy_settings("Privacy_Camera")
+}
+
+#[tauri::command]
+fn open_microphone_privacy_settings() -> Result<(), String> {
+    open_macos_privacy_settings("Privacy_Microphone")
+}
+
+#[tauri::command]
+fn open_screen_recording_privacy_settings() -> Result<(), String> {
+    open_macos_privacy_settings("Privacy_ScreenCapture")
 }
 
 #[tauri::command]
@@ -568,9 +655,12 @@ pub fn run() {
                 token: settings.api_token.clone(),
                 dev_mode: settings.dev_auth_bypass,
             });
-            let media_runner = start_media_runner(app.handle());
             let (api_shutdown, shutdown_rx) = oneshot::channel::<()>();
             let discovery_file = data_dir.join("api-discovery.json");
+            let pipeline_plan_path = data_dir.join("pipeline-plan.json");
+            let pipeline_config_path = data_dir.join("pipeline-config.json");
+            write_seed_pipeline_config(&pipeline_config_path)?;
+            let media_runner = start_media_runner(app.handle(), &pipeline_config_path);
             write_api_discovery_file(
                 &discovery_file,
                 bind_addr,
@@ -587,6 +677,8 @@ pub fn run() {
                     "configured_bind_addr": configured_bind_addr.to_string(),
                     "port_fallback_active": port_fallback_active,
                     "discovery_file": discovery_file.display().to_string(),
+                    "pipeline_plan_path": pipeline_plan_path.display().to_string(),
+                    "pipeline_config_path": pipeline_config_path.display().to_string(),
                 }),
             );
 
@@ -600,6 +692,8 @@ pub fn run() {
                 database_path: database_path.clone(),
                 discovery_file,
                 log_dir: log_dir.clone(),
+                pipeline_plan_path: pipeline_plan_path.clone(),
+                pipeline_config_path: pipeline_config_path.clone(),
                 media_runner: media_runner.clone(),
                 api_shutdown: Mutex::new(Some(api_shutdown)),
             });
@@ -610,6 +704,8 @@ pub fn run() {
                     database_path,
                     auth,
                     media_runner,
+                    pipeline_plan_path: Some(pipeline_plan_path),
+                    pipeline_config_path: Some(pipeline_config_path),
                 };
 
                 let listener = match tokio::net::TcpListener::from_std(api_listener) {
@@ -638,6 +734,11 @@ pub fn run() {
             regenerate_api_token,
             open_data_directory,
             capture_source_inventory,
+            camera_permission_status,
+            microphone_permission_status,
+            open_camera_privacy_settings,
+            open_microphone_privacy_settings,
+            open_screen_recording_privacy_settings,
             preflight_snapshot,
             export_profile_bundle,
             import_profile_bundle,
@@ -754,7 +855,10 @@ fn shutdown_runtime(app: &tauri::AppHandle) {
     }
 }
 
-fn start_media_runner(app: &tauri::AppHandle) -> Option<MediaRunnerSupervisor> {
+fn start_media_runner(
+    app: &tauri::AppHandle,
+    pipeline_config_path: &Path,
+) -> Option<MediaRunnerSupervisor> {
     let Some(executable_path) = resolve_media_runner_path(app) else {
         tracing::warn!("media-runner sidecar not found; using in-process dry-run media engine");
         return None;
@@ -766,7 +870,8 @@ fn start_media_runner(app: &tauri::AppHandle) -> Option<MediaRunnerSupervisor> {
         return None;
     };
 
-    let config = MediaRunnerConfig::dry_run(executable_path.clone(), status_addr);
+    let mut config = MediaRunnerConfig::dry_run(executable_path.clone(), status_addr);
+    config.config_path = Some(pipeline_config_path.to_path_buf());
     match MediaRunnerSupervisor::start(config) {
         Ok(supervisor) => {
             tracing::info!(
@@ -998,45 +1103,310 @@ fn daily_log_path(log_dir: &Path) -> PathBuf {
 }
 
 fn capture_source_candidates() -> Vec<CaptureSourceCandidate> {
-    vec![
-        CaptureSourceCandidate {
-            id: "display:main".to_string(),
-            kind: CaptureSourceKind::Display,
-            name: "Main Display".to_string(),
-            available: true,
-            notes: None,
-        },
-        CaptureSourceCandidate {
-            id: "window:selected".to_string(),
+    let mut candidates = Vec::new();
+    candidates.extend(display_source_candidates());
+    candidates.extend(window_source_candidates());
+    candidates.extend(camera_source_candidates());
+    candidates.extend(microphone_source_candidates());
+    candidates.push(CaptureSourceCandidate {
+        id: "system-audio:placeholder".to_string(),
+        kind: CaptureSourceKind::SystemAudio,
+        name: "System Audio".to_string(),
+        available: false,
+        notes: Some("System audio capture is a future macOS pipeline milestone.".to_string()),
+    });
+    candidates
+}
+
+#[cfg(target_os = "macos")]
+fn display_source_candidates() -> Vec<CaptureSourceCandidate> {
+    let mut displays = [0_u32; 16];
+    let mut display_count = 0_u32;
+    let result = unsafe {
+        CGGetActiveDisplayList(
+            displays.len() as u32,
+            displays.as_mut_ptr(),
+            &mut display_count,
+        )
+    };
+    if result != 0 || display_count == 0 {
+        return fallback_display_candidates();
+    }
+
+    let main_display = unsafe { CGMainDisplayID() };
+    displays
+        .iter()
+        .copied()
+        .take(display_count as usize)
+        .enumerate()
+        .map(|(index, display)| {
+            let width = unsafe { CGDisplayPixelsWide(display) };
+            let height = unsafe { CGDisplayPixelsHigh(display) };
+            let is_main = display == main_display;
+            CaptureSourceCandidate {
+                id: if is_main {
+                    "display:main".to_string()
+                } else {
+                    format!("display:{display}")
+                },
+                kind: CaptureSourceKind::Display,
+                name: if is_main {
+                    format!("Main Display ({width}x{height})")
+                } else {
+                    format!("Display {} ({width}x{height})", index + 1)
+                },
+                available: true,
+                notes: None,
+            }
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn display_source_candidates() -> Vec<CaptureSourceCandidate> {
+    fallback_display_candidates()
+}
+
+fn fallback_display_candidates() -> Vec<CaptureSourceCandidate> {
+    vec![CaptureSourceCandidate {
+        id: "display:main".to_string(),
+        kind: CaptureSourceKind::Display,
+        name: "Main Display".to_string(),
+        available: true,
+        notes: None,
+    }]
+}
+
+#[cfg(target_os = "macos")]
+fn window_source_candidates() -> Vec<CaptureSourceCandidate> {
+    const KCG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1;
+    const KCG_NULL_WINDOW_ID: u32 = 0;
+
+    let array = unsafe {
+        CGWindowListCopyWindowInfo(KCG_WINDOW_LIST_OPTION_ON_SCREEN_ONLY, KCG_NULL_WINDOW_ID)
+    };
+    if array.is_null() {
+        return fallback_window_candidates();
+    }
+
+    let count = unsafe { CFArrayGetCount(array) };
+    let mut candidates = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for index in 0..count.min(64) {
+        let dictionary = unsafe { CFArrayGetValueAtIndex(array, index) };
+        if dictionary.is_null() {
+            continue;
+        }
+
+        let layer = unsafe { cf_dictionary_i32(dictionary, kCGWindowLayer) }.unwrap_or(0);
+        if layer != 0 {
+            continue;
+        }
+
+        let Some(window_number) = (unsafe { cf_dictionary_i32(dictionary, kCGWindowNumber) })
+        else {
+            continue;
+        };
+        let Some(owner) = (unsafe { cf_dictionary_string(dictionary, kCGWindowOwnerName) }) else {
+            continue;
+        };
+        let title = unsafe { cf_dictionary_string(dictionary, kCGWindowName) };
+        let name = match title
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            Some(title) => format!("{owner} - {title}"),
+            None => format!("{owner} Window"),
+        };
+
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+
+        candidates.push(CaptureSourceCandidate {
+            id: format!("window:{window_number}"),
             kind: CaptureSourceKind::Window,
-            name: "Window Capture".to_string(),
-            available: true,
-            notes: Some("Window enumeration is reserved for the real capture engine.".to_string()),
-        },
-        CaptureSourceCandidate {
-            id: "camera:default".to_string(),
-            kind: CaptureSourceKind::Camera,
-            name: "Default Camera".to_string(),
-            available: true,
-            notes: Some("Camera permission is requested by the real capture backend.".to_string()),
-        },
-        CaptureSourceCandidate {
-            id: "microphone:default".to_string(),
-            kind: CaptureSourceKind::Microphone,
-            name: "Default Microphone".to_string(),
-            available: true,
-            notes: Some(
-                "Microphone permission is requested by the real capture backend.".to_string(),
-            ),
-        },
-        CaptureSourceCandidate {
-            id: "system-audio:placeholder".to_string(),
-            kind: CaptureSourceKind::SystemAudio,
-            name: "System Audio".to_string(),
-            available: false,
-            notes: Some("System audio capture is a future macOS pipeline milestone.".to_string()),
-        },
-    ]
+            name,
+            available: macos_screen_recording_granted(),
+            notes: if macos_screen_recording_granted() {
+                None
+            } else {
+                Some("Grant Screen Recording permission to capture this window.".to_string())
+            },
+        });
+    }
+
+    unsafe { CFRelease(array) };
+
+    let mut all_candidates = fallback_window_candidates();
+    all_candidates.extend(candidates);
+    all_candidates
+}
+
+#[cfg(not(target_os = "macos"))]
+fn window_source_candidates() -> Vec<CaptureSourceCandidate> {
+    fallback_window_candidates()
+}
+
+fn fallback_window_candidates() -> Vec<CaptureSourceCandidate> {
+    vec![CaptureSourceCandidate {
+        id: "window:selected".to_string(),
+        kind: CaptureSourceKind::Window,
+        name: "Window Capture".to_string(),
+        available: true,
+        notes: Some("Window selection is provided by the active media backend.".to_string()),
+    }]
+}
+
+#[cfg(target_os = "macos")]
+fn camera_source_candidates() -> Vec<CaptureSourceCandidate> {
+    let names = system_profiler_device_names("SPCameraDataType", |item| {
+        item.get("_name")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+    });
+    let mut candidates = fallback_camera_candidates();
+    if names.is_empty() {
+        return candidates;
+    }
+
+    candidates.extend(
+        names
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| CaptureSourceCandidate {
+                id: format!("camera:{index}"),
+                kind: CaptureSourceKind::Camera,
+                name,
+                available: true,
+                notes: permission_note("camera"),
+            }),
+    );
+    candidates
+}
+
+#[cfg(not(target_os = "macos"))]
+fn camera_source_candidates() -> Vec<CaptureSourceCandidate> {
+    fallback_camera_candidates()
+}
+
+fn fallback_camera_candidates() -> Vec<CaptureSourceCandidate> {
+    vec![CaptureSourceCandidate {
+        id: "camera:default".to_string(),
+        kind: CaptureSourceKind::Camera,
+        name: "Default Camera".to_string(),
+        available: true,
+        notes: permission_note("camera"),
+    }]
+}
+
+#[cfg(target_os = "macos")]
+fn microphone_source_candidates() -> Vec<CaptureSourceCandidate> {
+    let names = system_profiler_device_names("SPAudioDataType", |item| {
+        let inputs = item
+            .get("coreaudio_device_input")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or_default();
+        if inputs <= 0 {
+            return None;
+        }
+        item.get("_name")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+    });
+    let mut candidates = fallback_microphone_candidates();
+    if names.is_empty() {
+        return candidates;
+    }
+
+    candidates.extend(
+        names
+            .into_iter()
+            .enumerate()
+            .map(|(index, name)| CaptureSourceCandidate {
+                id: format!("microphone:{index}"),
+                kind: CaptureSourceKind::Microphone,
+                name,
+                available: true,
+                notes: permission_note("microphone"),
+            }),
+    );
+    candidates
+}
+
+#[cfg(not(target_os = "macos"))]
+fn microphone_source_candidates() -> Vec<CaptureSourceCandidate> {
+    fallback_microphone_candidates()
+}
+
+fn fallback_microphone_candidates() -> Vec<CaptureSourceCandidate> {
+    vec![CaptureSourceCandidate {
+        id: "microphone:default".to_string(),
+        kind: CaptureSourceKind::Microphone,
+        name: "Default Microphone".to_string(),
+        available: true,
+        notes: permission_note("microphone"),
+    }]
+}
+
+fn permission_note(service: &str) -> Option<String> {
+    let status = media_permission_status(service);
+    (status.status != "authorized").then_some(status.detail)
+}
+
+#[cfg(target_os = "macos")]
+fn system_profiler_device_names<F>(data_type: &str, map_item: F) -> Vec<String>
+where
+    F: Fn(&serde_json::Value) -> Option<String>,
+{
+    let output = match std::process::Command::new("system_profiler")
+        .args(["-json", data_type])
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        _ => return Vec::new(),
+    };
+    let json = match serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+        Ok(json) => json,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut names = Vec::new();
+    collect_system_profiler_names(json.get(data_type), &map_item, &mut names);
+    names.sort();
+    names.dedup();
+    names
+}
+
+#[cfg(target_os = "macos")]
+fn collect_system_profiler_names<F>(
+    value: Option<&serde_json::Value>,
+    map_item: &F,
+    names: &mut Vec<String>,
+) where
+    F: Fn(&serde_json::Value) -> Option<String>,
+{
+    match value {
+        Some(serde_json::Value::Array(items)) => {
+            for item in items {
+                if let Some(name) = map_item(item)
+                    .map(|name| name.trim().to_string())
+                    .filter(|name| !name.is_empty())
+                {
+                    names.push(name);
+                }
+                collect_system_profiler_names(item.get("_items"), map_item, names);
+            }
+        }
+        Some(serde_json::Value::Object(object)) => {
+            for nested in object.values() {
+                collect_system_profiler_names(Some(nested), map_item, names);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn api_preflight_check(bind_addr: SocketAddr) -> PreflightCheck {
@@ -1165,13 +1535,7 @@ fn camera_preflight_check(sources: &[CaptureSourceSelection]) -> PreflightCheck 
         return not_required_check("macos.camera", "Camera");
     }
 
-    PreflightCheck {
-        id: "macos.camera".to_string(),
-        label: "Camera".to_string(),
-        status: PreflightStatus::Unknown,
-        detail: "Camera permission will be requested when a real capture backend opens the device."
-            .to_string(),
-    }
+    permission_preflight_check("macos.camera", "Camera", "camera")
 }
 
 fn microphone_preflight_check(sources: &[CaptureSourceSelection]) -> PreflightCheck {
@@ -1179,13 +1543,23 @@ fn microphone_preflight_check(sources: &[CaptureSourceSelection]) -> PreflightCh
         return not_required_check("macos.microphone", "Microphone");
     }
 
+    permission_preflight_check("macos.microphone", "Microphone", "microphone")
+}
+
+fn permission_preflight_check(id: &str, label: &str, service: &str) -> PreflightCheck {
+    let permission = media_permission_status(service);
+    let status = match permission.status.as_str() {
+        "authorized" => PreflightStatus::Ready,
+        "denied" | "restricted" => PreflightStatus::Blocked,
+        "not_determined" => PreflightStatus::Warning,
+        _ => PreflightStatus::Unknown,
+    };
+
     PreflightCheck {
-        id: "macos.microphone".to_string(),
-        label: "Microphone".to_string(),
-        status: PreflightStatus::Unknown,
-        detail:
-            "Microphone permission will be requested when a real capture backend opens the device."
-                .to_string(),
+        id: id.to_string(),
+        label: label.to_string(),
+        status,
+        detail: permission.detail,
     }
 }
 
@@ -1215,6 +1589,171 @@ fn source_enabled(sources: &[CaptureSourceSelection], kinds: &[CaptureSourceKind
     sources
         .iter()
         .any(|source| source.enabled && kinds.iter().any(|kind| kind == &source.kind))
+}
+
+fn permission_status_response(service: &str) -> FrontendPermissionStatus {
+    media_permission_status(service)
+}
+
+fn media_permission_status(service: &str) -> FrontendPermissionStatus {
+    let label = match service {
+        "camera" => "Camera",
+        "microphone" => "Microphone",
+        _ => "Media",
+    };
+
+    match macos_media_permission_status(service) {
+        Some(status) => {
+            let detail = match status.as_str() {
+                "authorized" => format!("{label} permission is authorized."),
+                "denied" => format!("{label} permission is denied in macOS Privacy & Security."),
+                "restricted" => {
+                    format!("{label} permission is restricted by macOS policy.")
+                }
+                "not_determined" => {
+                    format!("{label} permission has not been requested yet.")
+                }
+                _ => format!("{label} permission status is unknown."),
+            };
+            FrontendPermissionStatus {
+                service: service.to_string(),
+                status,
+                detail,
+            }
+        }
+        None => FrontendPermissionStatus {
+            service: service.to_string(),
+            status: "unknown".to_string(),
+            detail: format!("{label} permission status is unavailable on this platform."),
+        },
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_media_permission_status(service: &str) -> Option<String> {
+    let media_type = match service {
+        "camera" => unsafe { AVMediaTypeVideo },
+        "microphone" => unsafe { AVMediaTypeAudio },
+        _ => return None,
+    };
+    if media_type.is_null() {
+        return None;
+    }
+
+    let class = unsafe { objc_getClass(b"AVCaptureDevice\0".as_ptr().cast::<c_char>()) };
+    let selector = unsafe {
+        sel_registerName(
+            b"authorizationStatusForMediaType:\0"
+                .as_ptr()
+                .cast::<c_char>(),
+        )
+    };
+    if class.is_null() || selector.is_null() {
+        return None;
+    }
+
+    let send: unsafe extern "C" fn(*mut c_void, *mut c_void, *const c_void) -> isize =
+        unsafe { std::mem::transmute(objc_msgSend as *const ()) };
+    let status = unsafe { send(class, selector, media_type) };
+    Some(
+        match status {
+            0 => "not_determined",
+            1 => "restricted",
+            2 => "denied",
+            3 => "authorized",
+            _ => "unknown",
+        }
+        .to_string(),
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_media_permission_status(_service: &str) -> Option<String> {
+    None
+}
+
+fn open_macos_privacy_settings(pane: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(format!(
+                "x-apple.systempreferences:com.apple.preference.security?{pane}"
+            ))
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = pane;
+        Err("privacy settings are only implemented on macOS".to_string())
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn cf_dictionary_value(
+    dictionary: *const c_void,
+    key: *const c_void,
+) -> Option<*const c_void> {
+    if dictionary.is_null() || key.is_null() {
+        return None;
+    }
+
+    let mut value = std::ptr::null();
+    if CFDictionaryGetValueIfPresent(dictionary, key, &mut value) == 0 || value.is_null() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn cf_dictionary_i32(dictionary: *const c_void, key: *const c_void) -> Option<i32> {
+    const K_CF_NUMBER_SINT32_TYPE: i32 = 3;
+
+    let value = cf_dictionary_value(dictionary, key)?;
+    let mut number = 0_i32;
+    if CFNumberGetValue(
+        value,
+        K_CF_NUMBER_SINT32_TYPE,
+        (&mut number as *mut i32).cast::<c_void>(),
+    ) == 0
+    {
+        None
+    } else {
+        Some(number)
+    }
+}
+
+#[cfg(target_os = "macos")]
+unsafe fn cf_dictionary_string(dictionary: *const c_void, key: *const c_void) -> Option<String> {
+    const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+    let value = cf_dictionary_value(dictionary, key)?;
+    let length = CFStringGetLength(value);
+    if length <= 0 {
+        return None;
+    }
+
+    let mut buffer = vec![0_i8; (length as usize * 4) + 1];
+    if CFStringGetCString(
+        value,
+        buffer.as_mut_ptr(),
+        buffer.len() as isize,
+        K_CF_STRING_ENCODING_UTF8,
+    ) == 0
+    {
+        return None;
+    }
+
+    Some(
+        std::ffi::CStr::from_ptr(buffer.as_ptr())
+            .to_string_lossy()
+            .trim()
+            .to_string(),
+    )
+    .filter(|value| !value.is_empty())
 }
 
 fn aggregate_preflight_status(checks: &[PreflightCheck]) -> PreflightStatus {
@@ -1268,6 +1807,21 @@ fn macos_screen_recording_granted() -> bool {
 
 fn profile_bundle_path(state: &AppRuntimeState) -> PathBuf {
     state.data_dir.join("profile-bundle.json")
+}
+
+fn write_seed_pipeline_config(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let config = serde_json::json!({
+        "dry_run": true,
+        "status_addr": null,
+        "pipeline_name": "dry-run",
+        "pipeline": null,
+    });
+    std::fs::write(path, serde_json::to_vec_pretty(&config)?)?;
+    Ok(())
 }
 
 fn reserve_sidecar_status_addr() -> Option<SocketAddr> {
@@ -1375,6 +1929,8 @@ fn frontend_app_settings(
         database_path: state.database_path.display().to_string(),
         discovery_file: state.discovery_file.display().to_string(),
         log_dir: state.log_dir.display().to_string(),
+        pipeline_plan_path: state.pipeline_plan_path.display().to_string(),
+        pipeline_config_path: state.pipeline_config_path.display().to_string(),
     })
 }
 
