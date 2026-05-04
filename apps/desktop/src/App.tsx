@@ -48,6 +48,7 @@ import { platformLabels } from "@vaexcore/shared-types";
 import {
   eventSocketUrl,
   exportProfileBundle,
+  handoffRecordingToPulse,
   importProfileBundle,
   launchVaexcoreSuite,
   LocalAppSettingsSnapshot,
@@ -625,6 +626,29 @@ function App() {
     setError(null);
   }
 
+  async function handleReviewRecordingInPulse(recording: RecordingHistoryEntry) {
+    setSuiteLaunchStatus(`Sending ${recording.profile_name} recording to Pulse...`);
+    const results = await handoffRecordingToPulse({
+      sessionId: recording.session_id,
+      outputPath: recording.output_path,
+      profileId: recording.profile_id,
+      profileName: recording.profile_name,
+      stoppedAt: recording.stopped_at,
+    });
+    const failed = results.filter((result) => !result.ok);
+
+    if (failed.length > 0) {
+      setSuiteLaunchStatus(formatSuiteLaunchFailure(failed));
+      return;
+    }
+
+    setSuiteLaunchStatus("Pulse handoff written. Opening Pulse review workspace.");
+    window.setTimeout(() => {
+      loadSuiteStatus().then(setSuiteStatus).catch(() => undefined);
+    }, 1800);
+    setError(null);
+  }
+
   async function handleExportProfileBundle() {
     try {
       const result = await exportProfileBundle();
@@ -739,6 +763,7 @@ function App() {
             engine={activeStatus?.engine ?? "starting"}
             mediaRunnerInfo={mediaRunnerInfo}
             onLaunchSuite={handleLaunchSuite}
+            onReviewRecordingInPulse={handleReviewRecordingInPulse}
             recentMarkers={recentMarkers}
             recentRecordings={recentRecordings}
             suiteStatus={suiteStatus}
@@ -1443,6 +1468,7 @@ function ConnectedAppsPage(props: {
   engine: string;
   mediaRunnerInfo: MediaRunnerInfo | null;
   onLaunchSuite: () => void;
+  onReviewRecordingInPulse: (recording: RecordingHistoryEntry) => void;
   recentMarkers: Marker[];
   recentRecordings: RecordingHistoryEntry[];
   suiteStatus: SuiteAppStatus[];
@@ -1567,6 +1593,16 @@ function ConnectedAppsPage(props: {
                   {new Date(recording.stopped_at).toLocaleTimeString()}
                 </Pill>
                 <Pill tone="muted">{recording.profile_id}</Pill>
+                <div className="table-actions">
+                  <button
+                    className="secondary-button compact"
+                    onClick={() => props.onReviewRecordingInPulse(recording)}
+                    type="button"
+                  >
+                    <Play size={14} />
+                    Review in Pulse
+                  </button>
+                </div>
               </div>
             ))}
           </div>

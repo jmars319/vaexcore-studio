@@ -94,6 +94,14 @@ export interface SuiteAppStatus {
   detail: string;
 }
 
+export interface PulseRecordingHandoffInput {
+  sessionId: string;
+  outputPath: string;
+  profileId: string | null;
+  profileName: string | null;
+  stoppedAt: string;
+}
+
 export interface MarkerListOptions {
   sourceApp?: string;
   sourceEventId?: string;
@@ -173,6 +181,28 @@ export async function loadSuiteStatus(): Promise<SuiteAppStatus[]> {
     return await invoke<SuiteAppStatus[]>("suite_status");
   } catch {
     return [];
+  }
+}
+
+export async function handoffRecordingToPulse(
+  recording: PulseRecordingHandoffInput,
+): Promise<SuiteLaunchResult[]> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<SuiteLaunchResult[]>("handoff_recording_to_pulse", {
+      recording,
+    });
+  } catch (error) {
+    return [
+      {
+        appName: "vaexcore pulse",
+        ok: false,
+        detail:
+          error instanceof Error
+            ? error.message
+            : "Pulse handoff is only available in the desktop app.",
+      },
+    ];
   }
 }
 

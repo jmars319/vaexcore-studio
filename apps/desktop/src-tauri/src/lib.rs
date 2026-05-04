@@ -201,6 +201,38 @@ struct SuiteDiscoveryDocument {
     launch_name: String,
 }
 
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PulseRecordingHandoffInput {
+    session_id: String,
+    output_path: String,
+    profile_id: Option<String>,
+    profile_name: Option<String>,
+    stopped_at: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PulseRecordingHandoffDocument {
+    schema_version: u8,
+    request_id: String,
+    source_app: String,
+    source_app_name: String,
+    target_app: String,
+    requested_at: String,
+    recording: PulseRecordingHandoffRecording,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PulseRecordingHandoffRecording {
+    session_id: String,
+    output_path: String,
+    profile_id: Option<String>,
+    profile_name: Option<String>,
+    stopped_at: String,
+}
+
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SuiteAppStatus {
@@ -365,6 +397,19 @@ fn suite_status() -> Vec<SuiteAppStatus> {
         .collect()
 }
 
+#[tauri::command]
+fn handoff_recording_to_pulse(recording: PulseRecordingHandoffInput) -> Vec<SuiteLaunchResult> {
+    if let Err(error) = write_pulse_recording_handoff(recording) {
+        return vec![SuiteLaunchResult {
+            app_name: "vaexcore pulse".to_string(),
+            ok: false,
+            detail: format!("Could not write Pulse handoff: {error}"),
+        }];
+    }
+
+    vec![launch_macos_app("vaexcore pulse")]
+}
+
 fn launch_macos_app(app_name: &str) -> SuiteLaunchResult {
     #[cfg(target_os = "macos")]
     {
@@ -429,6 +474,7 @@ fn start_suite_discovery_heartbeat(bind_addr: SocketAddr) {
             capabilities: vec![
                 "studio.api".to_string(),
                 "recording.control".to_string(),
+                "pulse.recording.handoff".to_string(),
                 "suite.status".to_string(),
                 "suite.launcher".to_string(),
             ],
@@ -449,6 +495,35 @@ fn write_suite_discovery_document(document: &SuiteDiscoveryDocument) -> std::io:
     let path = directory.join(format!("{}.json", document.app_id));
     let serialized = serde_json::to_vec_pretty(document)?;
     fs::write(path, serialized)
+}
+
+fn write_pulse_recording_handoff(recording: PulseRecordingHandoffInput) -> std::io::Result<()> {
+    let directory = suite_handoff_dir();
+    fs::create_dir_all(&directory)?;
+    let requested_at = chrono::Utc::now().to_rfc3339();
+    let request_id = format!(
+        "studio-recording-{}-{}",
+        sanitize_handoff_id(&recording.session_id),
+        chrono::Utc::now().timestamp_millis()
+    );
+    let document = PulseRecordingHandoffDocument {
+        schema_version: SUITE_DISCOVERY_SCHEMA_VERSION,
+        request_id,
+        source_app: "vaexcore-studio".to_string(),
+        source_app_name: APP_NAME.to_string(),
+        target_app: "vaexcore-pulse".to_string(),
+        requested_at,
+        recording: PulseRecordingHandoffRecording {
+            session_id: recording.session_id,
+            output_path: recording.output_path,
+            profile_id: recording.profile_id,
+            profile_name: recording.profile_name,
+            stopped_at: recording.stopped_at,
+        },
+    };
+
+    let serialized = serde_json::to_vec_pretty(&document)?;
+    fs::write(directory.join("pulse-recording-intake.json"), serialized)
 }
 
 fn suite_app_definitions() -> [SuiteAppDefinition; 3] {
@@ -554,6 +629,10 @@ fn suite_discovery_file(app_id: &str) -> PathBuf {
     suite_discovery_dir().join(format!("{app_id}.json"))
 }
 
+fn suite_handoff_dir() -> PathBuf {
+    suite_discovery_dir().join("handoffs")
+}
+
 fn suite_discovery_dir() -> PathBuf {
     env::var("HOME")
         .map(PathBuf::from)
@@ -562,6 +641,25 @@ fn suite_discovery_dir() -> PathBuf {
         .join("Application Support")
         .join("vaexcore")
         .join("suite")
+}
+
+fn sanitize_handoff_id(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let trimmed = sanitized.trim_matches('-');
+    if trimmed.is_empty() {
+        "recording".to_string()
+    } else {
+        trimmed.chars().take(80).collect()
+    }
 }
 
 fn suite_discovery_is_stale(path: &Path) -> bool {
@@ -1079,7 +1177,8 @@ pub fn run() {
             open_settings_window,
             media_runner_info,
             launch_vaexcore_suite,
-            suite_status
+            suite_status,
+            handoff_recording_to_pulse
         ])
         .build(tauri::generate_context!())
         .expect("failed to build vaexcore studio")
