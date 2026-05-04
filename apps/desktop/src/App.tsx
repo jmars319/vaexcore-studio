@@ -49,6 +49,7 @@ import {
   eventSocketUrl,
   exportProfileBundle,
   importProfileBundle,
+  launchVaexcoreSuite,
   LocalAppSettingsSnapshot,
   loadCameraPermissionStatus,
   loadCaptureSourceInventory,
@@ -67,6 +68,7 @@ import {
   RuntimeApiConfig,
   saveAppSettings,
   StudioApi,
+  SuiteLaunchResult,
 } from "./api";
 import logoUrl from "./assets/brand/vaexcore-studio-logo.jpg";
 
@@ -187,6 +189,7 @@ function App() {
     microphone: PermissionStatus | null;
   }>({ camera: null, microphone: null });
   const [pipelinePlan, setPipelinePlan] = useState<MediaPipelinePlan | null>(null);
+  const [suiteLaunchStatus, setSuiteLaunchStatus] = useState<string | null>(null);
 
   useEffect(() => {
     loadRuntimeConfig().then(setConfig).catch((error: Error) => {
@@ -591,6 +594,20 @@ function App() {
     }
   }
 
+  async function handleLaunchSuite() {
+    setSuiteLaunchStatus("Opening vaexcore apps...");
+    const results = await launchVaexcoreSuite();
+    const failed = results.filter((result) => !result.ok);
+
+    if (failed.length > 0) {
+      setSuiteLaunchStatus(formatSuiteLaunchFailure(failed));
+      return;
+    }
+
+    setSuiteLaunchStatus("Launch requested for Studio, Pulse, and Console.");
+    setError(null);
+  }
+
   async function handleExportProfileBundle() {
     try {
       const result = await exportProfileBundle();
@@ -704,8 +721,10 @@ function App() {
             config={config}
             engine={activeStatus?.engine ?? "starting"}
             mediaRunnerInfo={mediaRunnerInfo}
+            onLaunchSuite={handleLaunchSuite}
             recentMarkers={recentMarkers}
             recentRecordings={recentRecordings}
+            suiteLaunchStatus={suiteLaunchStatus}
           />
         );
       case "logs":
@@ -735,6 +754,7 @@ function App() {
     section,
     selectedDestinationId,
     selectedProfileId,
+    suiteLaunchStatus,
   ]);
 
   if (isSettingsWindow) {
@@ -835,6 +855,14 @@ function App() {
             <h2>{sectionHeading(section)}</h2>
           </div>
           <div className="topbar-status">
+            <button
+              className="secondary-button compact"
+              onClick={handleLaunchSuite}
+              type="button"
+            >
+              <Play size={14} />
+              Launch Suite
+            </button>
             <Pill tone={activeStatus?.recording_active ? "red" : "muted"}>
               <Video size={14} />
               {activeStatus?.recording_active ? "Recording" : "Recording idle"}
@@ -1395,8 +1423,10 @@ function ConnectedAppsPage(props: {
   config: RuntimeApiConfig | null;
   engine: string;
   mediaRunnerInfo: MediaRunnerInfo | null;
+  onLaunchSuite: () => void;
   recentMarkers: Marker[];
   recentRecordings: RecordingHistoryEntry[];
+  suiteLaunchStatus: string | null;
 }) {
   const apiUrl = props.config?.apiUrl ?? "http://127.0.0.1:51287";
   const wsUrl = props.config?.wsUrl ?? "ws://127.0.0.1:51287/events";
@@ -1406,6 +1436,22 @@ function ConnectedAppsPage(props: {
 
   return (
     <div className="stack">
+      <section className="panel">
+        <PanelTitle title="Suite Launcher" />
+        <button
+          className="secondary-button full"
+          onClick={props.onLaunchSuite}
+          type="button"
+        >
+          <Play size={16} />
+          Launch Studio, Pulse, and Console
+        </button>
+        {props.suiteLaunchStatus && (
+          <Pill tone={props.suiteLaunchStatus.startsWith("Could not") ? "red" : "green"}>
+            {props.suiteLaunchStatus}
+          </Pill>
+        )}
+      </section>
       <section className="panel">
         <PanelTitle title="Local Endpoints" />
         <CopyLine label="HTTP API URL" value={apiUrl} />
@@ -1507,6 +1553,11 @@ function ConnectedAppsPage(props: {
       </section>
     </div>
   );
+}
+
+function formatSuiteLaunchFailure(results: SuiteLaunchResult[]): string {
+  const appNames = results.map((result) => result.appName).join(", ");
+  return `Could not launch ${appNames}. Install the app bundles in Applications, then try again.`;
 }
 
 function markerSourceLabel(sourceApp: string | null): string {

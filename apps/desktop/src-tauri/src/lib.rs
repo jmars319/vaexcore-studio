@@ -31,6 +31,7 @@ const SETTINGS_WINDOW_LABEL: &str = "settings";
 const MENU_OPEN_SETTINGS: &str = "open-settings";
 const MENU_CLOSE_WINDOW: &str = "close-window";
 const MENU_QUIT_APP: &str = "quit-app";
+const MENU_LAUNCH_SUITE: &str = "launch-suite";
 const MENU_SHOW_MAIN_WINDOW: &str = "show-main-window";
 const MENU_RELOAD_WINDOW: &str = "reload-window";
 const MENU_VIEW_DASHBOARD: &str = "view-dashboard";
@@ -40,6 +41,7 @@ const MENU_VIEW_CONTROLS: &str = "view-controls";
 const MENU_VIEW_CONNECTED_APPS: &str = "view-connected-apps";
 const MENU_VIEW_LOGS: &str = "view-logs";
 const FRONTEND_OPEN_SECTION_EVENT: &str = "vaexcore://open-section";
+const VAEXCORE_SUITE_APPS: &[&str] = &["vaexcore studio", "vaexcore pulse", "vaexcore console"];
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -170,6 +172,14 @@ struct FrontendPermissionStatus {
     detail: String,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SuiteLaunchResult {
+    app_name: String,
+    ok: bool,
+    detail: String,
+}
+
 #[derive(Clone)]
 struct DailyLogWriter {
     directory: PathBuf,
@@ -288,6 +298,56 @@ fn open_data_directory(state: tauri::State<'_, AppRuntimeState>) -> Result<(), S
     #[cfg(not(target_os = "macos"))]
     {
         Err("opening the data directory is not implemented on this platform".to_string())
+    }
+}
+
+#[tauri::command]
+fn launch_vaexcore_suite() -> Vec<SuiteLaunchResult> {
+    VAEXCORE_SUITE_APPS
+        .iter()
+        .map(|app_name| launch_macos_app(app_name))
+        .collect()
+}
+
+fn launch_macos_app(app_name: &str) -> SuiteLaunchResult {
+    #[cfg(target_os = "macos")]
+    {
+        match std::process::Command::new("open")
+            .args(["-a", app_name])
+            .output()
+        {
+            Ok(output) if output.status.success() => SuiteLaunchResult {
+                app_name: app_name.to_string(),
+                ok: true,
+                detail: "Launch requested.".to_string(),
+            },
+            Ok(output) => {
+                let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                SuiteLaunchResult {
+                    app_name: app_name.to_string(),
+                    ok: false,
+                    detail: if detail.is_empty() {
+                        format!("open exited with status {}.", output.status)
+                    } else {
+                        detail
+                    },
+                }
+            }
+            Err(error) => SuiteLaunchResult {
+                app_name: app_name.to_string(),
+                ok: false,
+                detail: error.to_string(),
+            },
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        SuiteLaunchResult {
+            app_name: app_name.to_string(),
+            ok: false,
+            detail: "Launch Suite is only implemented for macOS Applications.".to_string(),
+        }
     }
 }
 
@@ -503,6 +563,13 @@ pub fn run() {
                 true,
                 Some("CmdOrCtrl+W"),
             )?;
+            let launch_suite = MenuItem::with_id(
+                handle,
+                MENU_LAUNCH_SUITE,
+                "Launch vaexcore Suite",
+                true,
+                None::<&str>,
+            )?;
             let quit = MenuItem::with_id(
                 handle,
                 MENU_QUIT_APP,
@@ -566,6 +633,8 @@ pub fn run() {
                     &app_separator_one,
                     &settings,
                     &app_separator_two,
+                    &launch_suite,
+                    &PredefinedMenuItem::separator(handle)?,
                     &close_window,
                     &quit,
                 ],
@@ -619,6 +688,19 @@ pub fn run() {
             MENU_OPEN_SETTINGS => open_settings(app),
             MENU_CLOSE_WINDOW => close_active_window(app),
             MENU_QUIT_APP => quit_app(app),
+            MENU_LAUNCH_SUITE => {
+                std::thread::spawn(|| {
+                    for result in launch_vaexcore_suite() {
+                        if !result.ok {
+                            tracing::warn!(
+                                app_name = %result.app_name,
+                                detail = %result.detail,
+                                "suite app launch failed"
+                            );
+                        }
+                    }
+                });
+            }
             MENU_SHOW_MAIN_WINDOW => show_main_window(app),
             MENU_RELOAD_WINDOW => reload_main_window(app),
             MENU_VIEW_DASHBOARD => open_section(app, "dashboard"),
@@ -743,7 +825,8 @@ pub fn run() {
             export_profile_bundle,
             import_profile_bundle,
             open_settings_window,
-            media_runner_info
+            media_runner_info,
+            launch_vaexcore_suite
         ])
         .build(tauri::generate_context!())
         .expect("failed to build vaexcore studio")

@@ -70,6 +70,12 @@ export interface PermissionStatus {
   detail: string;
 }
 
+export interface SuiteLaunchResult {
+  appName: string;
+  ok: boolean;
+  detail: string;
+}
+
 export interface MarkerListOptions {
   sourceApp?: string;
   sourceEventId?: string;
@@ -123,6 +129,24 @@ export async function regenerateApiToken(): Promise<LocalAppSettingsSnapshot> {
 export async function openDataDirectory(): Promise<void> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<void>("open_data_directory");
+}
+
+export async function launchVaexcoreSuite(): Promise<SuiteLaunchResult[]> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<SuiteLaunchResult[]>("launch_vaexcore_suite");
+  } catch (error) {
+    return [
+      {
+        appName: "vaexcore suite",
+        ok: false,
+        detail:
+          error instanceof Error
+            ? error.message
+            : "Launch Suite is only available in the desktop app.",
+      },
+    ];
+  }
 }
 
 export async function loadCaptureSourceInventory(): Promise<CaptureSourceInventory> {
