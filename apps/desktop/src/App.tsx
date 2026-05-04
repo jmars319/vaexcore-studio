@@ -58,6 +58,7 @@ import {
   loadPreflightSnapshot,
   loadRuntimeConfig,
   loadAppSettings,
+  loadSuiteStatus,
   MediaRunnerInfo,
   openDataDirectory,
   openCameraPrivacySettings,
@@ -68,6 +69,7 @@ import {
   RuntimeApiConfig,
   saveAppSettings,
   StudioApi,
+  SuiteAppStatus,
   SuiteLaunchResult,
 } from "./api";
 import logoUrl from "./assets/brand/vaexcore-studio-logo.jpg";
@@ -190,6 +192,7 @@ function App() {
   }>({ camera: null, microphone: null });
   const [pipelinePlan, setPipelinePlan] = useState<MediaPipelinePlan | null>(null);
   const [suiteLaunchStatus, setSuiteLaunchStatus] = useState<string | null>(null);
+  const [suiteStatus, setSuiteStatus] = useState<SuiteAppStatus[]>([]);
 
   useEffect(() => {
     loadRuntimeConfig().then(setConfig).catch((error: Error) => {
@@ -255,6 +258,7 @@ function App() {
           nextMarkers,
           nextMediaRunnerInfo,
           nextPipelinePlan,
+          nextSuiteStatus,
         ] = await Promise.all([
           StudioApi.health(runtimeConfig),
           StudioApi.status(runtimeConfig),
@@ -265,6 +269,7 @@ function App() {
           StudioApi.markers(runtimeConfig, { limit: 20 }),
           loadMediaRunnerInfo(),
           StudioApi.mediaPlan(runtimeConfig),
+          loadSuiteStatus(),
         ]);
         if (cancelled) return;
         setHealth(nextHealth);
@@ -276,6 +281,7 @@ function App() {
         setRecentMarkers(nextMarkers.markers);
         setMediaRunnerInfo(nextMediaRunnerInfo);
         setPipelinePlan(nextPipelinePlan);
+        setSuiteStatus(nextSuiteStatus);
         loadPreflightSnapshot()
           .then((snapshot) => {
             if (!cancelled) setPreflight(snapshot);
@@ -601,10 +607,21 @@ function App() {
 
     if (failed.length > 0) {
       setSuiteLaunchStatus(formatSuiteLaunchFailure(failed));
+      loadSuiteStatus().then(setSuiteStatus).catch(() => undefined);
       return;
     }
 
-    setSuiteLaunchStatus("Launch requested for Studio, Pulse, and Console.");
+    setSuiteLaunchStatus("Launch requested. Verifying suite status...");
+    window.setTimeout(() => {
+      loadSuiteStatus()
+        .then((status) => {
+          setSuiteStatus(status);
+          setSuiteLaunchStatus(formatSuiteVerification(status));
+        })
+        .catch(() => {
+          setSuiteLaunchStatus("Launch requested for Studio, Pulse, and Console.");
+        });
+    }, 1800);
     setError(null);
   }
 
@@ -724,6 +741,7 @@ function App() {
             onLaunchSuite={handleLaunchSuite}
             recentMarkers={recentMarkers}
             recentRecordings={recentRecordings}
+            suiteStatus={suiteStatus}
             suiteLaunchStatus={suiteLaunchStatus}
           />
         );
@@ -754,6 +772,7 @@ function App() {
     section,
     selectedDestinationId,
     selectedProfileId,
+    suiteStatus,
     suiteLaunchStatus,
   ]);
 
@@ -861,7 +880,7 @@ function App() {
               type="button"
             >
               <Play size={14} />
-              Launch Suite
+              Launch & Verify
             </button>
             <Pill tone={activeStatus?.recording_active ? "red" : "muted"}>
               <Video size={14} />
@@ -1426,6 +1445,7 @@ function ConnectedAppsPage(props: {
   onLaunchSuite: () => void;
   recentMarkers: Marker[];
   recentRecordings: RecordingHistoryEntry[];
+  suiteStatus: SuiteAppStatus[];
   suiteLaunchStatus: string | null;
 }) {
   const apiUrl = props.config?.apiUrl ?? "http://127.0.0.1:51287";
@@ -1437,6 +1457,33 @@ function ConnectedAppsPage(props: {
   return (
     <div className="stack">
       <section className="panel">
+        <PanelTitle title="Suite Status" />
+        {props.suiteStatus.length === 0 ? (
+          <div className="empty">Suite status unavailable</div>
+        ) : (
+          <div className="table">
+            {props.suiteStatus.map((app) => (
+              <div className="table-row suite-status-row" key={app.appId}>
+                <div>
+                  <strong>{app.appName}</strong>
+                  <span>{app.detail}</span>
+                  <code>{app.healthUrl ?? app.discoveryFile}</code>
+                </div>
+                <Pill tone={suiteStatusTone(app)}>
+                  {suiteStatusLabel(app)}
+                </Pill>
+                <Pill tone={app.installed ? "green" : "red"}>
+                  {app.installed ? "Installed" : "Missing"}
+                </Pill>
+                <Pill tone={app.running ? "green" : "muted"}>
+                  {app.running ? "Running" : "Stopped"}
+                </Pill>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+      <section className="panel">
         <PanelTitle title="Suite Launcher" />
         <button
           className="secondary-button full"
@@ -1444,10 +1491,10 @@ function ConnectedAppsPage(props: {
           type="button"
         >
           <Play size={16} />
-          Launch Studio, Pulse, and Console
+          Launch & Verify Studio, Pulse, and Console
         </button>
         {props.suiteLaunchStatus && (
-          <Pill tone={props.suiteLaunchStatus.startsWith("Could not") ? "red" : "green"}>
+          <Pill tone={suiteLaunchTone(props.suiteLaunchStatus)}>
             {props.suiteLaunchStatus}
           </Pill>
         )}
@@ -1558,6 +1605,42 @@ function ConnectedAppsPage(props: {
 function formatSuiteLaunchFailure(results: SuiteLaunchResult[]): string {
   const appNames = results.map((result) => result.appName).join(", ");
   return `Could not launch ${appNames}. Install the app bundles in Applications, then try again.`;
+}
+
+function formatSuiteVerification(status: SuiteAppStatus[]): string {
+  const blocked = status.filter(
+    (app) => !app.installed || !app.running || app.stale || !app.reachable,
+  );
+  if (blocked.length === 0 && status.length > 0) {
+    return "Suite verified. Studio, Pulse, and Console are ready.";
+  }
+  if (blocked.length === 0) {
+    return "Launch requested for Studio, Pulse, and Console.";
+  }
+  return `Launch requested. Still waiting on ${blocked
+    .map((app) => app.appName)
+    .join(", ")}.`;
+}
+
+function suiteLaunchTone(status: string): "green" | "red" | "amber" | "muted" {
+  if (status.startsWith("Could not")) return "red";
+  if (status.includes("waiting") || status.includes("Verifying")) return "amber";
+  return "green";
+}
+
+function suiteStatusTone(app: SuiteAppStatus): "green" | "red" | "amber" | "muted" {
+  if (!app.installed) return "red";
+  if (!app.running) return "muted";
+  if (app.stale || !app.reachable) return "amber";
+  return "green";
+}
+
+function suiteStatusLabel(app: SuiteAppStatus): string {
+  if (!app.installed) return "Missing";
+  if (!app.running) return "Offline";
+  if (app.stale) return "Stale";
+  if (!app.reachable) return "Starting";
+  return "Ready";
 }
 
 function markerSourceLabel(sourceApp: string | null): string {

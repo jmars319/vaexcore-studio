@@ -76,6 +76,24 @@ export interface SuiteLaunchResult {
   detail: string;
 }
 
+export interface SuiteAppStatus {
+  appId: string;
+  appName: string;
+  launchName: string;
+  bundleIdentifier: string;
+  installed: boolean;
+  running: boolean;
+  reachable: boolean;
+  stale: boolean;
+  discoveryFile: string;
+  pid: number | null;
+  apiUrl: string | null;
+  healthUrl: string | null;
+  updatedAt: string | null;
+  capabilities: string[];
+  detail: string;
+}
+
 export interface MarkerListOptions {
   sourceApp?: string;
   sourceEventId?: string;
@@ -146,6 +164,15 @@ export async function launchVaexcoreSuite(): Promise<SuiteLaunchResult[]> {
             : "Launch Suite is only available in the desktop app.",
       },
     ];
+  }
+}
+
+export async function loadSuiteStatus(): Promise<SuiteAppStatus[]> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<SuiteAppStatus[]>("suite_status");
+  } catch {
+    return [];
   }
 }
 

@@ -1,9 +1,9 @@
 use std::{
     env,
     ffi::{c_char, c_void},
-    fs::OpenOptions,
+    fs::{self, OpenOptions},
     io::Write,
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     sync::Mutex,
     time::Duration,
@@ -42,6 +42,9 @@ const MENU_VIEW_CONNECTED_APPS: &str = "view-connected-apps";
 const MENU_VIEW_LOGS: &str = "view-logs";
 const FRONTEND_OPEN_SECTION_EVENT: &str = "vaexcore://open-section";
 const VAEXCORE_SUITE_APPS: &[&str] = &["vaexcore studio", "vaexcore pulse", "vaexcore console"];
+const SUITE_DISCOVERY_SCHEMA_VERSION: u8 = 1;
+const SUITE_DISCOVERY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const SUITE_DISCOVERY_STALE_AFTER: Duration = Duration::from_secs(45);
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -180,6 +183,51 @@ struct SuiteLaunchResult {
     detail: String,
 }
 
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SuiteDiscoveryDocument {
+    schema_version: u8,
+    app_id: String,
+    app_name: String,
+    bundle_identifier: String,
+    version: String,
+    pid: u32,
+    started_at: String,
+    updated_at: String,
+    api_url: Option<String>,
+    ws_url: Option<String>,
+    health_url: Option<String>,
+    capabilities: Vec<String>,
+    launch_name: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SuiteAppStatus {
+    app_id: String,
+    app_name: String,
+    launch_name: String,
+    bundle_identifier: String,
+    installed: bool,
+    running: bool,
+    reachable: bool,
+    stale: bool,
+    discovery_file: String,
+    pid: Option<u32>,
+    api_url: Option<String>,
+    health_url: Option<String>,
+    updated_at: Option<String>,
+    capabilities: Vec<String>,
+    detail: String,
+}
+
+struct SuiteAppDefinition {
+    app_id: &'static str,
+    app_name: &'static str,
+    launch_name: &'static str,
+    bundle_identifier: &'static str,
+}
+
 #[derive(Clone)]
 struct DailyLogWriter {
     directory: PathBuf,
@@ -309,6 +357,14 @@ fn launch_vaexcore_suite() -> Vec<SuiteLaunchResult> {
         .collect()
 }
 
+#[tauri::command]
+fn suite_status() -> Vec<SuiteAppStatus> {
+    suite_app_definitions()
+        .iter()
+        .map(suite_app_status)
+        .collect()
+}
+
 fn launch_macos_app(app_name: &str) -> SuiteLaunchResult {
     #[cfg(target_os = "macos")]
     {
@@ -349,6 +405,201 @@ fn launch_macos_app(app_name: &str) -> SuiteLaunchResult {
             detail: "Launch Suite is only implemented for macOS Applications.".to_string(),
         }
     }
+}
+
+fn start_suite_discovery_heartbeat(bind_addr: SocketAddr) {
+    let started_at = chrono::Utc::now().to_rfc3339();
+    let api_url = format!("http://{bind_addr}");
+    let ws_url = format!("ws://{bind_addr}/events");
+    let health_url = format!("{api_url}/health");
+
+    std::thread::spawn(move || loop {
+        let document = SuiteDiscoveryDocument {
+            schema_version: SUITE_DISCOVERY_SCHEMA_VERSION,
+            app_id: "vaexcore-studio".to_string(),
+            app_name: APP_NAME.to_string(),
+            bundle_identifier: "com.vaexcore.studio".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            pid: std::process::id(),
+            started_at: started_at.clone(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+            api_url: Some(api_url.clone()),
+            ws_url: Some(ws_url.clone()),
+            health_url: Some(health_url.clone()),
+            capabilities: vec![
+                "studio.api".to_string(),
+                "recording.control".to_string(),
+                "suite.status".to_string(),
+                "suite.launcher".to_string(),
+            ],
+            launch_name: APP_NAME.to_string(),
+        };
+
+        if let Err(error) = write_suite_discovery_document(&document) {
+            tracing::warn!(%error, "failed to write suite discovery document");
+        }
+
+        std::thread::sleep(SUITE_DISCOVERY_HEARTBEAT_INTERVAL);
+    });
+}
+
+fn write_suite_discovery_document(document: &SuiteDiscoveryDocument) -> std::io::Result<()> {
+    let directory = suite_discovery_dir();
+    fs::create_dir_all(&directory)?;
+    let path = directory.join(format!("{}.json", document.app_id));
+    let serialized = serde_json::to_vec_pretty(document)?;
+    fs::write(path, serialized)
+}
+
+fn suite_app_definitions() -> [SuiteAppDefinition; 3] {
+    [
+        SuiteAppDefinition {
+            app_id: "vaexcore-studio",
+            app_name: "vaexcore studio",
+            launch_name: "vaexcore studio",
+            bundle_identifier: "com.vaexcore.studio",
+        },
+        SuiteAppDefinition {
+            app_id: "vaexcore-pulse",
+            app_name: "vaexcore pulse",
+            launch_name: "vaexcore pulse",
+            bundle_identifier: "com.vaexil.vaexcore.pulse",
+        },
+        SuiteAppDefinition {
+            app_id: "vaexcore-console",
+            app_name: "vaexcore console",
+            launch_name: "vaexcore console",
+            bundle_identifier: "com.vaexil.vaexcore.console",
+        },
+    ]
+}
+
+fn suite_app_status(definition: &SuiteAppDefinition) -> SuiteAppStatus {
+    let discovery_file = suite_discovery_file(definition.app_id);
+    let installed = Path::new("/Applications")
+        .join(format!("{}.app", definition.launch_name))
+        .exists();
+    let discovery = read_suite_discovery_document(&discovery_file);
+    let pid = discovery.as_ref().map(|document| document.pid);
+    let running = pid.is_some_and(process_is_running);
+    let stale = suite_discovery_is_stale(&discovery_file);
+    let reachable = discovery
+        .as_ref()
+        .and_then(|document| document.health_url.as_deref())
+        .is_some_and(health_url_is_reachable);
+    let detail = suite_status_detail(installed, discovery.is_some(), running, stale, reachable);
+
+    SuiteAppStatus {
+        app_id: definition.app_id.to_string(),
+        app_name: discovery
+            .as_ref()
+            .map(|document| document.app_name.clone())
+            .unwrap_or_else(|| definition.app_name.to_string()),
+        launch_name: definition.launch_name.to_string(),
+        bundle_identifier: definition.bundle_identifier.to_string(),
+        installed,
+        running,
+        reachable,
+        stale,
+        discovery_file: discovery_file.display().to_string(),
+        pid,
+        api_url: discovery
+            .as_ref()
+            .and_then(|document| document.api_url.clone()),
+        health_url: discovery
+            .as_ref()
+            .and_then(|document| document.health_url.clone()),
+        updated_at: discovery
+            .as_ref()
+            .map(|document| document.updated_at.clone()),
+        capabilities: discovery
+            .as_ref()
+            .map(|document| document.capabilities.clone())
+            .unwrap_or_default(),
+        detail,
+    }
+}
+
+fn read_suite_discovery_document(path: &Path) -> Option<SuiteDiscoveryDocument> {
+    let contents = fs::read(path).ok()?;
+    serde_json::from_slice(&contents).ok()
+}
+
+fn suite_status_detail(
+    installed: bool,
+    discovered: bool,
+    running: bool,
+    stale: bool,
+    reachable: bool,
+) -> String {
+    if !installed {
+        return "Install this app in /Applications.".to_string();
+    }
+    if !discovered {
+        return "No suite heartbeat has been published yet.".to_string();
+    }
+    if !running {
+        return "Heartbeat exists, but the app process is not running.".to_string();
+    }
+    if stale {
+        return "The suite heartbeat is stale.".to_string();
+    }
+    if !reachable {
+        return "The app is running, but its local health endpoint is not reachable.".to_string();
+    }
+    "Ready.".to_string()
+}
+
+fn suite_discovery_file(app_id: &str) -> PathBuf {
+    suite_discovery_dir().join(format!("{app_id}.json"))
+}
+
+fn suite_discovery_dir() -> PathBuf {
+    env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| default_data_dir())
+        .join("Library")
+        .join("Application Support")
+        .join("vaexcore")
+        .join("suite")
+}
+
+fn suite_discovery_is_stale(path: &Path) -> bool {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .map(|elapsed| elapsed > SUITE_DISCOVERY_STALE_AFTER)
+        .unwrap_or(true)
+}
+
+fn process_is_running(pid: u32) -> bool {
+    let pid_arg = pid.to_string();
+    std::process::Command::new("ps")
+        .args(["-p", pid_arg.as_str()])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+fn health_url_is_reachable(url: &str) -> bool {
+    let Some(authority) = http_url_authority(url) else {
+        return false;
+    };
+    let Ok(mut addresses) = authority.to_socket_addrs() else {
+        return false;
+    };
+    addresses
+        .any(|address| TcpStream::connect_timeout(&address, Duration::from_millis(450)).is_ok())
+}
+
+fn http_url_authority(url: &str) -> Option<&str> {
+    let rest = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))?;
+    rest.split('/')
+        .next()
+        .filter(|authority| !authority.is_empty())
 }
 
 #[tauri::command]
@@ -750,6 +1001,7 @@ pub fn run() {
                 port_fallback_active,
                 &auth.get(),
             )?;
+            start_suite_discovery_heartbeat(bind_addr);
             write_app_log(
                 &log_dir,
                 "app.api.ready",
@@ -826,7 +1078,8 @@ pub fn run() {
             import_profile_bundle,
             open_settings_window,
             media_runner_info,
-            launch_vaexcore_suite
+            launch_vaexcore_suite,
+            suite_status
         ])
         .build(tauri::generate_context!())
         .expect("failed to build vaexcore studio")
