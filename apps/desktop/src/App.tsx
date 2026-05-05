@@ -1911,6 +1911,14 @@ function ConnectedAppsPage(props: {
           </button>
           <button
             className="secondary-button compact"
+            onClick={() => props.onSendSuiteCommand("vaexcore-pulse", "focus-suite")}
+            type="button"
+          >
+            <Cable size={14} />
+            Pulse Suite
+          </button>
+          <button
+            className="secondary-button compact"
             onClick={() => props.onSendSuiteCommand("vaexcore-console", "focus-ops")}
             type="button"
           >
