@@ -23,6 +23,9 @@ vaexcore-core = { path = "../vaexcore-core" }
 vaexcore-media = { path = "../vaexcore-media" }
 vaexcore-platforms = { path = "../vaexcore-platforms" }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework.workspace = true
+
 [dev-dependencies]
 http-body-util.workspace = true
 tempfile.workspace = true

@@ -27,7 +27,10 @@ pub use responses::{
     ProfileBundleImportResult, ProfilesSnapshot, RecentRecordingsSnapshot, RecordingHistoryEntry,
     StreamDestinationBundleItem, StudioStatus,
 };
-pub use security::{SecretRef, SecretStore, SecretStoreError, SensitiveString};
+pub use security::{
+    SecretRef, SecretStore, SecretStoreError, SensitiveString, LOCAL_SQLITE_SECRET_PROVIDER,
+    MACOS_KEYCHAIN_SECRET_PROVIDER,
+};
 pub use settings::AppSettings;
 pub use status::{EngineMode, EngineStatus, RecordingSession, StreamSession};
 

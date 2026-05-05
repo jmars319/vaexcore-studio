@@ -11,12 +11,15 @@ use vaexcore_core::{
     PlatformKind, ProfileBundle, ProfileBundleImportResult, ProfilesSnapshot, RecordingContainer,
     RecordingHistoryEntry, RecordingSession, Resolution, SecretRef, SecretStore, SecretStoreError,
     SensitiveString, StreamDestination, StreamDestinationBundleItem, StreamDestinationInput,
+    LOCAL_SQLITE_SECRET_PROVIDER, MACOS_KEYCHAIN_SECRET_PROVIDER,
 };
 use vaexcore_platforms::apply_platform_defaults;
 
 const CURRENT_SCHEMA_VERSION: u32 = 4;
 const AUDIT_LOG_LIMIT: usize = 200;
 const MARKER_LIST_LIMIT: usize = 200;
+const MACOS_KEYCHAIN_SERVICE: &str = "com.vaexcore.studio.stream-keys";
+const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
 #[derive(Clone, Debug, Default)]
 pub struct MarkerFilters {
@@ -30,6 +33,58 @@ pub struct MarkerFilters {
 pub struct MarkerWriteResult {
     pub marker: Marker,
     pub created: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SecretStorageReport {
+    pub secure_storage: String,
+    pub secret_storage_state: String,
+    pub provider: String,
+    pub legacy_stream_key_refs: usize,
+    pub migration_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum SecretBackend {
+    LocalSqlite,
+    MacosKeychain { service: String },
+}
+
+impl SecretBackend {
+    fn default_for_platform() -> Self {
+        #[cfg(target_os = "macos")]
+        {
+            Self::MacosKeychain {
+                service: MACOS_KEYCHAIN_SERVICE.to_string(),
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            Self::LocalSqlite
+        }
+    }
+
+    fn provider(&self) -> &'static str {
+        match self {
+            Self::LocalSqlite => LOCAL_SQLITE_SECRET_PROVIDER,
+            Self::MacosKeychain { .. } => MACOS_KEYCHAIN_SECRET_PROVIDER,
+        }
+    }
+
+    fn secure_storage_label(&self) -> &'static str {
+        match self {
+            Self::LocalSqlite => "SQLite secret refs",
+            Self::MacosKeychain { .. } => "macOS Keychain",
+        }
+    }
+
+    fn keychain_service(&self) -> Option<&str> {
+        match self {
+            Self::LocalSqlite => None,
+            Self::MacosKeychain { service } => Some(service),
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -47,10 +102,19 @@ pub enum StoreError {
 #[derive(Clone)]
 pub struct ProfileStore {
     connection: Arc<Mutex<Connection>>,
+    secret_backend: SecretBackend,
+    secret_migration_error: Arc<Mutex<Option<String>>>,
 }
 
 impl ProfileStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        Self::open_with_backend(path, SecretBackend::default_for_platform())
+    }
+
+    fn open_with_backend(
+        path: impl AsRef<Path>,
+        secret_backend: SecretBackend,
+    ) -> Result<Self, StoreError> {
         if let Some(parent) = path.as_ref().parent() {
             std::fs::create_dir_all(parent).map_err(|error| {
                 StoreError::InvalidValue(format!(
@@ -63,19 +127,29 @@ impl ProfileStore {
         let connection = Connection::open(path)?;
         let store = Self {
             connection: Arc::new(Mutex::new(connection)),
+            secret_backend,
+            secret_migration_error: Arc::new(Mutex::new(None)),
         };
         store.migrate()?;
         store.seed_defaults()?;
+        store.try_migrate_legacy_stream_keys_to_backend();
         Ok(store)
     }
 
     pub fn open_memory() -> Result<Self, StoreError> {
+        Self::open_memory_with_backend(SecretBackend::LocalSqlite)
+    }
+
+    fn open_memory_with_backend(secret_backend: SecretBackend) -> Result<Self, StoreError> {
         let connection = Connection::open_in_memory()?;
         let store = Self {
             connection: Arc::new(Mutex::new(connection)),
+            secret_backend,
+            secret_migration_error: Arc::new(Mutex::new(None)),
         };
         store.migrate()?;
         store.seed_defaults()?;
+        store.try_migrate_legacy_stream_keys_to_backend();
         Ok(store)
     }
 
@@ -83,6 +157,35 @@ impl ProfileStore {
         Ok(ProfilesSnapshot {
             recording_profiles: self.list_recording_profiles()?,
             stream_destinations: self.list_stream_destinations()?,
+        })
+    }
+
+    pub fn secret_storage_report(&self) -> Result<SecretStorageReport, StoreError> {
+        let legacy_stream_key_refs = self.legacy_stream_key_ref_count()?;
+        let migration_error = self
+            .secret_migration_error
+            .lock()
+            .expect("secret migration mutex poisoned")
+            .clone();
+
+        let secret_storage_state = match (
+            &self.secret_backend,
+            migration_error.as_ref(),
+            legacy_stream_key_refs,
+        ) {
+            (SecretBackend::MacosKeychain { .. }, Some(_), _) => "keychain-migration-failed",
+            (SecretBackend::MacosKeychain { .. }, None, 0) => "keychain-ready",
+            (SecretBackend::MacosKeychain { .. }, None, _) => "needs-keychain-migration",
+            (SecretBackend::LocalSqlite, _, _) => "local-sqlite-fallback",
+        }
+        .to_string();
+
+        Ok(SecretStorageReport {
+            secure_storage: self.secret_backend.secure_storage_label().to_string(),
+            secret_storage_state,
+            provider: self.secret_backend.provider().to_string(),
+            legacy_stream_key_refs,
+            migration_error,
         })
     }
 
@@ -955,20 +1058,117 @@ impl ProfileStore {
             .transpose()
     }
 
+    fn try_migrate_legacy_stream_keys_to_backend(&self) {
+        if !matches!(self.secret_backend, SecretBackend::MacosKeychain { .. }) {
+            return;
+        }
+
+        match self.migrate_legacy_stream_keys_to_backend() {
+            Ok(()) => self.set_secret_migration_error(None),
+            Err(error) => self.set_secret_migration_error(Some(error.to_string())),
+        }
+    }
+
+    fn migrate_legacy_stream_keys_to_backend(&self) -> Result<(), StoreError> {
+        let Some(service) = self.secret_backend.keychain_service() else {
+            return Ok(());
+        };
+
+        let legacy_secrets = {
+            let connection = self
+                .connection
+                .lock()
+                .expect("profile store mutex poisoned");
+            let mut statement = connection.prepare(
+                "SELECT DISTINCT d.stream_key_ref_id, s.secret
+                 FROM stream_destinations d
+                 JOIN secrets s ON s.id = d.stream_key_ref_id
+                 WHERE d.stream_key_ref_provider = ?1
+                   AND d.stream_key_ref_id IS NOT NULL",
+            )?;
+            let rows = statement.query_map([LOCAL_SQLITE_SECRET_PROVIDER], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+
+        if legacy_secrets.is_empty() {
+            return Ok(());
+        }
+
+        for (secret_id, secret) in &legacy_secrets {
+            write_keychain_secret(service, secret_id, secret.as_bytes())
+                .map_err(StoreError::SecretStore)?;
+        }
+
+        let mut connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        let transaction = connection.transaction()?;
+        for (secret_id, _) in &legacy_secrets {
+            transaction.execute(
+                "UPDATE stream_destinations
+                 SET stream_key_ref_provider = ?1
+                 WHERE stream_key_ref_provider = ?2
+                   AND stream_key_ref_id = ?3",
+                params![
+                    MACOS_KEYCHAIN_SECRET_PROVIDER,
+                    LOCAL_SQLITE_SECRET_PROVIDER,
+                    secret_id,
+                ],
+            )?;
+            transaction.execute("DELETE FROM secrets WHERE id = ?1", [secret_id])?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn set_secret_migration_error(&self, error: Option<String>) {
+        *self
+            .secret_migration_error
+            .lock()
+            .expect("secret migration mutex poisoned") = error;
+    }
+
+    fn legacy_stream_key_ref_count(&self) -> Result<usize, StoreError> {
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        let count = connection.query_row(
+            "SELECT COUNT(*)
+             FROM stream_destinations
+             WHERE stream_key_ref_provider = ?1
+               AND stream_key_ref_id IS NOT NULL",
+            [LOCAL_SQLITE_SECRET_PROVIDER],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(count as usize)
+    }
+
     fn delete_secret_ref(&self, reference: Option<&SecretRef>) -> Result<(), StoreError> {
         let Some(reference) = reference else {
             return Ok(());
         };
 
-        if reference.provider != "local-sqlite" {
-            return Ok(());
+        match reference.provider.as_str() {
+            LOCAL_SQLITE_SECRET_PROVIDER => {
+                let connection = self
+                    .connection
+                    .lock()
+                    .expect("profile store mutex poisoned");
+                connection.execute("DELETE FROM secrets WHERE id = ?1", [&reference.id])?;
+            }
+            MACOS_KEYCHAIN_SECRET_PROVIDER => {
+                if let Some(service) = self.secret_backend.keychain_service() {
+                    delete_keychain_secret(service, &reference.id)
+                        .map_err(StoreError::SecretStore)?;
+                }
+            }
+            _ => {}
         }
 
-        let connection = self
-            .connection
-            .lock()
-            .expect("profile store mutex poisoned");
-        connection.execute("DELETE FROM secrets WHERE id = ?1", [&reference.id])?;
         Ok(())
     }
 }
@@ -1119,6 +1319,74 @@ fn schema_version(connection: &Connection) -> Result<u32, StoreError> {
         .unwrap_or(0))
 }
 
+#[cfg(target_os = "macos")]
+fn write_keychain_secret(
+    service: &str,
+    account: &str,
+    secret: &[u8],
+) -> Result<(), SecretStoreError> {
+    security_framework::passwords::set_generic_password(service, account, secret)
+        .map_err(|error| SecretStoreError::Store(format!("macOS Keychain write failed: {error}")))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn write_keychain_secret(
+    _service: &str,
+    _account: &str,
+    _secret: &[u8],
+) -> Result<(), SecretStoreError> {
+    Err(SecretStoreError::Store(
+        "macOS Keychain is unavailable on this platform".to_string(),
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn read_keychain_secret(
+    service: &str,
+    account: &str,
+) -> Result<Option<SensitiveString>, SecretStoreError> {
+    match security_framework::passwords::get_generic_password(service, account) {
+        Ok(bytes) => {
+            let value = String::from_utf8(bytes).map_err(|error| {
+                SecretStoreError::Store(format!(
+                    "macOS Keychain value was not valid UTF-8: {error}"
+                ))
+            })?;
+            Ok(Some(SensitiveString::new(value)))
+        }
+        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
+        Err(error) => Err(SecretStoreError::Store(format!(
+            "macOS Keychain read failed: {error}"
+        ))),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn read_keychain_secret(
+    _service: &str,
+    _account: &str,
+) -> Result<Option<SensitiveString>, SecretStoreError> {
+    Err(SecretStoreError::Store(
+        "macOS Keychain is unavailable on this platform".to_string(),
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn delete_keychain_secret(service: &str, account: &str) -> Result<(), SecretStoreError> {
+    match security_framework::passwords::delete_generic_password(service, account) {
+        Ok(()) => Ok(()),
+        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
+        Err(error) => Err(SecretStoreError::Store(format!(
+            "macOS Keychain delete failed: {error}"
+        ))),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn delete_keychain_secret(_service: &str, _account: &str) -> Result<(), SecretStoreError> {
+    Ok(())
+}
+
 impl SecretStore for ProfileStore {
     fn put_secret(
         &self,
@@ -1126,44 +1394,59 @@ impl SecretStore for ProfileStore {
         value: &SensitiveString,
     ) -> Result<SecretRef, SecretStoreError> {
         let id = new_id("secret");
-        let connection = self
-            .connection
-            .lock()
-            .map_err(|_| SecretStoreError::Store("profile store mutex poisoned".to_string()))?;
 
-        connection
-            .execute(
-                "INSERT INTO secrets (id, scope, secret, created_at) VALUES (?1, ?2, ?3, ?4)",
-                params![id, scope, value.expose_secret(), now_utc().to_rfc3339()],
-            )
-            .map_err(|error| SecretStoreError::Store(error.to_string()))?;
+        match &self.secret_backend {
+            SecretBackend::LocalSqlite => {
+                let connection = self.connection.lock().map_err(|_| {
+                    SecretStoreError::Store("profile store mutex poisoned".to_string())
+                })?;
 
-        Ok(SecretRef::local(id))
+                connection
+                    .execute(
+                        "INSERT INTO secrets (id, scope, secret, created_at) VALUES (?1, ?2, ?3, ?4)",
+                        params![id, scope, value.expose_secret(), now_utc().to_rfc3339()],
+                    )
+                    .map_err(|error| SecretStoreError::Store(error.to_string()))?;
+
+                Ok(SecretRef::local(id))
+            }
+            SecretBackend::MacosKeychain { service } => {
+                write_keychain_secret(service, &id, value.expose_secret().as_bytes())?;
+                Ok(SecretRef::macos_keychain(id))
+            }
+        }
     }
 
     fn get_secret(
         &self,
         reference: &SecretRef,
     ) -> Result<Option<SensitiveString>, SecretStoreError> {
-        if reference.provider != "local-sqlite" {
-            return Ok(None);
+        match reference.provider.as_str() {
+            LOCAL_SQLITE_SECRET_PROVIDER => {
+                let connection = self.connection.lock().map_err(|_| {
+                    SecretStoreError::Store("profile store mutex poisoned".to_string())
+                })?;
+
+                let secret = connection
+                    .query_row(
+                        "SELECT secret FROM secrets WHERE id = ?1",
+                        params![reference.id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .map_err(|error| SecretStoreError::Store(error.to_string()))?;
+
+                Ok(secret.map(SensitiveString::new))
+            }
+            MACOS_KEYCHAIN_SECRET_PROVIDER => {
+                if let Some(service) = self.secret_backend.keychain_service() {
+                    read_keychain_secret(service, &reference.id)
+                } else {
+                    Ok(None)
+                }
+            }
+            _ => Ok(None),
         }
-
-        let connection = self
-            .connection
-            .lock()
-            .map_err(|_| SecretStoreError::Store("profile store mutex poisoned".to_string()))?;
-
-        let secret = connection
-            .query_row(
-                "SELECT secret FROM secrets WHERE id = ?1",
-                params![reference.id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(|error| SecretStoreError::Store(error.to_string()))?;
-
-        Ok(secret.map(SensitiveString::new))
     }
 }
 
@@ -1307,6 +1590,138 @@ mod tests {
         let store = ProfileStore::open_memory().unwrap();
 
         assert_eq!(store.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn stream_destination_secret_round_trip_uses_configured_store() {
+        let store = ProfileStore::open_memory().unwrap();
+        let destination = store
+            .insert_stream_destination(StreamDestinationInput {
+                name: "Secret RTMP".to_string(),
+                platform: PlatformKind::CustomRtmp,
+                ingest_url: Some("rtmps://example.test/live".to_string()),
+                stream_key: Some(SensitiveString::new("local-secret-key")),
+                enabled: Some(true),
+            })
+            .unwrap();
+        let reference = destination.stream_key_ref.clone().unwrap();
+
+        assert_eq!(reference.provider, LOCAL_SQLITE_SECRET_PROVIDER);
+        assert_eq!(
+            store
+                .get_secret(&reference)
+                .unwrap()
+                .map(|secret| secret.expose_secret().to_string()),
+            Some("local-secret-key".to_string())
+        );
+
+        assert!(store.delete_stream_destination(&destination.id).unwrap());
+        assert!(store.get_secret(&reference).unwrap().is_none());
+
+        let report = store.secret_storage_report().unwrap();
+        assert_eq!(report.secret_storage_state, "local-sqlite-fallback");
+        assert_eq!(report.legacy_stream_key_refs, 0);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    #[ignore = "writes a temporary generic password to the login Keychain"]
+    fn macos_keychain_secret_round_trip() {
+        let service = format!("com.vaexcore.studio.tests.{}", new_id("service"));
+        let store = ProfileStore::open_memory_with_backend(SecretBackend::MacosKeychain {
+            service: service.clone(),
+        })
+        .unwrap();
+        let destination = store
+            .insert_stream_destination(StreamDestinationInput {
+                name: "Keychain RTMP".to_string(),
+                platform: PlatformKind::CustomRtmp,
+                ingest_url: Some("rtmps://example.test/live".to_string()),
+                stream_key: Some(SensitiveString::new("keychain-secret-key")),
+                enabled: Some(true),
+            })
+            .unwrap();
+        let reference = destination.stream_key_ref.clone().unwrap();
+
+        assert_eq!(reference.provider, MACOS_KEYCHAIN_SECRET_PROVIDER);
+        assert_eq!(
+            store
+                .get_secret(&reference)
+                .unwrap()
+                .map(|secret| secret.expose_secret().to_string()),
+            Some("keychain-secret-key".to_string())
+        );
+
+        assert!(store.delete_stream_destination(&destination.id).unwrap());
+        assert!(store.get_secret(&reference).unwrap().is_none());
+        let _ = delete_keychain_secret(&service, &reference.id);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    #[ignore = "writes a temporary generic password to the login Keychain"]
+    fn macos_keychain_migrates_legacy_sqlite_stream_keys() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let database_path = temp_dir.path().join("profiles.sqlite3");
+        let service = format!("com.vaexcore.studio.tests.{}", new_id("service"));
+
+        let legacy_reference = {
+            let store = ProfileStore::open_with_backend(&database_path, SecretBackend::LocalSqlite)
+                .unwrap();
+            let destination = store
+                .insert_stream_destination(StreamDestinationInput {
+                    name: "Legacy RTMP".to_string(),
+                    platform: PlatformKind::CustomRtmp,
+                    ingest_url: Some("rtmps://example.test/live".to_string()),
+                    stream_key: Some(SensitiveString::new("legacy-secret-key")),
+                    enabled: Some(true),
+                })
+                .unwrap();
+            destination.stream_key_ref.unwrap()
+        };
+        assert_eq!(legacy_reference.provider, LOCAL_SQLITE_SECRET_PROVIDER);
+
+        let store = ProfileStore::open_with_backend(
+            &database_path,
+            SecretBackend::MacosKeychain {
+                service: service.clone(),
+            },
+        )
+        .unwrap();
+        let migrated = store
+            .list_stream_destinations()
+            .unwrap()
+            .into_iter()
+            .find(|destination| destination.name == "Legacy RTMP")
+            .unwrap();
+        let migrated_reference = migrated.stream_key_ref.unwrap();
+
+        assert_eq!(migrated_reference.id, legacy_reference.id);
+        assert_eq!(migrated_reference.provider, MACOS_KEYCHAIN_SECRET_PROVIDER);
+        assert_eq!(
+            store
+                .get_secret(&migrated_reference)
+                .unwrap()
+                .map(|secret| secret.expose_secret().to_string()),
+            Some("legacy-secret-key".to_string())
+        );
+
+        let report = store.secret_storage_report().unwrap();
+        assert_eq!(report.secret_storage_state, "keychain-ready");
+        assert_eq!(report.legacy_stream_key_refs, 0);
+
+        let connection = store.connection.lock().unwrap();
+        let stored_secret_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM secrets WHERE id = ?1",
+                [&migrated_reference.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(connection);
+        assert_eq!(stored_secret_count, 0);
+
+        let _ = delete_keychain_secret(&service, &migrated_reference.id);
     }
 
     #[test]

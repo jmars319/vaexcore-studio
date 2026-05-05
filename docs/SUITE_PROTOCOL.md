@@ -20,7 +20,7 @@ Studio, Pulse, and Console remain independent apps. This protocol is the local c
 - Apps store durable state in app-owned Application Support paths, not repo-relative paths.
 - Apps publish a `localRuntime` object in their discovery heartbeat.
 - Apps should keep configuration and review workflows usable when network providers are disconnected.
-- Secrets must be stored in an app-owned secure store. Until Keychain migration is complete, discovery must honestly report the current secret storage state.
+- Secrets must be stored in an app-owned secure store. Discovery must honestly report secure storage readiness and any migration fallback state.
 - Cloud or platform dependencies must be modeled as dependencies, not as requirements for local startup.
 
 ## Runtime States

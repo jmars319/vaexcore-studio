@@ -44,7 +44,7 @@ Local API:
 - WebSocket event stream
 - Token auth with dev bypass
 - SQLite persistence
-- SecretStore implementation
+- SecretStore implementation with macOS Keychain for stream keys and legacy SQLite ref migration
 - Command audit persistence
 - Recent client registry
 - Dry-run engine wiring
@@ -86,7 +86,7 @@ React UI
   -> HTTP command
   -> vaexcore-api
   -> request ID/client registry/audit middleware
-  -> SQLite profile/secret lookup
+  -> SQLite profile lookup and secure stream-key lookup
   -> MediaEngine trait
   -> SidecarMediaEngine when media-runner is available
   -> media-runner HTTP command transport
@@ -102,6 +102,7 @@ React UI
 - Start/stop commands are idempotent.
 - Events emit only on actual lifecycle transitions.
 - Secrets do not appear in logs, status, or events.
+- On macOS, new stream keys are stored in Keychain; legacy SQLite stream-key refs are migrated during store startup.
 - Command audit entries never store request bodies.
 - API responses use structured JSON envelopes.
 - Partial failures return explicit errors and do not mutate unrelated state.

@@ -669,6 +669,7 @@ fn start_suite_discovery_heartbeat(
     bind_addr: SocketAddr,
     data_dir: PathBuf,
     media_runner_configured: bool,
+    settings_store: ProfileStore,
 ) {
     let started_at = chrono::Utc::now().to_rfc3339();
     let api_url = format!("http://{bind_addr}");
@@ -710,6 +711,7 @@ fn start_suite_discovery_heartbeat(
             local_runtime: Some(studio_suite_local_runtime(
                 &data_dir,
                 media_runner_configured,
+                &settings_store,
             )),
         };
 
@@ -724,17 +726,29 @@ fn start_suite_discovery_heartbeat(
 fn studio_suite_local_runtime(
     data_dir: &Path,
     media_runner_configured: bool,
+    settings_store: &ProfileStore,
 ) -> SuiteLocalRuntime {
+    let secret_storage = settings_store.secret_storage_report().ok();
+    let secure_storage = secret_storage
+        .as_ref()
+        .map(|report| report.secure_storage.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let secret_storage_state = secret_storage
+        .as_ref()
+        .map(|report| report.secret_storage_state.clone())
+        .unwrap_or_else(|| "unavailable".to_string());
+
     SuiteLocalRuntime {
         contract_version: SUITE_DISCOVERY_SCHEMA_VERSION,
         mode: "local-first".to_string(),
         state: "ready".to_string(),
         app_storage_dir: data_dir.display().to_string(),
         suite_dir: suite_discovery_dir().display().to_string(),
-        secure_storage: "sqlite-secret-refs".to_string(),
-        secret_storage_state: "needs-keychain-migration".to_string(),
+        secure_storage,
+        secret_storage_state,
         durable_storage: vec![
             "SQLite profiles, destinations, markers, and app settings".to_string(),
+            "Stream keys in app-owned secure storage".to_string(),
             "api-discovery.json".to_string(),
             "pipeline-plan.json and pipeline-config.json".to_string(),
         ],
@@ -1591,7 +1605,12 @@ pub fn run() {
                 &auth.get(),
             )?;
             ensure_suite_session();
-            start_suite_discovery_heartbeat(bind_addr, data_dir.clone(), media_runner.is_some());
+            start_suite_discovery_heartbeat(
+                bind_addr,
+                data_dir.clone(),
+                media_runner.is_some(),
+                settings_store.clone(),
+            );
             write_app_log(
                 &log_dir,
                 "app.api.ready",

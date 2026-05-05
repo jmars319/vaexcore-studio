@@ -566,6 +566,15 @@ fn studio_local_runtime_health(state: &ApiState) -> LocalRuntimeHealth {
         .parent()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| state.database_path.display().to_string());
+    let secret_storage = state.store.secret_storage_report().ok();
+    let secure_storage = secret_storage
+        .as_ref()
+        .map(|report| report.secure_storage.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let secret_storage_state = secret_storage
+        .as_ref()
+        .map(|report| report.secret_storage_state.clone())
+        .unwrap_or_else(|| "unavailable".to_string());
 
     LocalRuntimeHealth {
         contract_version: 1,
@@ -573,10 +582,11 @@ fn studio_local_runtime_health(state: &ApiState) -> LocalRuntimeHealth {
         state: "ready".to_string(),
         app_storage_dir,
         suite_dir: suite_discovery_dir().display().to_string(),
-        secure_storage: "sqlite-secret-refs".to_string(),
-        secret_storage_state: "needs-keychain-migration".to_string(),
+        secure_storage,
+        secret_storage_state,
         durable_storage: vec![
             "SQLite profiles, destinations, markers, and app settings".to_string(),
+            "Stream keys in app-owned secure storage".to_string(),
             "api-discovery.json".to_string(),
             "pipeline-plan.json and pipeline-config.json".to_string(),
         ],

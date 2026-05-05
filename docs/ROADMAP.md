@@ -43,7 +43,8 @@
 - Better ingest presets.
 - Per-platform validation rules.
 - Optional OAuth helpers outside the media core.
-- Secret migration to OS keychain where available.
+- macOS Keychain storage for Studio stream keys. Done.
+- Windows Credential Manager storage for Studio stream keys.
 
 ## External App Milestone
 
