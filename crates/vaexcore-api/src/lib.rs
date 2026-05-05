@@ -29,10 +29,10 @@ use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use vaexcore_core::{
     new_id, now_utc, ApiResponse, AuditLogEntry, AuditLogSnapshot, CommandStatus,
-    ConnectedClientsSnapshot, HealthResponse, Marker, MarkersSnapshot, MediaPipelinePlan,
-    MediaPipelinePlanRequest, MediaPipelineValidation, MediaProfileInput, PipelineIntent,
-    ProfilesSnapshot, RecentRecordingsSnapshot, SecretStore, StreamDestinationInput, StudioEvent,
-    StudioEventKind, StudioStatus, APP_NAME,
+    ConnectedClientsSnapshot, HealthResponse, LocalRuntimeDependency, LocalRuntimeHealth, Marker,
+    MarkersSnapshot, MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineValidation,
+    MediaProfileInput, PipelineIntent, ProfilesSnapshot, RecentRecordingsSnapshot, SecretStore,
+    StreamDestinationInput, StudioEvent, StudioEventKind, StudioStatus, APP_NAME,
 };
 use vaexcore_media::{
     build_dry_run_pipeline_plan, DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor,
@@ -63,6 +63,7 @@ pub struct ApiServerConfig {
 pub struct ApiState {
     pub auth: SharedAuthConfig,
     pub store: ProfileStore,
+    pub database_path: PathBuf,
     pub engine: Arc<dyn MediaEngine>,
     pub events: EventBus,
     pub clients: ClientRegistry,
@@ -86,6 +87,7 @@ impl ApiState {
         let state = Arc::new(Self {
             auth: config.auth.clone(),
             store: ProfileStore::open(&config.database_path)?,
+            database_path: config.database_path.clone(),
             engine,
             events,
             clients: ClientRegistry::new(),
@@ -117,6 +119,7 @@ impl ApiState {
         let state = Arc::new(Self {
             auth: SharedAuthConfig::new(auth),
             store: ProfileStore::open_memory()?,
+            database_path: PathBuf::from(":memory:"),
             engine,
             events,
             clients: ClientRegistry::new(),
@@ -553,7 +556,46 @@ async fn health(State(state): State<Arc<ApiState>>) -> Json<ApiResponse<HealthRe
         ok: true,
         auth_required: auth.auth_required(),
         dev_auth_bypass: auth.dev_mode,
+        local_runtime: studio_local_runtime_health(&state),
     }))
+}
+
+fn studio_local_runtime_health(state: &ApiState) -> LocalRuntimeHealth {
+    let app_storage_dir = state
+        .database_path
+        .parent()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| state.database_path.display().to_string());
+
+    LocalRuntimeHealth {
+        contract_version: 1,
+        mode: "local-first".to_string(),
+        state: "ready".to_string(),
+        app_storage_dir,
+        suite_dir: suite_discovery_dir().display().to_string(),
+        secure_storage: "sqlite-secret-refs".to_string(),
+        secret_storage_state: "needs-keychain-migration".to_string(),
+        durable_storage: vec![
+            "SQLite profiles, destinations, markers, and app settings".to_string(),
+            "api-discovery.json".to_string(),
+            "pipeline-plan.json and pipeline-config.json".to_string(),
+        ],
+        network_policy: "localhost-only".to_string(),
+        dependencies: vec![LocalRuntimeDependency {
+            name: "media-runner".to_string(),
+            kind: "managed-sidecar".to_string(),
+            state: if state.media_runner.is_some() {
+                "managed".to_string()
+            } else {
+                "dry-run-fallback".to_string()
+            },
+            detail: if state.media_runner.is_some() {
+                "Studio launched the bundled media-runner sidecar.".to_string()
+            } else {
+                "Studio is using the in-process dry-run media engine.".to_string()
+            },
+        }],
+    }
 }
 
 async fn status(
@@ -1187,6 +1229,16 @@ pub fn default_database_path() -> PathBuf {
     directories::ProjectDirs::from("com", "vaexcore", "vaexcore studio")
         .map(|dirs| dirs.data_dir().join("studio.sqlite"))
         .unwrap_or_else(|| PathBuf::from("vaexcore studio.sqlite"))
+}
+
+fn suite_discovery_dir() -> PathBuf {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("Library")
+        .join("Application Support")
+        .join("vaexcore")
+        .join("suite")
 }
 
 #[cfg(test)]

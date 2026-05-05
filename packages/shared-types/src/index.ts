@@ -228,6 +228,27 @@ export interface HealthResponse {
   ok: boolean;
   auth_required: boolean;
   dev_auth_bypass: boolean;
+  local_runtime: LocalRuntimeHealth;
+}
+
+export interface LocalRuntimeHealth {
+  contract_version: number;
+  mode: "local-first";
+  state: "ready" | "degraded" | "blocked";
+  app_storage_dir: string;
+  suite_dir: string;
+  secure_storage: string;
+  secret_storage_state: string;
+  durable_storage: string[];
+  network_policy: "localhost-only";
+  dependencies: LocalRuntimeDependency[];
+}
+
+export interface LocalRuntimeDependency {
+  name: string;
+  kind: string;
+  state: string;
+  detail: string;
 }
 
 export type CaptureSourceKind =

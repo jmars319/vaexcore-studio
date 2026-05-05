@@ -202,6 +202,31 @@ struct SuiteDiscoveryDocument {
     suite_session_id: Option<String>,
     activity: Option<String>,
     activity_detail: Option<String>,
+    local_runtime: Option<SuiteLocalRuntime>,
+}
+
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SuiteLocalRuntime {
+    contract_version: u8,
+    mode: String,
+    state: String,
+    app_storage_dir: String,
+    suite_dir: String,
+    secure_storage: String,
+    secret_storage_state: String,
+    durable_storage: Vec<String>,
+    network_policy: String,
+    dependencies: Vec<SuiteLocalRuntimeDependency>,
+}
+
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SuiteLocalRuntimeDependency {
+    name: String,
+    kind: String,
+    state: String,
+    detail: String,
 }
 
 #[derive(Clone, serde::Deserialize, serde::Serialize)]
@@ -332,6 +357,7 @@ struct SuiteAppStatus {
     suite_session_id: Option<String>,
     activity: Option<String>,
     activity_detail: Option<String>,
+    local_runtime: Option<SuiteLocalRuntime>,
     detail: String,
 }
 
@@ -639,7 +665,11 @@ fn launch_macos_app(app_name: &str) -> SuiteLaunchResult {
     }
 }
 
-fn start_suite_discovery_heartbeat(bind_addr: SocketAddr) {
+fn start_suite_discovery_heartbeat(
+    bind_addr: SocketAddr,
+    data_dir: PathBuf,
+    media_runner_configured: bool,
+) {
     let started_at = chrono::Utc::now().to_rfc3339();
     let api_url = format!("http://{bind_addr}");
     let ws_url = format!("ws://{bind_addr}/events");
@@ -677,6 +707,10 @@ fn start_suite_discovery_heartbeat(bind_addr: SocketAddr) {
                 .as_ref()
                 .map(|session| format!("Coordinating {}", session.title))
                 .or_else(|| Some("Ready to coordinate the suite".to_string())),
+            local_runtime: Some(studio_suite_local_runtime(
+                &data_dir,
+                media_runner_configured,
+            )),
         };
 
         if let Err(error) = write_suite_discovery_document(&document) {
@@ -685,6 +719,41 @@ fn start_suite_discovery_heartbeat(bind_addr: SocketAddr) {
 
         std::thread::sleep(SUITE_DISCOVERY_HEARTBEAT_INTERVAL);
     });
+}
+
+fn studio_suite_local_runtime(
+    data_dir: &Path,
+    media_runner_configured: bool,
+) -> SuiteLocalRuntime {
+    SuiteLocalRuntime {
+        contract_version: SUITE_DISCOVERY_SCHEMA_VERSION,
+        mode: "local-first".to_string(),
+        state: "ready".to_string(),
+        app_storage_dir: data_dir.display().to_string(),
+        suite_dir: suite_discovery_dir().display().to_string(),
+        secure_storage: "sqlite-secret-refs".to_string(),
+        secret_storage_state: "needs-keychain-migration".to_string(),
+        durable_storage: vec![
+            "SQLite profiles, destinations, markers, and app settings".to_string(),
+            "api-discovery.json".to_string(),
+            "pipeline-plan.json and pipeline-config.json".to_string(),
+        ],
+        network_policy: "localhost-only".to_string(),
+        dependencies: vec![SuiteLocalRuntimeDependency {
+            name: "media-runner".to_string(),
+            kind: "managed-sidecar".to_string(),
+            state: if media_runner_configured {
+                "managed".to_string()
+            } else {
+                "dry-run-fallback".to_string()
+            },
+            detail: if media_runner_configured {
+                "Studio launched the bundled media-runner sidecar.".to_string()
+            } else {
+                "Studio is using the in-process dry-run media engine.".to_string()
+            },
+        }],
+    }
 }
 
 fn build_suite_session_document(title: Option<String>) -> SuiteSessionDocument {
@@ -888,6 +957,9 @@ fn suite_app_status(definition: &SuiteAppDefinition) -> SuiteAppStatus {
         activity_detail: discovery
             .as_ref()
             .and_then(|document| document.activity_detail.clone()),
+        local_runtime: discovery
+            .as_ref()
+            .and_then(|document| document.local_runtime.clone()),
         detail,
     }
 }
@@ -1519,7 +1591,7 @@ pub fn run() {
                 &auth.get(),
             )?;
             ensure_suite_session();
-            start_suite_discovery_heartbeat(bind_addr);
+            start_suite_discovery_heartbeat(bind_addr, data_dir.clone(), media_runner.is_some());
             write_app_log(
                 &log_dir,
                 "app.api.ready",

@@ -46,6 +46,29 @@ pub struct HealthResponse {
     pub ok: bool,
     pub auth_required: bool,
     pub dev_auth_bypass: bool,
+    pub local_runtime: LocalRuntimeHealth,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct LocalRuntimeHealth {
+    pub contract_version: u8,
+    pub mode: String,
+    pub state: String,
+    pub app_storage_dir: String,
+    pub suite_dir: String,
+    pub secure_storage: String,
+    pub secret_storage_state: String,
+    pub durable_storage: Vec<String>,
+    pub network_policy: String,
+    pub dependencies: Vec<LocalRuntimeDependency>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct LocalRuntimeDependency {
+    pub name: String,
+    pub kind: String,
+    pub state: String,
+    pub detail: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

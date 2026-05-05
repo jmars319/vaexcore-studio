@@ -94,6 +94,27 @@ export interface SuiteAppStatus {
   suiteSessionId: string | null;
   activity: string | null;
   activityDetail: string | null;
+  localRuntime: SuiteLocalRuntime | null;
+  detail: string;
+}
+
+export interface SuiteLocalRuntime {
+  contractVersion: 1;
+  mode: "local-first";
+  state: "ready" | "degraded" | "blocked";
+  appStorageDir: string;
+  suiteDir: string;
+  secureStorage: string;
+  secretStorageState: string;
+  durableStorage: string[];
+  networkPolicy: "localhost-only";
+  dependencies: SuiteLocalRuntimeDependency[];
+}
+
+export interface SuiteLocalRuntimeDependency {
+  name: string;
+  kind: string;
+  state: string;
   detail: string;
 }
 
