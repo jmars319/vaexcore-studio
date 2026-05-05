@@ -4,11 +4,13 @@ import {
   CheckCircle2,
   Copy,
   FileVideo,
+  Link2,
   MapPin,
   Pencil,
   Play,
   Plus,
   Radio,
+  RefreshCw,
   ScrollText,
   Settings as SettingsIcon,
   SlidersHorizontal,
@@ -60,6 +62,7 @@ import {
   loadRuntimeConfig,
   loadAppSettings,
   loadSuiteStatus,
+  loadSuiteSession,
   MediaRunnerInfo,
   openDataDirectory,
   openCameraPrivacySettings,
@@ -69,9 +72,12 @@ import {
   regenerateApiToken,
   RuntimeApiConfig,
   saveAppSettings,
+  sendSuiteCommand,
   StudioApi,
+  startSuiteSession,
   SuiteAppStatus,
   SuiteLaunchResult,
+  SuiteSession,
 } from "./api";
 import logoUrl from "./assets/brand/vaexcore-studio-logo.jpg";
 
@@ -82,6 +88,15 @@ type Section =
   | "controls"
   | "apps"
   | "logs";
+
+type SuiteTimelineItem = {
+  id: string;
+  kind: "presence" | "recording" | "marker" | "event";
+  title: string;
+  detail: string;
+  timestamp: string;
+  source: string;
+};
 
 const sectionIds: readonly Section[] = [
   "dashboard",
@@ -194,6 +209,8 @@ function App() {
   const [pipelinePlan, setPipelinePlan] = useState<MediaPipelinePlan | null>(null);
   const [suiteLaunchStatus, setSuiteLaunchStatus] = useState<string | null>(null);
   const [suiteStatus, setSuiteStatus] = useState<SuiteAppStatus[]>([]);
+  const [suiteSession, setSuiteSession] = useState<SuiteSession | null>(null);
+  const [streamBandwidthTest, setStreamBandwidthTest] = useState(false);
 
   useEffect(() => {
     loadRuntimeConfig().then(setConfig).catch((error: Error) => {
@@ -260,6 +277,7 @@ function App() {
           nextMediaRunnerInfo,
           nextPipelinePlan,
           nextSuiteStatus,
+          nextSuiteSession,
         ] = await Promise.all([
           StudioApi.health(runtimeConfig),
           StudioApi.status(runtimeConfig),
@@ -271,6 +289,7 @@ function App() {
           loadMediaRunnerInfo(),
           StudioApi.mediaPlan(runtimeConfig),
           loadSuiteStatus(),
+          loadSuiteSession(),
         ]);
         if (cancelled) return;
         setHealth(nextHealth);
@@ -283,6 +302,7 @@ function App() {
         setMediaRunnerInfo(nextMediaRunnerInfo);
         setPipelinePlan(nextPipelinePlan);
         setSuiteStatus(nextSuiteStatus);
+        setSuiteSession(nextSuiteSession);
         loadPreflightSnapshot()
           .then((snapshot) => {
             if (!cancelled) setPreflight(snapshot);
@@ -355,6 +375,13 @@ function App() {
   const activeStatus = status?.status;
   const activeDestination = activeStatus?.active_destination;
   const recordingPath = activeStatus?.recording_path;
+  const selectedDestination = profiles?.stream_destinations.find(
+    (destination) => destination.id === selectedDestinationId,
+  );
+  const suiteTimeline = useMemo(
+    () => buildSuiteTimeline(suiteStatus, recentRecordings, recentMarkers, events),
+    [events, recentMarkers, recentRecordings, suiteStatus],
+  );
 
   async function refreshProfiles() {
     if (!config) return;
@@ -626,6 +653,40 @@ function App() {
     setError(null);
   }
 
+  async function handleStartSuiteSession() {
+    try {
+      const nextSession = await startSuiteSession(suiteSession?.title);
+      setSuiteSession(nextSession);
+      const status = await loadSuiteStatus();
+      setSuiteStatus(status);
+      setSuiteLaunchStatus(`Suite session active: ${nextSession.title}`);
+      setError(null);
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Could not start suite session",
+      );
+    }
+  }
+
+  async function handleSendSuiteCommand(targetApp: string, command: string) {
+    try {
+      await sendSuiteCommand({
+        targetApp,
+        command,
+        payload: {
+          requestedFrom: "vaexcore-studio",
+          requestedAt: new Date().toISOString(),
+        },
+      });
+      setSuiteLaunchStatus(`${command} sent to ${targetApp}.`);
+      setError(null);
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Could not send suite command",
+      );
+    }
+  }
+
   async function handleReviewRecordingInPulse(recording: RecordingHistoryEntry) {
     setSuiteLaunchStatus(`Sending ${recording.profile_name} recording to Pulse...`);
     const results = await handoffRecordingToPulse({
@@ -705,6 +766,15 @@ function App() {
             onDelete={deleteStreamDestination}
             onEdit={editStreamDestination}
             onFormChange={setDestinationForm}
+            onUseTwitchManual={() =>
+              setDestinationForm({
+                ...destinationForm,
+                name: destinationForm.name || "Twitch Manual RTMP",
+                platform: "twitch",
+                ingest_url: "rtmp://live.twitch.tv/app",
+                enabled: true,
+              })
+            }
             profiles={profiles}
           />
         );
@@ -732,7 +802,13 @@ function App() {
             }
             onStartStream={() =>
               config &&
-              runCommand(() => StudioApi.startStream(config, selectedDestinationId))
+              runCommand(() =>
+                StudioApi.startStream(
+                  config,
+                  selectedDestinationId,
+                  streamBandwidthTest,
+                ),
+              )
             }
             onStopRecording={() =>
               config && runCommand(() => StudioApi.stopRecording(config))
@@ -747,11 +823,17 @@ function App() {
               )
             }
             profiles={profiles}
+            preflight={preflight}
             recordingActive={activeStatus?.recording_active ?? false}
             selectedDestinationId={selectedDestinationId}
+            selectedDestination={selectedDestination}
             selectedProfileId={selectedProfileId}
             setSelectedDestinationId={setSelectedDestinationId}
             setSelectedProfileId={setSelectedProfileId}
+            streamBandwidthTest={streamBandwidthTest}
+            setStreamBandwidthTest={setStreamBandwidthTest}
+            engineMode={activeStatus?.mode ?? "dry_run"}
+            mediaRunnerInfo={mediaRunnerInfo}
             streamActive={activeStatus?.stream_active ?? false}
           />
         );
@@ -763,10 +845,14 @@ function App() {
             engine={activeStatus?.engine ?? "starting"}
             mediaRunnerInfo={mediaRunnerInfo}
             onLaunchSuite={handleLaunchSuite}
+            onStartSuiteSession={handleStartSuiteSession}
+            onSendSuiteCommand={handleSendSuiteCommand}
             onReviewRecordingInPulse={handleReviewRecordingInPulse}
             recentMarkers={recentMarkers}
             recentRecordings={recentRecordings}
+            suiteSession={suiteSession}
             suiteStatus={suiteStatus}
+            suiteTimeline={suiteTimeline}
             suiteLaunchStatus={suiteLaunchStatus}
           />
         );
@@ -776,6 +862,7 @@ function App() {
   }, [
     activeDestination?.name,
     activeStatus?.engine,
+    activeStatus?.mode,
     activeStatus?.recording_active,
     activeStatus?.stream_active,
     auditEntries,
@@ -797,8 +884,12 @@ function App() {
     section,
     selectedDestinationId,
     selectedProfileId,
+    selectedDestination,
     suiteStatus,
+    suiteSession,
+    suiteTimeline,
     suiteLaunchStatus,
+    streamBandwidthTest,
   ]);
 
   if (isSettingsWindow) {
@@ -1051,6 +1142,7 @@ function DestinationsPage(props: {
   onDelete: (destination: StreamDestination) => void;
   onEdit: (destination: StreamDestination) => void;
   onFormChange: (value: StreamDestinationInput) => void;
+  onUseTwitchManual: () => void;
   profiles: ProfilesSnapshot | null;
 }) {
   const isEditing = props.editingDestinationId !== null;
@@ -1099,6 +1191,14 @@ function DestinationsPage(props: {
 
       <section className="panel">
         <PanelTitle title={isEditing ? "Edit Destination" : "Create Destination"} />
+        <button
+          className="secondary-button full"
+          onClick={props.onUseTwitchManual}
+          type="button"
+        >
+          <Radio size={16} />
+          Twitch Manual RTMP
+        </button>
         <form className="form" onSubmit={props.onCreate}>
           <TextInput
             label="Name"
@@ -1357,13 +1457,26 @@ function ControlsPage(props: {
   onStopRecording: () => void;
   onStopStream: () => void;
   profiles: ProfilesSnapshot | null;
+  preflight: PreflightSnapshot | null;
   recordingActive: boolean;
   selectedDestinationId: string | undefined;
+  selectedDestination: StreamDestination | undefined;
   selectedProfileId: string | undefined;
   setSelectedDestinationId: (value: string) => void;
   setSelectedProfileId: (value: string) => void;
+  streamBandwidthTest: boolean;
+  setStreamBandwidthTest: (value: boolean) => void;
+  engineMode: string;
+  mediaRunnerInfo: MediaRunnerInfo | null;
   streamActive: boolean;
 }) {
+  const checklist = goLiveChecklist(
+    props.selectedDestination,
+    props.engineMode,
+    props.mediaRunnerInfo,
+    props.preflight,
+  );
+
   return (
     <div className="control-grid">
       <section className="panel">
@@ -1380,6 +1493,15 @@ function ControlsPage(props: {
               </option>
             ))}
           </select>
+        </label>
+        <label className="check-row">
+          <input
+            checked={props.streamBandwidthTest}
+            disabled={props.streamActive}
+            onChange={(event) => props.setStreamBandwidthTest(event.target.checked)}
+            type="checkbox"
+          />
+          Twitch bandwidth test
         </label>
         <div className="button-row">
           <button
@@ -1443,6 +1565,23 @@ function ControlsPage(props: {
       </section>
 
       <section className="panel">
+        <PanelTitle title="Go Live Checklist" />
+        <div className="checklist">
+          {checklist.map((item) => (
+            <div className="checklist-row" key={item.label}>
+              <Pill tone={item.ready ? "green" : "amber"}>
+                {item.ready ? "Ready" : "Check"}
+              </Pill>
+              <div>
+                <strong>{item.label}</strong>
+                <span>{item.detail}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel">
         <PanelTitle title="Marker" />
         <TextInput
           label="Label"
@@ -1462,16 +1601,65 @@ function ControlsPage(props: {
   );
 }
 
+function goLiveChecklist(
+  destination: StreamDestination | undefined,
+  engineMode: string,
+  runner: MediaRunnerInfo | null,
+  preflight: PreflightSnapshot | null,
+) {
+  const isTwitch = destination?.platform === "twitch";
+  const ingestReady = Boolean(destination?.ingest_url?.trim());
+  const keyReady = Boolean(destination?.stream_key_ref);
+  const runnerReady = Boolean(runner?.running) && engineMode !== "dry_run";
+  const preflightReady =
+    !preflight || preflight.overall === "ready" || preflight.overall === "warning";
+
+  return [
+    {
+      label: "Destination",
+      ready: Boolean(destination?.enabled) && ingestReady,
+      detail: destination
+        ? `${platformLabels[destination.platform]} at ${destination.ingest_url || "no ingest URL"}`
+        : "Select an enabled stream destination.",
+    },
+    {
+      label: "Stream Key",
+      ready: keyReady || !isTwitch,
+      detail: keyReady
+        ? "A local stream key is stored."
+        : "Store a Twitch stream key before going live.",
+    },
+    {
+      label: "Media Runner",
+      ready: runnerReady,
+      detail: runnerReady
+        ? "Real RTMP runner is available."
+        : "Studio is still using dry-run media.",
+    },
+    {
+      label: "Permissions",
+      ready: preflightReady,
+      detail: preflight
+        ? `Preflight status is ${preflight.overall}.`
+        : "Preflight status has not loaded yet.",
+    },
+  ];
+}
+
 function ConnectedAppsPage(props: {
   clients: ConnectedClient[];
   config: RuntimeApiConfig | null;
   engine: string;
   mediaRunnerInfo: MediaRunnerInfo | null;
   onLaunchSuite: () => void;
+  onStartSuiteSession: () => void;
+  onSendSuiteCommand: (targetApp: string, command: string) => void;
   onReviewRecordingInPulse: (recording: RecordingHistoryEntry) => void;
   recentMarkers: Marker[];
   recentRecordings: RecordingHistoryEntry[];
+  suiteSession: SuiteSession | null;
   suiteStatus: SuiteAppStatus[];
+  suiteTimeline: SuiteTimelineItem[];
   suiteLaunchStatus: string | null;
 }) {
   const apiUrl = props.config?.apiUrl ?? "http://127.0.0.1:51287";
@@ -1483,7 +1671,28 @@ function ConnectedAppsPage(props: {
   return (
     <div className="stack">
       <section className="panel">
-        <PanelTitle title="Suite Status" />
+        <PanelTitle title="Suite Session" />
+        <div className="suite-session-card">
+          <div>
+            <strong>{props.suiteSession?.title ?? "No active suite session"}</strong>
+            <span>
+              {props.suiteSession
+                ? `Session ${props.suiteSession.sessionId}`
+                : "Studio can create the shared local session used by all three apps."}
+            </span>
+          </div>
+          <button
+            className="secondary-button"
+            onClick={props.onStartSuiteSession}
+            type="button"
+          >
+            <RefreshCw size={16} />
+            Start Session
+          </button>
+        </div>
+      </section>
+      <section className="panel">
+        <PanelTitle title="Suite Presence" />
         {props.suiteStatus.length === 0 ? (
           <div className="empty">Suite status unavailable</div>
         ) : (
@@ -1492,9 +1701,15 @@ function ConnectedAppsPage(props: {
               <div className="table-row suite-status-row" key={app.appId}>
                 <div>
                   <strong>{app.appName}</strong>
-                  <span>{app.detail}</span>
+                  <span>{app.activityDetail ?? app.detail}</span>
                   <code>{app.healthUrl ?? app.discoveryFile}</code>
                 </div>
+                <Pill tone={app.suiteSessionId ? "green" : "muted"}>
+                  {app.suiteSessionId ? "In session" : "No session"}
+                </Pill>
+                <Pill tone={app.activity ? "amber" : "muted"}>
+                  {app.activity ?? "idle"}
+                </Pill>
                 <Pill tone={suiteStatusTone(app)}>
                   {suiteStatusLabel(app)}
                 </Pill>
@@ -1523,6 +1738,43 @@ function ConnectedAppsPage(props: {
           <Pill tone={suiteLaunchTone(props.suiteLaunchStatus)}>
             {props.suiteLaunchStatus}
           </Pill>
+        )}
+        <div className="button-row">
+          <button
+            className="secondary-button compact"
+            onClick={() => props.onSendSuiteCommand("vaexcore-pulse", "focus-review")}
+            type="button"
+          >
+            <Link2 size={14} />
+            Pulse Review
+          </button>
+          <button
+            className="secondary-button compact"
+            onClick={() => props.onSendSuiteCommand("vaexcore-console", "focus-ops")}
+            type="button"
+          >
+            <Terminal size={14} />
+            Console Ops
+          </button>
+        </div>
+      </section>
+      <section className="panel">
+        <PanelTitle title="Suite Timeline" />
+        {props.suiteTimeline.length === 0 ? (
+          <div className="empty">No shared activity yet</div>
+        ) : (
+          <div className="table">
+            {props.suiteTimeline.map((item) => (
+              <div className="table-row" key={item.id}>
+                <div>
+                  <strong>{item.title}</strong>
+                  <span>{item.detail}</span>
+                </div>
+                <Pill tone={timelineTone(item.kind)}>{item.source}</Pill>
+                <Pill tone="muted">{formatSuiteTimestamp(item.timestamp)}</Pill>
+              </div>
+            ))}
+          </div>
         )}
       </section>
       <section className="panel">
@@ -1641,6 +1893,75 @@ function ConnectedAppsPage(props: {
 function formatSuiteLaunchFailure(results: SuiteLaunchResult[]): string {
   const appNames = results.map((result) => result.appName).join(", ");
   return `Could not launch ${appNames}. Install the app bundles in Applications, then try again.`;
+}
+
+function buildSuiteTimeline(
+  suiteStatus: SuiteAppStatus[],
+  recordings: RecordingHistoryEntry[],
+  markers: Marker[],
+  events: StudioEvent[],
+): SuiteTimelineItem[] {
+  const presence = suiteStatus
+    .filter((app) => app.updatedAt)
+    .map((app) => ({
+      id: `presence-${app.appId}-${app.updatedAt}`,
+      kind: "presence" as const,
+      title: app.activity ?? app.appName,
+      detail: app.activityDetail ?? app.detail,
+      timestamp: app.updatedAt ?? new Date().toISOString(),
+      source: app.appName,
+    }));
+  const recordingItems = recordings.map((recording) => ({
+    id: `recording-${recording.session_id}`,
+    kind: "recording" as const,
+    title: `Recording ready: ${recording.profile_name}`,
+    detail: recording.output_path,
+    timestamp: recording.stopped_at,
+    source: "Studio",
+  }));
+  const markerItems = markers.map((marker) => ({
+    id: `marker-${marker.id}`,
+    kind: "marker" as const,
+    title: marker.label ?? "Marker",
+    detail: marker.media_path ?? marker.source_event_id ?? marker.id,
+    timestamp: marker.created_at,
+    source: markerSourceLabel(marker.source_app),
+  }));
+  const eventItems = events.slice(0, 10).map((event) => ({
+    id: `event-${event.id}`,
+    kind: "event" as const,
+    title: event.type,
+    detail: String(
+      event.payload["session_id"] ?? event.payload["destination_name"] ?? event.id,
+    ),
+    timestamp: event.timestamp,
+    source: "Studio",
+  }));
+
+  return [...presence, ...recordingItems, ...markerItems, ...eventItems]
+    .sort((left, right) => suiteTimestampMs(right.timestamp) - suiteTimestampMs(left.timestamp))
+    .slice(0, 18);
+}
+
+function suiteTimestampMs(value: string): number {
+  if (/^\d+$/.test(value)) {
+    return Number(value) * 1000;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function formatSuiteTimestamp(value: string): string {
+  const timestamp = suiteTimestampMs(value);
+  if (!timestamp) return value;
+  return new Date(timestamp).toLocaleTimeString();
+}
+
+function timelineTone(kind: SuiteTimelineItem["kind"]): "green" | "red" | "amber" | "muted" {
+  if (kind === "presence") return "green";
+  if (kind === "recording") return "amber";
+  if (kind === "marker") return "red";
+  return "muted";
 }
 
 function formatSuiteVerification(status: SuiteAppStatus[]): string {

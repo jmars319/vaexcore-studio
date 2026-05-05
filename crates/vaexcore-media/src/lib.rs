@@ -2,13 +2,19 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::Arc;
+use std::{
+    env, fmt,
+    path::PathBuf,
+    process::{Child, Command, Stdio},
+    sync::{Arc, Mutex as StdMutex},
+    time::Duration,
+};
 use tokio::sync::Mutex;
 use vaexcore_core::{
     new_id, CaptureSourceKind, EngineMode, EngineStatus, MediaPipelineConfig, MediaPipelinePlan,
     MediaPipelinePlanRequest, MediaPipelineStep, MediaProfile, PipelineIntent, PipelineStepStatus,
-    RecordingContainer, RecordingSession, StreamDestination, StreamSession, StudioEvent,
-    StudioEventKind,
+    PlatformKind, RecordingContainer, RecordingSession, StreamDestination, StreamSession,
+    StudioEvent, StudioEventKind,
 };
 
 mod sidecar;
@@ -32,6 +38,39 @@ pub struct MediaTransition<T> {
     pub changed: bool,
     pub session: Option<T>,
     pub status: EngineStatus,
+}
+
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
+pub struct StreamLaunchRequest {
+    pub destination: StreamDestination,
+    #[serde(default)]
+    pub stream_key: Option<String>,
+    #[serde(default)]
+    pub bandwidth_test: bool,
+}
+
+impl fmt::Debug for StreamLaunchRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("StreamLaunchRequest")
+            .field("destination", &self.destination)
+            .field(
+                "stream_key",
+                &self.stream_key.as_ref().map(|_| "[redacted]"),
+            )
+            .field("bandwidth_test", &self.bandwidth_test)
+            .finish()
+    }
+}
+
+impl StreamLaunchRequest {
+    pub fn new(destination: StreamDestination) -> Self {
+        Self {
+            destination,
+            stream_key: None,
+            bandwidth_test: false,
+        }
+    }
 }
 
 pub fn build_dry_run_pipeline_plan(request: MediaPipelinePlanRequest) -> MediaPipelinePlan {
@@ -72,7 +111,7 @@ pub trait MediaEngine: Send + Sync {
 
     async fn start_stream(
         &self,
-        destination: StreamDestination,
+        request: StreamLaunchRequest,
     ) -> Result<MediaTransition<StreamSession>, MediaError>;
 
     async fn stop_stream(&self) -> Result<MediaTransition<StreamSession>, MediaError>;
@@ -196,8 +235,9 @@ impl MediaEngine for DryRunMediaEngine {
 
     async fn start_stream(
         &self,
-        destination: StreamDestination,
+        request: StreamLaunchRequest,
     ) -> Result<MediaTransition<StreamSession>, MediaError> {
+        let destination = request.destination;
         if destination.ingest_url.trim().is_empty() {
             return Err(MediaError::InvalidCommand(
                 "stream destination requires an ingest URL".to_string(),
@@ -492,6 +532,336 @@ fn slug(value: &str) -> String {
     slug.trim_matches('-').to_string()
 }
 
+#[derive(Clone)]
+pub struct FfmpegRtmpEngine {
+    inner: Arc<FfmpegRtmpEngineInner>,
+}
+
+struct FfmpegRtmpEngineInner {
+    stream: StdMutex<Option<FfmpegActiveStream>>,
+    recording_engine: DryRunMediaEngine,
+    ffmpeg_path: Option<PathBuf>,
+    event_sink: Option<MediaEventSink>,
+}
+
+struct FfmpegActiveStream {
+    session: StreamSession,
+    child: Child,
+}
+
+impl FfmpegRtmpEngine {
+    pub fn new(ffmpeg_path: Option<PathBuf>, event_sink: Option<MediaEventSink>) -> Self {
+        Self {
+            inner: Arc::new(FfmpegRtmpEngineInner {
+                stream: StdMutex::new(None),
+                recording_engine: DryRunMediaEngine::new(event_sink.clone()),
+                ffmpeg_path,
+                event_sink,
+            }),
+        }
+    }
+
+    fn emit(&self, event: StudioEvent) {
+        if let Some(sink) = &self.inner.event_sink {
+            sink(event);
+        }
+    }
+
+    async fn status_from_state(&self) -> EngineStatus {
+        let recording_status = self.inner.recording_engine.status().await;
+        let stream = self
+            .inner
+            .stream
+            .lock()
+            .expect("ffmpeg stream state mutex poisoned")
+            .as_ref()
+            .map(|active| active.session.clone());
+        EngineStatus {
+            engine: if self.inner.ffmpeg_path.is_some() {
+                "FfmpegRtmpEngine".to_string()
+            } else {
+                "FfmpegRtmpEngine unavailable".to_string()
+            },
+            mode: EngineMode::ExternalSidecar,
+            recording: recording_status.recording,
+            stream: stream.clone(),
+            recording_active: recording_status.recording_active,
+            stream_active: stream.is_some(),
+            recording_path: recording_status.recording_path,
+            active_destination: stream.map(|session| session.destination),
+            updated_at: Utc::now(),
+        }
+    }
+}
+
+#[async_trait]
+impl MediaEngine for FfmpegRtmpEngine {
+    async fn start_recording(
+        &self,
+        profile: MediaProfile,
+    ) -> Result<MediaTransition<RecordingSession>, MediaError> {
+        self.inner.recording_engine.start_recording(profile).await
+    }
+
+    async fn stop_recording(&self) -> Result<MediaTransition<RecordingSession>, MediaError> {
+        self.inner.recording_engine.stop_recording().await
+    }
+
+    async fn start_stream(
+        &self,
+        request: StreamLaunchRequest,
+    ) -> Result<MediaTransition<StreamSession>, MediaError> {
+        if request.destination.ingest_url.trim().is_empty() {
+            return Err(MediaError::InvalidCommand(
+                "stream destination requires an ingest URL".to_string(),
+            ));
+        }
+
+        let existing_session = {
+            let mut state = self
+                .inner
+                .stream
+                .lock()
+                .expect("ffmpeg stream state mutex poisoned");
+            if let Some(active) = state.as_mut() {
+                match active.child.try_wait() {
+                    Ok(None) => Some(active.session.clone()),
+                    Ok(Some(status)) => {
+                        let session = active.session.clone();
+                        *state = None;
+                        return Err(MediaError::Unavailable(format!(
+                            "ffmpeg exited before the stream could be reused ({status}); previous session {} was cleared",
+                            session.id
+                        )));
+                    }
+                    Err(error) => {
+                        *state = None;
+                        return Err(MediaError::Unavailable(format!(
+                            "could not inspect ffmpeg stream process: {error}"
+                        )));
+                    }
+                }
+            } else {
+                None
+            }
+        };
+
+        if let Some(session) = existing_session {
+            return Ok(MediaTransition {
+                changed: false,
+                session: Some(session),
+                status: self.status_from_state().await,
+            });
+        }
+
+        let ffmpeg_path = self.inner.ffmpeg_path.clone().ok_or_else(|| {
+            MediaError::Unavailable(
+                "ffmpeg was not found; install ffmpeg or set PATH before starting a real stream"
+                    .to_string(),
+            )
+        })?;
+        let publish_url = build_rtmp_publish_url(&request)?;
+
+        let mut child = spawn_ffmpeg_stream(&ffmpeg_path, &publish_url)?;
+        std::thread::sleep(Duration::from_millis(500));
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| MediaError::Unavailable(format!("ffmpeg startup failed: {error}")))?
+        {
+            return Err(MediaError::Unavailable(format!(
+                "ffmpeg exited during stream startup ({status})"
+            )));
+        }
+
+        let session = StreamSession {
+            id: new_id("stream"),
+            destination: request.destination,
+            started_at: Utc::now(),
+        };
+
+        {
+            let mut state = self
+                .inner
+                .stream
+                .lock()
+                .expect("ffmpeg stream state mutex poisoned");
+            *state = Some(FfmpegActiveStream {
+                session: session.clone(),
+                child,
+            });
+        }
+        let status = self.status_from_state().await;
+
+        self.emit(StudioEvent::new(
+            StudioEventKind::StreamStarted,
+            json!({
+                "session_id": session.id,
+                "destination_id": session.destination.id,
+                "destination_name": session.destination.name,
+                "platform": session.destination.platform,
+            }),
+        ));
+
+        Ok(MediaTransition {
+            changed: true,
+            session: Some(session),
+            status,
+        })
+    }
+
+    async fn stop_stream(&self) -> Result<MediaTransition<StreamSession>, MediaError> {
+        let stopped = {
+            let mut state = self
+                .inner
+                .stream
+                .lock()
+                .expect("ffmpeg stream state mutex poisoned");
+            state.take().map(|mut active| {
+                let _ = active.child.kill();
+                let _ = active.child.wait();
+                active.session
+            })
+        };
+        let status = self.status_from_state().await;
+
+        if let Some(session) = stopped.clone() {
+            self.emit(StudioEvent::new(
+                StudioEventKind::StreamStopped,
+                json!({
+                    "session_id": session.id,
+                    "destination_id": session.destination.id,
+                    "destination_name": session.destination.name,
+                    "platform": session.destination.platform,
+                }),
+            ));
+        }
+
+        Ok(MediaTransition {
+            changed: stopped.is_some(),
+            session: stopped,
+            status,
+        })
+    }
+
+    async fn status(&self) -> EngineStatus {
+        self.status_from_state().await
+    }
+}
+
+impl Drop for FfmpegRtmpEngineInner {
+    fn drop(&mut self) {
+        let Ok(mut state) = self.stream.lock() else {
+            return;
+        };
+        if let Some(mut active) = state.take() {
+            let _ = active.child.kill();
+            let _ = active.child.wait();
+        }
+    }
+}
+
+pub fn find_ffmpeg_binary() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = env::var_os("PATH") {
+        for directory in env::split_paths(&path) {
+            candidates.push(directory.join("ffmpeg"));
+        }
+    }
+    candidates.extend([
+        PathBuf::from("/opt/homebrew/bin/ffmpeg"),
+        PathBuf::from("/usr/local/bin/ffmpeg"),
+        PathBuf::from("/usr/bin/ffmpeg"),
+    ]);
+
+    candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
+fn build_rtmp_publish_url(request: &StreamLaunchRequest) -> Result<String, MediaError> {
+    let base = request.destination.ingest_url.trim();
+    if base.is_empty() {
+        return Err(MediaError::InvalidCommand(
+            "stream destination requires an ingest URL".to_string(),
+        ));
+    }
+
+    let key = request.stream_key.as_deref().unwrap_or("").trim();
+    let mut url = if base.contains("{stream_key}") {
+        if key.is_empty() {
+            return Err(MediaError::InvalidCommand(
+                "stream destination requires a stored stream key".to_string(),
+            ));
+        }
+        base.replace("{stream_key}", key)
+    } else if !key.is_empty() {
+        format!("{}/{}", base.trim_end_matches('/'), key)
+    } else if matches!(
+        request.destination.platform,
+        PlatformKind::Twitch | PlatformKind::YouTube | PlatformKind::Kick
+    ) {
+        return Err(MediaError::InvalidCommand(
+            "stream destination requires a stored stream key".to_string(),
+        ));
+    } else {
+        base.to_string()
+    };
+
+    if request.bandwidth_test && matches!(request.destination.platform, PlatformKind::Twitch) {
+        url.push_str(if url.contains('?') {
+            "&bandwidthtest=true"
+        } else {
+            "?bandwidthtest=true"
+        });
+    }
+
+    Ok(url)
+}
+
+fn spawn_ffmpeg_stream(ffmpeg_path: &PathBuf, publish_url: &str) -> Result<Child, MediaError> {
+    Command::new(ffmpeg_path)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-re",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=1280x720:rate=30",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-pix_fmt",
+            "yuv420p",
+            "-b:v",
+            "2500k",
+            "-maxrate",
+            "2500k",
+            "-bufsize",
+            "5000k",
+            "-g",
+            "60",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-ar",
+            "44100",
+            "-f",
+            "flv",
+            publish_url,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| MediaError::Unavailable(format!("could not start ffmpeg: {error}")))
+}
+
 #[cfg(feature = "gstreamer")]
 pub struct GStreamerMediaEngine;
 
@@ -522,7 +892,7 @@ impl MediaEngine for GStreamerMediaEngine {
 
     async fn start_stream(
         &self,
-        _destination: StreamDestination,
+        _request: StreamLaunchRequest,
     ) -> Result<MediaTransition<StreamSession>, MediaError> {
         Err(MediaError::Unavailable(
             "GStreamerMediaEngine is not implemented yet".to_string(),
@@ -583,11 +953,17 @@ mod tests {
             None,
         );
 
-        let first = engine.start_stream(destination.clone()).await.unwrap();
+        let first = engine
+            .start_stream(StreamLaunchRequest::new(destination.clone()))
+            .await
+            .unwrap();
         assert!(first.changed);
         assert!(first.status.stream_active);
 
-        let second = engine.start_stream(destination).await.unwrap();
+        let second = engine
+            .start_stream(StreamLaunchRequest::new(destination))
+            .await
+            .unwrap();
         assert!(!second.changed);
         assert_eq!(first.session.unwrap().id, second.session.unwrap().id);
 

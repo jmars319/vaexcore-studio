@@ -199,6 +199,42 @@ struct SuiteDiscoveryDocument {
     health_url: Option<String>,
     capabilities: Vec<String>,
     launch_name: String,
+    suite_session_id: Option<String>,
+    activity: Option<String>,
+    activity_detail: Option<String>,
+}
+
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SuiteSessionDocument {
+    schema_version: u8,
+    session_id: String,
+    title: String,
+    status: String,
+    owner_app: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SuiteCommandInput {
+    target_app: String,
+    command: String,
+    payload: serde_json::Value,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SuiteCommandDocument {
+    schema_version: u8,
+    command_id: String,
+    source_app: String,
+    source_app_name: String,
+    target_app: String,
+    command: String,
+    requested_at: String,
+    payload: serde_json::Value,
 }
 
 #[derive(Clone, serde::Deserialize)]
@@ -250,6 +286,9 @@ struct SuiteAppStatus {
     health_url: Option<String>,
     updated_at: Option<String>,
     capabilities: Vec<String>,
+    suite_session_id: Option<String>,
+    activity: Option<String>,
+    activity_detail: Option<String>,
     detail: String,
 }
 
@@ -398,6 +437,23 @@ fn suite_status() -> Vec<SuiteAppStatus> {
 }
 
 #[tauri::command]
+fn suite_session() -> Option<SuiteSessionDocument> {
+    read_suite_session_document()
+}
+
+#[tauri::command]
+fn start_suite_session(title: Option<String>) -> Result<SuiteSessionDocument, String> {
+    let document = build_suite_session_document(title);
+    write_suite_session_document(&document).map_err(|error| error.to_string())?;
+    Ok(document)
+}
+
+#[tauri::command]
+fn send_suite_command(input: SuiteCommandInput) -> Result<SuiteCommandDocument, String> {
+    write_suite_command(input).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn handoff_recording_to_pulse(recording: PulseRecordingHandoffInput) -> Vec<SuiteLaunchResult> {
     if let Err(error) = write_pulse_recording_handoff(recording) {
         return vec![SuiteLaunchResult {
@@ -459,6 +515,7 @@ fn start_suite_discovery_heartbeat(bind_addr: SocketAddr) {
     let health_url = format!("{api_url}/health");
 
     std::thread::spawn(move || loop {
+        let session = read_suite_session_document();
         let document = SuiteDiscoveryDocument {
             schema_version: SUITE_DISCOVERY_SCHEMA_VERSION,
             app_id: "vaexcore-studio".to_string(),
@@ -475,10 +532,18 @@ fn start_suite_discovery_heartbeat(bind_addr: SocketAddr) {
                 "studio.api".to_string(),
                 "recording.control".to_string(),
                 "pulse.recording.handoff".to_string(),
+                "suite.commands".to_string(),
+                "suite.session.owner".to_string(),
                 "suite.status".to_string(),
                 "suite.launcher".to_string(),
             ],
             launch_name: APP_NAME.to_string(),
+            suite_session_id: session.as_ref().map(|session| session.session_id.clone()),
+            activity: Some("control-room".to_string()),
+            activity_detail: session
+                .as_ref()
+                .map(|session| format!("Coordinating {}", session.title))
+                .or_else(|| Some("Ready to coordinate the suite".to_string())),
         };
 
         if let Err(error) = write_suite_discovery_document(&document) {
@@ -487,6 +552,74 @@ fn start_suite_discovery_heartbeat(bind_addr: SocketAddr) {
 
         std::thread::sleep(SUITE_DISCOVERY_HEARTBEAT_INTERVAL);
     });
+}
+
+fn build_suite_session_document(title: Option<String>) -> SuiteSessionDocument {
+    let now = chrono::Utc::now().to_rfc3339();
+    let session_id = read_suite_session_document()
+        .map(|session| session.session_id)
+        .unwrap_or_else(|| format!("suite-{}", chrono::Utc::now().timestamp_millis()));
+    SuiteSessionDocument {
+        schema_version: SUITE_DISCOVERY_SCHEMA_VERSION,
+        session_id,
+        title: title
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "VaexCore Suite Session".to_string()),
+        status: "active".to_string(),
+        owner_app: "vaexcore-studio".to_string(),
+        created_at: read_suite_session_document()
+            .map(|session| session.created_at)
+            .unwrap_or_else(|| now.clone()),
+        updated_at: now,
+    }
+}
+
+fn ensure_suite_session() {
+    if read_suite_session_document().is_some() {
+        return;
+    }
+    if let Err(error) = write_suite_session_document(&build_suite_session_document(None)) {
+        tracing::warn!(%error, "failed to initialize suite session");
+    }
+}
+
+fn read_suite_session_document() -> Option<SuiteSessionDocument> {
+    let contents = fs::read(suite_session_file()).ok()?;
+    serde_json::from_slice(&contents).ok()
+}
+
+fn write_suite_session_document(document: &SuiteSessionDocument) -> std::io::Result<()> {
+    fs::create_dir_all(suite_discovery_dir())?;
+    fs::write(suite_session_file(), serde_json::to_vec_pretty(document)?)
+}
+
+fn write_suite_command(input: SuiteCommandInput) -> std::io::Result<SuiteCommandDocument> {
+    let target_app = sanitize_suite_file_component(&input.target_app);
+    let directory = suite_command_dir().join(&target_app);
+    fs::create_dir_all(&directory)?;
+    let requested_at = chrono::Utc::now().to_rfc3339();
+    let command_id = format!(
+        "{}-{}",
+        sanitize_suite_file_component(&input.command),
+        chrono::Utc::now().timestamp_millis()
+    );
+    let document = SuiteCommandDocument {
+        schema_version: SUITE_DISCOVERY_SCHEMA_VERSION,
+        command_id: command_id.clone(),
+        source_app: "vaexcore-studio".to_string(),
+        source_app_name: APP_NAME.to_string(),
+        target_app: input.target_app,
+        command: input.command,
+        requested_at,
+        payload: input.payload,
+    };
+
+    fs::write(
+        directory.join(format!("{command_id}.json")),
+        serde_json::to_vec_pretty(&document)?,
+    )?;
+    Ok(document)
 }
 
 fn write_suite_discovery_document(document: &SuiteDiscoveryDocument) -> std::io::Result<()> {
@@ -523,7 +656,14 @@ fn write_pulse_recording_handoff(recording: PulseRecordingHandoffInput) -> std::
     };
 
     let serialized = serde_json::to_vec_pretty(&document)?;
-    fs::write(directory.join("pulse-recording-intake.json"), serialized)
+    fs::write(directory.join("pulse-recording-intake.json"), serialized)?;
+    let payload = serde_json::to_value(&document).map_err(std::io::Error::other)?;
+    write_suite_command(SuiteCommandInput {
+        target_app: "vaexcore-pulse".to_string(),
+        command: "open-review".to_string(),
+        payload,
+    })
+    .map(|_| ())
 }
 
 fn suite_app_definitions() -> [SuiteAppDefinition; 3] {
@@ -591,6 +731,15 @@ fn suite_app_status(definition: &SuiteAppDefinition) -> SuiteAppStatus {
             .as_ref()
             .map(|document| document.capabilities.clone())
             .unwrap_or_default(),
+        suite_session_id: discovery
+            .as_ref()
+            .and_then(|document| document.suite_session_id.clone()),
+        activity: discovery
+            .as_ref()
+            .and_then(|document| document.activity.clone()),
+        activity_detail: discovery
+            .as_ref()
+            .and_then(|document| document.activity_detail.clone()),
         detail,
     }
 }
@@ -631,6 +780,33 @@ fn suite_discovery_file(app_id: &str) -> PathBuf {
 
 fn suite_handoff_dir() -> PathBuf {
     suite_discovery_dir().join("handoffs")
+}
+
+fn suite_session_file() -> PathBuf {
+    suite_discovery_dir().join("session.json")
+}
+
+fn suite_command_dir() -> PathBuf {
+    suite_discovery_dir().join("commands")
+}
+
+fn sanitize_suite_file_component(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let trimmed = sanitized.trim_matches('-');
+    if trimmed.is_empty() {
+        "suite-command".to_string()
+    } else {
+        trimmed.chars().take(80).collect()
+    }
 }
 
 fn suite_discovery_dir() -> PathBuf {
@@ -1099,6 +1275,7 @@ pub fn run() {
                 port_fallback_active,
                 &auth.get(),
             )?;
+            ensure_suite_session();
             start_suite_discovery_heartbeat(bind_addr);
             write_app_log(
                 &log_dir,
@@ -1178,6 +1355,9 @@ pub fn run() {
             media_runner_info,
             launch_vaexcore_suite,
             suite_status,
+            suite_session,
+            start_suite_session,
+            send_suite_command,
             handoff_recording_to_pulse
         ])
         .build(tauri::generate_context!())
@@ -1305,13 +1485,16 @@ fn start_media_runner(
         return None;
     };
 
+    let dry_run = env_flag_enabled("VAEXCORE_MEDIA_RUNNER_DRY_RUN");
     let mut config = MediaRunnerConfig::dry_run(executable_path.clone(), status_addr);
+    config.dry_run = dry_run;
     config.config_path = Some(pipeline_config_path.to_path_buf());
     match MediaRunnerSupervisor::start(config) {
         Ok(supervisor) => {
             tracing::info!(
                 path = %executable_path.display(),
                 %status_addr,
+                dry_run,
                 "media-runner sidecar started"
             );
             Some(supervisor)
@@ -1321,6 +1504,17 @@ fn start_media_runner(
             None
         }
     }
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    env::var(name)
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 fn resolve_media_runner_path(app: &tauri::AppHandle) -> Option<PathBuf> {
@@ -2250,9 +2444,9 @@ fn write_seed_pipeline_config(path: &Path) -> Result<(), Box<dyn std::error::Err
     }
 
     let config = serde_json::json!({
-        "dry_run": true,
+        "dry_run": false,
         "status_addr": null,
-        "pipeline_name": "dry-run",
+        "pipeline_name": "ffmpeg-rtmp",
         "pipeline": null,
     });
     std::fs::write(path, serde_json::to_vec_pretty(&config)?)?;

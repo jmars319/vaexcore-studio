@@ -91,7 +91,37 @@ export interface SuiteAppStatus {
   healthUrl: string | null;
   updatedAt: string | null;
   capabilities: string[];
+  suiteSessionId: string | null;
+  activity: string | null;
+  activityDetail: string | null;
   detail: string;
+}
+
+export interface SuiteSession {
+  schemaVersion: number;
+  sessionId: string;
+  title: string;
+  status: string;
+  ownerApp: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SuiteCommand {
+  schemaVersion: number;
+  commandId: string;
+  sourceApp: string;
+  sourceAppName: string;
+  targetApp: string;
+  command: string;
+  requestedAt: string;
+  payload: Record<string, unknown>;
+}
+
+export interface SuiteCommandInput {
+  targetApp: string;
+  command: string;
+  payload: Record<string, unknown>;
 }
 
 export interface PulseRecordingHandoffInput {
@@ -182,6 +212,29 @@ export async function loadSuiteStatus(): Promise<SuiteAppStatus[]> {
   } catch {
     return [];
   }
+}
+
+export async function loadSuiteSession(): Promise<SuiteSession | null> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<SuiteSession | null>("suite_session");
+  } catch {
+    return null;
+  }
+}
+
+export async function startSuiteSession(
+  title?: string,
+): Promise<SuiteSession> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<SuiteSession>("start_suite_session", { title });
+}
+
+export async function sendSuiteCommand(
+  input: SuiteCommandInput,
+): Promise<SuiteCommand> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<SuiteCommand>("send_suite_command", { input });
 }
 
 export async function handoffRecordingToPulse(
@@ -361,10 +414,17 @@ export const StudioApi = {
     }),
   stopRecording: (config: RuntimeApiConfig) =>
     apiRequest<CommandStatus>(config, "/recording/stop", { method: "POST" }),
-  startStream: (config: RuntimeApiConfig, destinationId?: string) =>
+  startStream: (
+    config: RuntimeApiConfig,
+    destinationId?: string,
+    bandwidthTest = false,
+  ) =>
     apiRequest<CommandStatus>(config, "/stream/start", {
       method: "POST",
-      body: JSON.stringify({ destination_id: destinationId }),
+      body: JSON.stringify({
+        destination_id: destinationId,
+        bandwidth_test: bandwidthTest,
+      }),
     }),
   stopStream: (config: RuntimeApiConfig) =>
     apiRequest<CommandStatus>(config, "/stream/stop", { method: "POST" }),

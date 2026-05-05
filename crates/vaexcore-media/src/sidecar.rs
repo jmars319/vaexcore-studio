@@ -1,3 +1,4 @@
+use crate::StreamLaunchRequest;
 use crate::{MediaEngine, MediaError, MediaEventSink, MediaTransition};
 use async_trait::async_trait;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -12,8 +13,8 @@ use std::{
 };
 use vaexcore_core::{
     ApiResponse, EngineMode, EngineStatus, MediaPipelinePlan, MediaPipelinePlanRequest,
-    MediaPipelineValidation, MediaProfile, RecordingSession, StreamDestination, StreamSession,
-    StudioEvent, StudioEventKind,
+    MediaPipelineValidation, MediaProfile, RecordingSession, StreamSession, StudioEvent,
+    StudioEventKind,
 };
 
 #[derive(Clone, Debug)]
@@ -155,10 +156,10 @@ impl MediaRunnerSupervisor {
 
     pub async fn start_stream(
         &self,
-        destination: StreamDestination,
+        request: StreamLaunchRequest,
     ) -> Result<MediaTransition<StreamSession>, SidecarError> {
         let supervisor = self.clone();
-        tokio::task::spawn_blocking(move || supervisor.post_blocking("/stream/start", &destination))
+        tokio::task::spawn_blocking(move || supervisor.post_blocking("/stream/start", &request))
             .await
             .map_err(|error| SidecarError::Join(error.to_string()))?
     }
@@ -519,9 +520,9 @@ impl MediaEngine for SidecarMediaEngine {
 
     async fn start_stream(
         &self,
-        destination: StreamDestination,
+        request: StreamLaunchRequest,
     ) -> Result<MediaTransition<StreamSession>, MediaError> {
-        let mut transition = self.runner.start_stream(destination).await?;
+        let mut transition = self.runner.start_stream(request).await?;
         transition.status = self
             .runner
             .status()
@@ -613,7 +614,7 @@ mod tests {
         },
         thread::{self, JoinHandle},
     };
-    use vaexcore_core::{new_id, PlatformKind, StreamDestinationInput};
+    use vaexcore_core::{new_id, PlatformKind, StreamDestination, StreamDestinationInput};
 
     #[test]
     fn missing_runner_executable_is_reported() {
@@ -661,8 +662,14 @@ mod tests {
             None,
         );
 
-        let first = engine.start_stream(destination.clone()).await.unwrap();
-        let second = engine.start_stream(destination).await.unwrap();
+        let first = engine
+            .start_stream(StreamLaunchRequest::new(destination.clone()))
+            .await
+            .unwrap();
+        let second = engine
+            .start_stream(StreamLaunchRequest::new(destination))
+            .await
+            .unwrap();
         assert!(first.changed);
         assert!(!second.changed);
         assert!(second.status.stream_active);
@@ -715,10 +722,10 @@ mod tests {
                                 ))
                                 .unwrap()
                             } else if request.starts_with("POST /stream/start ") {
-                                let destination: StreamDestination =
+                                let request: StreamLaunchRequest =
                                     serde_json::from_str(request_body).unwrap();
                                 serde_json::to_string(&ApiResponse::ok(
-                                    runner_state.start_stream(destination),
+                                    runner_state.start_stream(request.destination),
                                 ))
                                 .unwrap()
                             } else if request.starts_with("POST /stream/stop ") {

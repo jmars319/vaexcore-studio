@@ -31,12 +31,12 @@ use vaexcore_core::{
     new_id, now_utc, ApiResponse, AuditLogEntry, AuditLogSnapshot, CommandStatus,
     ConnectedClientsSnapshot, HealthResponse, Marker, MarkersSnapshot, MediaPipelinePlan,
     MediaPipelinePlanRequest, MediaPipelineValidation, MediaProfileInput, PipelineIntent,
-    ProfilesSnapshot, RecentRecordingsSnapshot, StreamDestinationInput, StudioEvent,
+    ProfilesSnapshot, RecentRecordingsSnapshot, SecretStore, StreamDestinationInput, StudioEvent,
     StudioEventKind, StudioStatus, APP_NAME,
 };
 use vaexcore_media::{
     build_dry_run_pipeline_plan, DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor,
-    SidecarMediaEngine,
+    SidecarMediaEngine, StreamLaunchRequest,
 };
 
 pub use auth::{AuthConfig, SharedAuthConfig};
@@ -501,6 +501,8 @@ pub struct StartRecordingRequest {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct StartStreamRequest {
     pub destination_id: Option<String>,
+    #[serde(default)]
+    pub bandwidth_test: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -859,7 +861,20 @@ async fn start_stream(
             )
         })?;
 
-    match state.engine.start_stream(destination).await {
+    let stream_key = destination
+        .stream_key_ref
+        .as_ref()
+        .map(|reference| state.store.get_secret(reference).map_err(StoreError::from))
+        .transpose()?
+        .flatten()
+        .map(|secret| secret.expose_secret().to_string());
+    let launch_request = StreamLaunchRequest {
+        destination,
+        stream_key,
+        bandwidth_test: request.bandwidth_test,
+    };
+
+    match state.engine.start_stream(launch_request).await {
         Ok(transition) => Ok(Json(ApiResponse::ok(CommandStatus {
             changed: transition.changed,
             message: if transition.changed {

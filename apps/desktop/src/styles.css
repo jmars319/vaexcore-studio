@@ -615,6 +615,36 @@ select:focus {
   min-height: 16px;
 }
 
+.suite-session-card,
+.checklist-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0b0c13;
+}
+
+.suite-session-card strong,
+.suite-session-card span,
+.checklist-row strong,
+.checklist-row span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.checklist {
+  display: grid;
+  gap: 10px;
+}
+
+.checklist-row {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+
 .primary-button,
 .secondary-button,
 .icon-button {

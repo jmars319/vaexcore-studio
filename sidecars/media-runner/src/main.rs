@@ -12,10 +12,11 @@ use tokio::net::TcpListener;
 use vaexcore_core::{
     ApiResponse, EngineMode, EngineStatus, MediaPipelineConfig, MediaPipelinePlan,
     MediaPipelinePlanRequest, MediaPipelineValidation, MediaProfile, RecordingSession,
-    StreamDestination, StreamSession, APP_NAME,
+    StreamSession, APP_NAME,
 };
 use vaexcore_media::{
-    build_dry_run_pipeline_plan, DryRunMediaEngine, MediaEngine, MediaError, MediaTransition,
+    build_dry_run_pipeline_plan, find_ffmpeg_binary, DryRunMediaEngine, FfmpegRtmpEngine,
+    MediaEngine, MediaError, MediaTransition, StreamLaunchRequest,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -52,7 +53,7 @@ pub struct RunnerStatus {
 #[derive(Clone)]
 struct RunnerState {
     config: RunnerConfig,
-    engine: Arc<DryRunMediaEngine>,
+    engine: Arc<dyn MediaEngine>,
 }
 
 #[tokio::main]
@@ -77,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = RunnerState {
         config: config.clone(),
-        engine: Arc::new(DryRunMediaEngine::new(None)),
+        engine: media_engine_for_config(&config),
     };
 
     if let Some(addr) = config.status_addr {
@@ -134,9 +135,9 @@ async fn stop_recording(
 
 async fn start_stream(
     State(state): State<RunnerState>,
-    Json(destination): Json<StreamDestination>,
+    Json(request): Json<StreamLaunchRequest>,
 ) -> Result<Json<ApiResponse<MediaTransition<StreamSession>>>, RunnerApiError> {
-    let transition = state.engine.start_stream(destination).await?;
+    let transition = state.engine.start_stream(request).await?;
     Ok(Json(ApiResponse::ok(transition)))
 }
 
@@ -278,6 +279,14 @@ async fn runner_status(state: &RunnerState) -> RunnerStatus {
         pipeline_name: state.config.pipeline_name.clone(),
         engine_status,
     }
+}
+
+fn media_engine_for_config(config: &RunnerConfig) -> Arc<dyn MediaEngine> {
+    if config.dry_run {
+        return Arc::new(DryRunMediaEngine::new(None));
+    }
+
+    Arc::new(FfmpegRtmpEngine::new(find_ffmpeg_binary(), None))
 }
 
 fn default_true() -> bool {
