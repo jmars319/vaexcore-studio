@@ -111,12 +111,12 @@ const sectionIds: readonly Section[] = [
 ];
 
 const navItems: Array<{ id: Section; label: string; icon: ReactNode }> = [
-  { id: "dashboard", label: "Dashboard", icon: <Activity size={17} /> },
-  { id: "destinations", label: "Stream Destinations", icon: <Radio size={17} /> },
+  { id: "dashboard", label: "Control Room", icon: <Activity size={17} /> },
+  { id: "destinations", label: "Broadcast Destinations", icon: <Radio size={17} /> },
   { id: "profiles", label: "Recording Profiles", icon: <FileVideo size={17} /> },
-  { id: "controls", label: "Controls", icon: <SlidersHorizontal size={17} /> },
-  { id: "apps", label: "Connected Apps", icon: <Cable size={17} /> },
-  { id: "logs", label: "Logs", icon: <ScrollText size={17} /> },
+  { id: "controls", label: "Broadcast Setup", icon: <SlidersHorizontal size={17} /> },
+  { id: "apps", label: "Suite", icon: <Cable size={17} /> },
+  { id: "logs", label: "Event Log", icon: <ScrollText size={17} /> },
 ];
 
 const openSectionEvent = "vaexcore://open-section";
@@ -176,7 +176,7 @@ function App() {
     () => new URLSearchParams(window.location.search).get("window") === "settings",
     [],
   );
-  const [section, setSection] = useState<Section>("dashboard");
+  const [section, setSection] = useState<Section>(() => initialSection());
   const [config, setConfig] = useState<RuntimeApiConfig | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [status, setStatus] = useState<StudioStatus | null>(null);
@@ -992,7 +992,7 @@ function App() {
           </div>
           <div>
             <h1>vaexcore studio</h1>
-            <span>local control core</span>
+            <span>control room</span>
           </div>
         </div>
 
@@ -1799,7 +1799,7 @@ function ConnectedAppsPage(props: {
         ) : (
           <div className="table">
             {props.suiteStatus.map((app) => (
-              <div className="table-row suite-status-row" key={app.appId}>
+              <div className="table-row suite-status-row vxc-suite-row" key={app.appId}>
                 <div>
                   <strong>{app.appName}</strong>
                   <span>{app.activityDetail ?? app.detail}</span>
@@ -1866,7 +1866,7 @@ function ConnectedAppsPage(props: {
         ) : (
           <div className="table">
             {props.suiteTimeline.map((item) => (
-              <div className="table-row" key={item.id}>
+              <div className="table-row vxc-timeline-row" key={item.id}>
                 <div>
                   <strong>{item.title}</strong>
                   <span>{item.detail}</span>
@@ -2782,27 +2782,42 @@ function isSection(value: unknown): value is Section {
   return typeof value === "string" && sectionIds.includes(value as Section);
 }
 
+function initialSection(): Section {
+  const requested = new URLSearchParams(window.location.search).get("section");
+  return isSection(requested) ? requested : "dashboard";
+}
+
 function sectionTitle(section: Section): string {
-  return section
-    .split("_")
-    .join(" ")
-    .replace(/^\w/, (letter) => letter.toUpperCase());
+  switch (section) {
+    case "dashboard":
+      return "Control Room";
+    case "destinations":
+      return "Broadcast Destinations";
+    case "profiles":
+      return "Recording Profiles";
+    case "controls":
+      return "Broadcast Setup";
+    case "apps":
+      return "Suite";
+    case "logs":
+      return "Event Log";
+  }
 }
 
 function sectionHeading(section: Section): string {
   switch (section) {
     case "dashboard":
-      return "Studio Control Surface";
+      return "Studio Control Room";
     case "destinations":
-      return "Stream Destinations";
+      return "Broadcast Destinations";
     case "profiles":
       return "Recording Profiles";
     case "controls":
-      return "Media Controls";
+      return "Broadcast Setup";
     case "apps":
-      return "Connected Apps";
+      return "Suite Presence";
     case "logs":
-      return "Event Logs";
+      return "Event Log";
   }
 }
 

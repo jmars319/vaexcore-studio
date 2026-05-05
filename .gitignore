@@ -17,6 +17,7 @@ node_modules/
 dist/
 target/
 *.tsbuildinfo
+.local/
 
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/target/

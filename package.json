@@ -13,7 +13,8 @@
     "dev": "npm run dev -w apps/desktop",
     "tauri": "npm run tauri -w apps/desktop",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test:rust": "cargo test --workspace"
+    "test:rust": "cargo test --workspace",
+    "smoke:visual": "node scripts/visual-smoke.mjs"
   },
   "engines": {
     "node": ">=20"

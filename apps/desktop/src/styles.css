@@ -1,19 +1,21 @@
+@import "./vaexcore-theme.css";
+
 :root {
-  --bg: #05060c;
-  --bg-grid-cyan: rgba(34, 216, 255, 0.07);
-  --bg-grid-magenta: rgba(255, 50, 245, 0.055);
-  --panel: #0f1019;
-  --panel-soft: #151625;
-  --panel-strong: #1b1930;
-  --border: #292b46;
-  --border-hot: #633b8d;
-  --text: #fff6ff;
-  --muted: #aaa4c7;
-  --cyan: #22d8ff;
-  --magenta: #ff32f5;
-  --violet: #8a4dff;
-  --danger: #ff4aa2;
-  --warning: #d785ff;
+  --bg: var(--vxc-ink-950);
+  --bg-grid-cyan: rgba(57, 217, 255, 0.07);
+  --bg-grid-magenta: rgba(255, 59, 244, 0.055);
+  --panel: var(--vxc-panel-bg);
+  --panel-soft: var(--vxc-panel-bg-soft);
+  --panel-strong: var(--vxc-ink-740);
+  --border: var(--vxc-border);
+  --border-hot: var(--vxc-border-hot);
+  --text: var(--vxc-text);
+  --muted: var(--vxc-text-muted);
+  --cyan: var(--vxc-cyan);
+  --magenta: var(--vxc-magenta);
+  --violet: var(--vxc-violet);
+  --danger: var(--vxc-danger);
+  --warning: var(--vxc-amber);
   color: var(--text);
   background: var(--bg);
   font-family:
@@ -31,12 +33,18 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background:
-    linear-gradient(180deg, rgba(255, 50, 245, 0.08), transparent 28%),
-    linear-gradient(90deg, transparent 0 95%, var(--bg-grid-cyan) 95% 100%),
-    linear-gradient(180deg, transparent 0 95%, var(--bg-grid-magenta) 95% 100%),
-    var(--bg);
-  background-size: auto, 68px 68px, 68px 68px, auto;
+  background: var(--vxc-bg), var(--vxc-grid), var(--bg);
+  background-size: auto, 72px 72px, auto;
+}
+
+body::before {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  content: "";
+  background: var(--vxc-rail);
+  opacity: 0.7;
 }
 
 button,
@@ -61,14 +69,24 @@ button:disabled {
 }
 
 .sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 28px;
   padding: 22px 16px;
   border-right: 1px solid var(--border);
   background:
-    linear-gradient(180deg, rgba(255, 50, 245, 0.05), transparent 36%),
-    #080910;
+    linear-gradient(180deg, rgba(57, 217, 255, 0.055), transparent 34%),
+    linear-gradient(155deg, rgba(255, 59, 244, 0.08), transparent 42%),
+    var(--vxc-ink-900);
+}
+
+.sidebar::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  content: "";
+  background: linear-gradient(90deg, var(--cyan), var(--magenta));
 }
 
 .brand {
@@ -86,10 +104,10 @@ button:disabled {
   overflow: hidden;
   border: 1px solid rgba(34, 216, 255, 0.5);
   border-radius: 8px;
-  background: #03040a;
+  background: var(--vxc-ink-980);
   box-shadow:
-    0 0 18px rgba(34, 216, 255, 0.18),
-    0 0 24px rgba(255, 50, 245, 0.12);
+    var(--vxc-glow-cyan),
+    var(--vxc-glow-magenta);
 }
 
 .brand-mark img {
@@ -146,6 +164,10 @@ nav {
     rgba(255, 50, 245, 0.08)
   );
   color: var(--text);
+}
+
+.nav-item svg {
+  color: var(--cyan);
 }
 
 .sidebar-footer {
@@ -279,11 +301,11 @@ nav {
 .metric,
 .panel {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--vxc-radius);
   background:
     linear-gradient(145deg, rgba(34, 216, 255, 0.035), transparent 42%),
     var(--panel);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.32);
+  box-shadow: var(--vxc-shadow);
 }
 
 .metric {
@@ -454,7 +476,7 @@ nav {
   min-height: 28px;
   padding: 0 9px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--vxc-radius-small);
   background: rgba(21, 22, 37, 0.88);
   color: var(--muted);
   font-size: 12px;
@@ -645,6 +667,15 @@ select:focus {
   align-items: start;
 }
 
+.vxc-suite-row,
+.vxc-timeline-row {
+  border-left: 3px solid var(--cyan);
+}
+
+.vxc-timeline-row {
+  border-left-color: var(--magenta);
+}
+
 .primary-button,
 .secondary-button,
 .icon-button {
@@ -653,7 +684,7 @@ select:focus {
   justify-content: center;
   gap: 8px;
   min-height: 38px;
-  border-radius: 8px;
+  border-radius: var(--vxc-radius-small);
 }
 
 .primary-button,
