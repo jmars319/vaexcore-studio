@@ -253,6 +253,15 @@ struct SuiteTimelineEvent {
 
 #[derive(Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct SuiteTimelineInput {
+    kind: String,
+    title: String,
+    detail: String,
+    metadata: serde_json::Value,
+}
+
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct PulseRecordingHandoffInput {
     session_id: String,
     output_path: String,
@@ -290,6 +299,8 @@ struct ConsoleTwitchStreamKeyResponse {
     broadcaster_user_id: Option<String>,
     error: Option<String>,
 }
+
+type ConsoleTwitchBroadcastReadiness = serde_json::Value;
 
 #[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -502,6 +513,12 @@ fn suite_timeline(limit: Option<usize>) -> Vec<SuiteTimelineEvent> {
 }
 
 #[tauri::command]
+fn append_suite_timeline(input: SuiteTimelineInput) -> Result<(), String> {
+    append_suite_timeline_event(&input.kind, &input.title, &input.detail, input.metadata)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn twitch_stream_key_from_console() -> Result<ConsoleTwitchStreamKey, String> {
     let discovery = read_suite_discovery_document(&suite_discovery_file("vaexcore-console"))
         .ok_or_else(|| "Console is not publishing a suite heartbeat yet.".to_string())?;
@@ -539,6 +556,32 @@ fn twitch_stream_key_from_console() -> Result<ConsoleTwitchStreamKey, String> {
         broadcaster_login: parsed.broadcaster_login,
         broadcaster_user_id: parsed.broadcaster_user_id,
     })
+}
+
+#[tauri::command]
+fn twitch_broadcast_readiness_from_console() -> Result<ConsoleTwitchBroadcastReadiness, String> {
+    let discovery = read_suite_discovery_document(&suite_discovery_file("vaexcore-console"))
+        .ok_or_else(|| "Console is not publishing a suite heartbeat yet.".to_string())?;
+    let api_url = discovery
+        .api_url
+        .ok_or_else(|| "Console heartbeat does not include an API URL.".to_string())?;
+    let endpoint = format!(
+        "{}/api/twitch/broadcast-readiness",
+        api_url.trim_end_matches('/')
+    );
+    let (status, body) = local_http_get(&endpoint)?;
+    let parsed = serde_json::from_str::<serde_json::Value>(&body)
+        .map_err(|error| format!("Console returned unreadable Twitch readiness: {error}"))?;
+
+    if status != 200 {
+        return Err(parsed
+            .get("error")
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("Console Twitch readiness failed with HTTP {status}")));
+    }
+
+    Ok(parsed)
 }
 
 #[tauri::command]
@@ -1558,8 +1601,10 @@ pub fn run() {
             suite_session,
             start_suite_session,
             suite_timeline,
+            append_suite_timeline,
             send_suite_command,
             twitch_stream_key_from_console,
+            twitch_broadcast_readiness_from_console,
             handoff_recording_to_pulse
         ])
         .build(tauri::generate_context!())

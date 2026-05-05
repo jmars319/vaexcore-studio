@@ -130,6 +130,13 @@ export interface SuiteTimelineEvent {
   metadata: Record<string, unknown>;
 }
 
+export interface SuiteTimelineInput {
+  kind: string;
+  title: string;
+  detail: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface SuiteCommandInput {
   targetApp: string;
   command: string;
@@ -148,6 +155,24 @@ export interface TwitchStreamKeyImport {
   streamKey: string;
   broadcasterLogin: string | null;
   broadcasterUserId: string | null;
+}
+
+export interface TwitchBroadcastReadiness {
+  ok: boolean;
+  status: "ready" | "attention" | "blocked";
+  summary: string;
+  nextAction: string;
+  generatedAt: string;
+  twitch: {
+    broadcasterLogin: string | null;
+    channelUrl: string | null;
+    streamKeyScopeReady: boolean;
+  };
+  checks: Array<{
+    name: string;
+    ok: boolean;
+    detail: string;
+  }>;
 }
 
 export interface MarkerListOptions {
@@ -264,6 +289,17 @@ export async function loadSuiteTimeline(limit = 50): Promise<SuiteTimelineEvent[
   }
 }
 
+export async function recordSuiteTimelineEvent(
+  input: SuiteTimelineInput,
+): Promise<void> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke<void>("append_suite_timeline", { input });
+  } catch {
+    // Shared suite timeline events are best-effort.
+  }
+}
+
 export async function handoffRecordingToPulse(
   recording: PulseRecordingHandoffInput,
 ): Promise<SuiteLaunchResult[]> {
@@ -289,6 +325,17 @@ export async function handoffRecordingToPulse(
 export async function fetchTwitchStreamKeyFromConsole(): Promise<TwitchStreamKeyImport> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<TwitchStreamKeyImport>("twitch_stream_key_from_console");
+}
+
+export async function fetchTwitchBroadcastReadinessFromConsole(): Promise<TwitchBroadcastReadiness | null> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<TwitchBroadcastReadiness>(
+      "twitch_broadcast_readiness_from_console",
+    );
+  } catch {
+    return null;
+  }
 }
 
 export async function loadCaptureSourceInventory(): Promise<CaptureSourceInventory> {

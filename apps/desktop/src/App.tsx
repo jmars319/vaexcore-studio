@@ -50,6 +50,7 @@ import { platformLabels } from "@vaexcore/shared-types";
 import {
   eventSocketUrl,
   exportProfileBundle,
+  fetchTwitchBroadcastReadinessFromConsole,
   fetchTwitchStreamKeyFromConsole,
   handoffRecordingToPulse,
   importProfileBundle,
@@ -72,6 +73,7 @@ import {
   openScreenRecordingPrivacySettings,
   PermissionStatus,
   regenerateApiToken,
+  recordSuiteTimelineEvent,
   RuntimeApiConfig,
   saveAppSettings,
   sendSuiteCommand,
@@ -81,6 +83,7 @@ import {
   SuiteLaunchResult,
   SuiteSession,
   SuiteTimelineEvent,
+  TwitchBroadcastReadiness,
 } from "./api";
 import logoUrl from "./assets/brand/vaexcore-studio-logo.jpg";
 
@@ -216,6 +219,8 @@ function App() {
   const [persistedSuiteTimeline, setPersistedSuiteTimeline] = useState<
     SuiteTimelineEvent[]
   >([]);
+  const [twitchReadiness, setTwitchReadiness] =
+    useState<TwitchBroadcastReadiness | null>(null);
   const [streamBandwidthTest, setStreamBandwidthTest] = useState(false);
 
   useEffect(() => {
@@ -285,6 +290,7 @@ function App() {
           nextSuiteStatus,
           nextSuiteSession,
           nextSuiteTimeline,
+          nextTwitchReadiness,
         ] = await Promise.all([
           StudioApi.health(runtimeConfig),
           StudioApi.status(runtimeConfig),
@@ -298,6 +304,7 @@ function App() {
           loadSuiteStatus(),
           loadSuiteSession(),
           loadSuiteTimeline(50),
+          fetchTwitchBroadcastReadinessFromConsole(),
         ]);
         if (cancelled) return;
         setHealth(nextHealth);
@@ -312,6 +319,7 @@ function App() {
         setSuiteStatus(nextSuiteStatus);
         setSuiteSession(nextSuiteSession);
         setPersistedSuiteTimeline(nextSuiteTimeline);
+        setTwitchReadiness(nextTwitchReadiness);
         loadPreflightSnapshot()
           .then((snapshot) => {
             if (!cancelled) setPreflight(snapshot);
@@ -364,6 +372,7 @@ function App() {
         event.type === "stream.stopped"
       ) {
         StudioApi.status(config).then(setStatus).catch(() => undefined);
+        recordStudioMediaEvent(event);
       }
       if (event.type === "recording.stopped") {
         StudioApi.recentRecordings(config)
@@ -876,6 +885,7 @@ function App() {
             setSelectedProfileId={setSelectedProfileId}
             streamBandwidthTest={streamBandwidthTest}
             setStreamBandwidthTest={setStreamBandwidthTest}
+            twitchReadiness={twitchReadiness}
             engineMode={activeStatus?.mode ?? "dry_run"}
             mediaRunnerInfo={mediaRunnerInfo}
             streamActive={activeStatus?.stream_active ?? false}
@@ -934,6 +944,7 @@ function App() {
     suiteTimeline,
     suiteLaunchStatus,
     streamBandwidthTest,
+    twitchReadiness,
   ]);
 
   if (isSettingsWindow) {
@@ -1521,6 +1532,7 @@ function ControlsPage(props: {
   setSelectedProfileId: (value: string) => void;
   streamBandwidthTest: boolean;
   setStreamBandwidthTest: (value: boolean) => void;
+  twitchReadiness: TwitchBroadcastReadiness | null;
   engineMode: string;
   mediaRunnerInfo: MediaRunnerInfo | null;
   streamActive: boolean;
@@ -1530,6 +1542,7 @@ function ControlsPage(props: {
     props.engineMode,
     props.mediaRunnerInfo,
     props.preflight,
+    props.twitchReadiness,
   );
   const enabledSources =
     props.settings?.capture_sources.filter((source) => source.enabled) ?? [];
@@ -1704,6 +1717,7 @@ function goLiveChecklist(
   engineMode: string,
   runner: MediaRunnerInfo | null,
   preflight: PreflightSnapshot | null,
+  twitchReadiness: TwitchBroadcastReadiness | null,
 ) {
   const isTwitch = destination?.platform === "twitch";
   const ingestReady = Boolean(destination?.ingest_url?.trim());
@@ -1728,6 +1742,15 @@ function goLiveChecklist(
         : "Store a Twitch stream key before going live.",
     },
     {
+      label: "Twitch Readiness",
+      ready: !isTwitch || twitchReadiness?.ok === true,
+      detail: !isTwitch
+        ? "This destination does not require Twitch validation."
+        : twitchReadiness
+          ? twitchReadiness.summary
+          : "Console has not published Twitch broadcast readiness yet.",
+    },
+    {
       label: "Media Runner",
       ready: runnerReady,
       detail: runnerReady
@@ -1742,6 +1765,43 @@ function goLiveChecklist(
         : "Preflight status has not loaded yet.",
     },
   ];
+}
+
+function recordStudioMediaEvent(event: StudioEvent) {
+  void recordSuiteTimelineEvent({
+    kind: `studio.${event.type}`,
+    title: studioMediaEventTitle(event),
+    detail: studioMediaEventDetail(event),
+    metadata: {
+      ...event.payload,
+      studioEventId: event.id,
+    },
+  });
+}
+
+function studioMediaEventTitle(event: StudioEvent): string {
+  switch (event.type) {
+    case "recording.started":
+      return "Studio recording started";
+    case "recording.stopped":
+      return "Studio recording ready";
+    case "stream.started":
+      return "Studio stream started";
+    case "stream.stopped":
+      return "Studio stream stopped";
+    default:
+      return event.type;
+  }
+}
+
+function studioMediaEventDetail(event: StudioEvent): string {
+  const outputPath = String(event.payload.output_path ?? "");
+  const destination = String(event.payload.destination_name ?? "");
+  const sessionId = String(event.payload.session_id ?? "");
+  if (outputPath) return outputPath;
+  if (destination) return destination;
+  if (sessionId) return sessionId;
+  return "Studio media state changed.";
 }
 
 function ConnectedAppsPage(props: {
