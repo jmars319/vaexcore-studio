@@ -118,6 +118,18 @@ export interface SuiteCommand {
   payload: Record<string, unknown>;
 }
 
+export interface SuiteTimelineEvent {
+  schemaVersion: number;
+  eventId: string;
+  sourceApp: string;
+  sourceAppName: string;
+  kind: string;
+  title: string;
+  detail: string;
+  createdAt: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface SuiteCommandInput {
   targetApp: string;
   command: string;
@@ -130,6 +142,12 @@ export interface PulseRecordingHandoffInput {
   profileId: string | null;
   profileName: string | null;
   stoppedAt: string;
+}
+
+export interface TwitchStreamKeyImport {
+  streamKey: string;
+  broadcasterLogin: string | null;
+  broadcasterUserId: string | null;
 }
 
 export interface MarkerListOptions {
@@ -237,6 +255,15 @@ export async function sendSuiteCommand(
   return invoke<SuiteCommand>("send_suite_command", { input });
 }
 
+export async function loadSuiteTimeline(limit = 50): Promise<SuiteTimelineEvent[]> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<SuiteTimelineEvent[]>("suite_timeline", { limit });
+  } catch {
+    return [];
+  }
+}
+
 export async function handoffRecordingToPulse(
   recording: PulseRecordingHandoffInput,
 ): Promise<SuiteLaunchResult[]> {
@@ -257,6 +284,11 @@ export async function handoffRecordingToPulse(
       },
     ];
   }
+}
+
+export async function fetchTwitchStreamKeyFromConsole(): Promise<TwitchStreamKeyImport> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<TwitchStreamKeyImport>("twitch_stream_key_from_console");
 }
 
 export async function loadCaptureSourceInventory(): Promise<CaptureSourceInventory> {

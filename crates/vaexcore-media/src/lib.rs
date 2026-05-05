@@ -11,10 +11,10 @@ use std::{
 };
 use tokio::sync::Mutex;
 use vaexcore_core::{
-    new_id, CaptureSourceKind, EngineMode, EngineStatus, MediaPipelineConfig, MediaPipelinePlan,
-    MediaPipelinePlanRequest, MediaPipelineStep, MediaProfile, PipelineIntent, PipelineStepStatus,
-    PlatformKind, RecordingContainer, RecordingSession, StreamDestination, StreamSession,
-    StudioEvent, StudioEventKind,
+    new_id, CaptureSourceKind, CaptureSourceSelection, EngineMode, EngineStatus,
+    MediaPipelineConfig, MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep,
+    MediaProfile, PipelineIntent, PipelineStepStatus, PlatformKind, RecordingContainer,
+    RecordingSession, StreamDestination, StreamSession, StudioEvent, StudioEventKind,
 };
 
 mod sidecar;
@@ -47,6 +47,10 @@ pub struct StreamLaunchRequest {
     pub stream_key: Option<String>,
     #[serde(default)]
     pub bandwidth_test: bool,
+    #[serde(default)]
+    pub capture_sources: Vec<CaptureSourceSelection>,
+    #[serde(default)]
+    pub profile: Option<MediaProfile>,
 }
 
 impl fmt::Debug for StreamLaunchRequest {
@@ -59,6 +63,8 @@ impl fmt::Debug for StreamLaunchRequest {
                 &self.stream_key.as_ref().map(|_| "[redacted]"),
             )
             .field("bandwidth_test", &self.bandwidth_test)
+            .field("capture_sources", &self.capture_sources)
+            .field("profile", &self.profile)
             .finish()
     }
 }
@@ -69,6 +75,8 @@ impl StreamLaunchRequest {
             destination,
             stream_key: None,
             bandwidth_test: false,
+            capture_sources: Vec::new(),
+            profile: None,
         }
     }
 }
@@ -662,7 +670,12 @@ impl MediaEngine for FfmpegRtmpEngine {
         })?;
         let publish_url = build_rtmp_publish_url(&request)?;
 
-        let mut child = spawn_ffmpeg_stream(&ffmpeg_path, &publish_url)?;
+        let mut child = spawn_ffmpeg_stream(
+            &ffmpeg_path,
+            &publish_url,
+            request.profile.as_ref(),
+            &request.capture_sources,
+        )?;
         std::thread::sleep(Duration::from_millis(500));
         if let Some(status) = child
             .try_wait()
@@ -816,50 +829,187 @@ fn build_rtmp_publish_url(request: &StreamLaunchRequest) -> Result<String, Media
     Ok(url)
 }
 
-fn spawn_ffmpeg_stream(ffmpeg_path: &PathBuf, publish_url: &str) -> Result<Child, MediaError> {
+fn spawn_ffmpeg_stream(
+    ffmpeg_path: &PathBuf,
+    publish_url: &str,
+    profile: Option<&MediaProfile>,
+    capture_sources: &[CaptureSourceSelection],
+) -> Result<Child, MediaError> {
+    let (width, height) = stream_resolution(profile);
+    let fps = stream_framerate(profile);
+    let bitrate_kbps = stream_bitrate_kbps(profile);
+    let mut args = vec![
+        "-hide_banner".to_string(),
+        "-loglevel".to_string(),
+        "warning".to_string(),
+    ];
+
+    if let Some(video_source) = selected_video_source(capture_sources) {
+        let video_device = avfoundation_video_device(video_source);
+        let audio_device = selected_audio_source(capture_sources).map(avfoundation_audio_device);
+
+        args.extend([
+            "-thread_queue_size".to_string(),
+            "512".to_string(),
+            "-f".to_string(),
+            "avfoundation".to_string(),
+            "-framerate".to_string(),
+            fps.to_string(),
+        ]);
+
+        if matches!(
+            video_source.kind,
+            CaptureSourceKind::Display | CaptureSourceKind::Window
+        ) {
+            args.extend([
+                "-capture_cursor".to_string(),
+                "1".to_string(),
+                "-capture_mouse_clicks".to_string(),
+                "1".to_string(),
+            ]);
+        }
+
+        args.push("-i".to_string());
+        args.push(match audio_device {
+            Some(audio_device) => format!("{video_device}:{audio_device}"),
+            None => video_device,
+        });
+
+        if selected_audio_source(capture_sources).is_none() {
+            args.extend([
+                "-f".to_string(),
+                "lavfi".to_string(),
+                "-i".to_string(),
+                "anullsrc=channel_layout=stereo:sample_rate=44100".to_string(),
+                "-map".to_string(),
+                "0:v:0".to_string(),
+                "-map".to_string(),
+                "1:a:0".to_string(),
+            ]);
+        }
+    } else {
+        args.extend([
+            "-re".to_string(),
+            "-f".to_string(),
+            "lavfi".to_string(),
+            "-i".to_string(),
+            format!("testsrc2=size={width}x{height}:rate={fps}"),
+            "-f".to_string(),
+            "lavfi".to_string(),
+            "-i".to_string(),
+            "anullsrc=channel_layout=stereo:sample_rate=44100".to_string(),
+            "-map".to_string(),
+            "0:v:0".to_string(),
+            "-map".to_string(),
+            "1:a:0".to_string(),
+        ]);
+    }
+
+    args.extend([
+        "-vf".to_string(),
+        format!(
+            "scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
+        ),
+        "-c:v".to_string(),
+        "libx264".to_string(),
+        "-preset".to_string(),
+        "veryfast".to_string(),
+        "-pix_fmt".to_string(),
+        "yuv420p".to_string(),
+        "-b:v".to_string(),
+        format!("{bitrate_kbps}k"),
+        "-maxrate".to_string(),
+        format!("{bitrate_kbps}k"),
+        "-bufsize".to_string(),
+        format!("{}k", bitrate_kbps * 2),
+        "-g".to_string(),
+        (fps * 2).to_string(),
+        "-c:a".to_string(),
+        "aac".to_string(),
+        "-b:a".to_string(),
+        "128k".to_string(),
+        "-ar".to_string(),
+        "44100".to_string(),
+        "-f".to_string(),
+        "flv".to_string(),
+        publish_url.to_string(),
+    ]);
+
     Command::new(ffmpeg_path)
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "warning",
-            "-re",
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc2=size=1280x720:rate=30",
-            "-f",
-            "lavfi",
-            "-i",
-            "anullsrc=channel_layout=stereo:sample_rate=44100",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-pix_fmt",
-            "yuv420p",
-            "-b:v",
-            "2500k",
-            "-maxrate",
-            "2500k",
-            "-bufsize",
-            "5000k",
-            "-g",
-            "60",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "128k",
-            "-ar",
-            "44100",
-            "-f",
-            "flv",
-            publish_url,
-        ])
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| MediaError::Unavailable(format!("could not start ffmpeg: {error}")))
+}
+
+fn selected_video_source(
+    capture_sources: &[CaptureSourceSelection],
+) -> Option<&CaptureSourceSelection> {
+    capture_sources.iter().find(|source| {
+        source.enabled
+            && matches!(
+                source.kind,
+                CaptureSourceKind::Display | CaptureSourceKind::Window | CaptureSourceKind::Camera
+            )
+    })
+}
+
+fn selected_audio_source(
+    capture_sources: &[CaptureSourceSelection],
+) -> Option<&CaptureSourceSelection> {
+    capture_sources
+        .iter()
+        .find(|source| source.enabled && matches!(source.kind, CaptureSourceKind::Microphone))
+}
+
+fn avfoundation_video_device(source: &CaptureSourceSelection) -> String {
+    match source.kind {
+        CaptureSourceKind::Display | CaptureSourceKind::Window => "Capture screen 0".to_string(),
+        CaptureSourceKind::Camera => {
+            if source.id == "camera:default" {
+                "0".to_string()
+            } else {
+                source.name.clone()
+            }
+        }
+        _ => "Capture screen 0".to_string(),
+    }
+}
+
+fn avfoundation_audio_device(source: &CaptureSourceSelection) -> String {
+    if source.id == "microphone:default" {
+        "0".to_string()
+    } else {
+        source.name.clone()
+    }
+}
+
+fn stream_resolution(profile: Option<&MediaProfile>) -> (u32, u32) {
+    let width = profile
+        .map(|profile| profile.resolution.width)
+        .unwrap_or(1280)
+        .clamp(640, 3840);
+    let height = profile
+        .map(|profile| profile.resolution.height)
+        .unwrap_or(720)
+        .clamp(360, 2160);
+    (width, height)
+}
+
+fn stream_framerate(profile: Option<&MediaProfile>) -> u32 {
+    profile
+        .map(|profile| profile.framerate)
+        .unwrap_or(30)
+        .clamp(24, 60)
+}
+
+fn stream_bitrate_kbps(profile: Option<&MediaProfile>) -> u32 {
+    profile
+        .map(|profile| profile.bitrate_kbps)
+        .unwrap_or(2500)
+        .clamp(1200, 6000)
 }
 
 #[cfg(feature = "gstreamer")]

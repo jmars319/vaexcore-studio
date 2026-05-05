@@ -868,10 +868,14 @@ async fn start_stream(
         .transpose()?
         .flatten()
         .map(|secret| secret.expose_secret().to_string());
+    let settings = state.store.app_settings()?;
+    let profile = state.store.recording_profile_by_id(None)?;
     let launch_request = StreamLaunchRequest {
         destination,
         stream_key,
         bandwidth_test: request.bandwidth_test,
+        capture_sources: settings.capture_sources,
+        profile,
     };
 
     match state.engine.start_stream(launch_request).await {

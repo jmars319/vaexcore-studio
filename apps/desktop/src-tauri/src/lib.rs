@@ -2,7 +2,7 @@ use std::{
     env,
     ffi::{c_char, c_void},
     fs::{self, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     sync::Mutex,
@@ -237,6 +237,20 @@ struct SuiteCommandDocument {
     payload: serde_json::Value,
 }
 
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SuiteTimelineEvent {
+    schema_version: u8,
+    event_id: String,
+    source_app: String,
+    source_app_name: String,
+    kind: String,
+    title: String,
+    detail: String,
+    created_at: String,
+    metadata: serde_json::Value,
+}
+
 #[derive(Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PulseRecordingHandoffInput {
@@ -257,6 +271,24 @@ struct PulseRecordingHandoffDocument {
     target_app: String,
     requested_at: String,
     recording: PulseRecordingHandoffRecording,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConsoleTwitchStreamKey {
+    stream_key: String,
+    broadcaster_login: Option<String>,
+    broadcaster_user_id: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConsoleTwitchStreamKeyResponse {
+    ok: bool,
+    stream_key: Option<String>,
+    broadcaster_login: Option<String>,
+    broadcaster_user_id: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -445,12 +477,68 @@ fn suite_session() -> Option<SuiteSessionDocument> {
 fn start_suite_session(title: Option<String>) -> Result<SuiteSessionDocument, String> {
     let document = build_suite_session_document(title);
     write_suite_session_document(&document).map_err(|error| error.to_string())?;
+    if let Err(error) = append_suite_timeline_event(
+        "suite.session",
+        "Suite session started",
+        &format!("{} is active.", document.title),
+        serde_json::json!({
+            "sessionId": document.session_id,
+            "ownerApp": document.owner_app,
+        }),
+    ) {
+        tracing::warn!(%error, "failed to append suite timeline event");
+    }
     Ok(document)
 }
 
 #[tauri::command]
 fn send_suite_command(input: SuiteCommandInput) -> Result<SuiteCommandDocument, String> {
     write_suite_command(input).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn suite_timeline(limit: Option<usize>) -> Vec<SuiteTimelineEvent> {
+    read_suite_timeline_events(limit.unwrap_or(50))
+}
+
+#[tauri::command]
+fn twitch_stream_key_from_console() -> Result<ConsoleTwitchStreamKey, String> {
+    let discovery = read_suite_discovery_document(&suite_discovery_file("vaexcore-console"))
+        .ok_or_else(|| "Console is not publishing a suite heartbeat yet.".to_string())?;
+    let api_url = discovery
+        .api_url
+        .ok_or_else(|| "Console heartbeat does not include an API URL.".to_string())?;
+    let endpoint = format!("{}/api/twitch/stream-key", api_url.trim_end_matches('/'));
+    let (status, body) = local_http_get(&endpoint)?;
+    let parsed = serde_json::from_str::<ConsoleTwitchStreamKeyResponse>(&body)
+        .map_err(|error| format!("Console returned an unreadable stream key response: {error}"))?;
+
+    if !parsed.ok || status != 200 {
+        return Err(parsed
+            .error
+            .unwrap_or_else(|| format!("Console stream key request failed with HTTP {status}")));
+    }
+
+    let stream_key = parsed
+        .stream_key
+        .ok_or_else(|| "Console did not return a stream key.".to_string())?;
+    if let Err(error) = append_suite_timeline_event(
+        "twitch.stream_key",
+        "Twitch key imported",
+        "Studio imported a Twitch stream key from Console.",
+        serde_json::json!({
+            "broadcasterLogin": parsed.broadcaster_login,
+            "broadcasterUserId": parsed.broadcaster_user_id,
+        }),
+    ) {
+        tracing::warn!(%error, "failed to append suite timeline event");
+    }
+
+    Ok(ConsoleTwitchStreamKey {
+        stream_key,
+        broadcaster_login: parsed.broadcaster_login,
+        broadcaster_user_id: parsed.broadcaster_user_id,
+    })
 }
 
 #[tauri::command]
@@ -536,6 +624,8 @@ fn start_suite_discovery_heartbeat(bind_addr: SocketAddr) {
                 "suite.session.owner".to_string(),
                 "suite.status".to_string(),
                 "suite.launcher".to_string(),
+                "suite.timeline".to_string(),
+                "twitch.stream_key.import".to_string(),
             ],
             launch_name: APP_NAME.to_string(),
             suite_session_id: session.as_ref().map(|session| session.session_id.clone()),
@@ -619,6 +709,21 @@ fn write_suite_command(input: SuiteCommandInput) -> std::io::Result<SuiteCommand
         directory.join(format!("{command_id}.json")),
         serde_json::to_vec_pretty(&document)?,
     )?;
+    if let Err(error) = append_suite_timeline_event(
+        "suite.command",
+        "Suite command sent",
+        &format!(
+            "Studio sent {} to {}.",
+            document.command, document.target_app
+        ),
+        serde_json::json!({
+            "commandId": document.command_id,
+            "targetApp": document.target_app,
+            "command": document.command,
+        }),
+    ) {
+        tracing::warn!(%error, "failed to append suite timeline event");
+    }
     Ok(document)
 }
 
@@ -778,6 +883,52 @@ fn suite_discovery_file(app_id: &str) -> PathBuf {
     suite_discovery_dir().join(format!("{app_id}.json"))
 }
 
+fn local_http_get(endpoint: &str) -> Result<(u16, String), String> {
+    let without_scheme = endpoint
+        .strip_prefix("http://")
+        .ok_or_else(|| "Only local http:// Console endpoints are supported.".to_string())?;
+    let (host_port, path) = without_scheme
+        .split_once('/')
+        .map(|(host_port, path)| (host_port, format!("/{path}")))
+        .unwrap_or((without_scheme, "/".to_string()));
+    let address = host_port
+        .to_socket_addrs()
+        .map_err(|error| format!("Could not resolve Console endpoint {host_port}: {error}"))?
+        .next()
+        .ok_or_else(|| format!("Could not resolve Console endpoint {host_port}"))?;
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))
+        .map_err(|error| format!("Could not connect to Console: {error}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .map_err(|error| format!("Could not configure Console read timeout: {error}"))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(3)))
+        .map_err(|error| format!("Could not configure Console write timeout: {error}"))?;
+
+    let request = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host_port}\r\nConnection: close\r\nAccept: application/json\r\n\r\n"
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| format!("Could not request Console stream key: {error}"))?;
+
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .map_err(|error| format!("Could not read Console response: {error}"))?;
+    let (head, body) = response
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| "Console returned a malformed HTTP response.".to_string())?;
+    let status = head
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|status| status.parse::<u16>().ok())
+        .ok_or_else(|| "Console returned a malformed HTTP status.".to_string())?;
+
+    Ok((status, body.to_string()))
+}
+
 fn suite_handoff_dir() -> PathBuf {
     suite_discovery_dir().join("handoffs")
 }
@@ -786,8 +937,57 @@ fn suite_session_file() -> PathBuf {
     suite_discovery_dir().join("session.json")
 }
 
+fn suite_timeline_file() -> PathBuf {
+    suite_discovery_dir().join("timeline.jsonl")
+}
+
 fn suite_command_dir() -> PathBuf {
     suite_discovery_dir().join("commands")
+}
+
+fn append_suite_timeline_event(
+    kind: &str,
+    title: &str,
+    detail: &str,
+    metadata: serde_json::Value,
+) -> std::io::Result<()> {
+    fs::create_dir_all(suite_discovery_dir())?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let event = SuiteTimelineEvent {
+        schema_version: SUITE_DISCOVERY_SCHEMA_VERSION,
+        event_id: format!(
+            "studio-{}-{}",
+            chrono::Utc::now().timestamp_millis(),
+            std::process::id()
+        ),
+        source_app: "vaexcore-studio".to_string(),
+        source_app_name: APP_NAME.to_string(),
+        kind: kind.to_string(),
+        title: title.to_string(),
+        detail: detail.to_string(),
+        created_at: now,
+        metadata,
+    };
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(suite_timeline_file())?;
+    writeln!(file, "{}", serde_json::to_string(&event)?)?;
+    Ok(())
+}
+
+fn read_suite_timeline_events(limit: usize) -> Vec<SuiteTimelineEvent> {
+    let contents = match fs::read_to_string(suite_timeline_file()) {
+        Ok(contents) => contents,
+        Err(_) => return Vec::new(),
+    };
+    let mut events = contents
+        .lines()
+        .filter_map(|line| serde_json::from_str::<SuiteTimelineEvent>(line).ok())
+        .collect::<Vec<_>>();
+    events.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    events.truncate(limit);
+    events
 }
 
 fn sanitize_suite_file_component(value: &str) -> String {
@@ -1357,7 +1557,9 @@ pub fn run() {
             suite_status,
             suite_session,
             start_suite_session,
+            suite_timeline,
             send_suite_command,
+            twitch_stream_key_from_console,
             handoff_recording_to_pulse
         ])
         .build(tauri::generate_context!())

@@ -50,6 +50,7 @@ import { platformLabels } from "@vaexcore/shared-types";
 import {
   eventSocketUrl,
   exportProfileBundle,
+  fetchTwitchStreamKeyFromConsole,
   handoffRecordingToPulse,
   importProfileBundle,
   launchVaexcoreSuite,
@@ -63,6 +64,7 @@ import {
   loadAppSettings,
   loadSuiteStatus,
   loadSuiteSession,
+  loadSuiteTimeline,
   MediaRunnerInfo,
   openDataDirectory,
   openCameraPrivacySettings,
@@ -78,6 +80,7 @@ import {
   SuiteAppStatus,
   SuiteLaunchResult,
   SuiteSession,
+  SuiteTimelineEvent,
 } from "./api";
 import logoUrl from "./assets/brand/vaexcore-studio-logo.jpg";
 
@@ -210,6 +213,9 @@ function App() {
   const [suiteLaunchStatus, setSuiteLaunchStatus] = useState<string | null>(null);
   const [suiteStatus, setSuiteStatus] = useState<SuiteAppStatus[]>([]);
   const [suiteSession, setSuiteSession] = useState<SuiteSession | null>(null);
+  const [persistedSuiteTimeline, setPersistedSuiteTimeline] = useState<
+    SuiteTimelineEvent[]
+  >([]);
   const [streamBandwidthTest, setStreamBandwidthTest] = useState(false);
 
   useEffect(() => {
@@ -278,6 +284,7 @@ function App() {
           nextPipelinePlan,
           nextSuiteStatus,
           nextSuiteSession,
+          nextSuiteTimeline,
         ] = await Promise.all([
           StudioApi.health(runtimeConfig),
           StudioApi.status(runtimeConfig),
@@ -290,6 +297,7 @@ function App() {
           StudioApi.mediaPlan(runtimeConfig),
           loadSuiteStatus(),
           loadSuiteSession(),
+          loadSuiteTimeline(50),
         ]);
         if (cancelled) return;
         setHealth(nextHealth);
@@ -303,6 +311,7 @@ function App() {
         setPipelinePlan(nextPipelinePlan);
         setSuiteStatus(nextSuiteStatus);
         setSuiteSession(nextSuiteSession);
+        setPersistedSuiteTimeline(nextSuiteTimeline);
         loadPreflightSnapshot()
           .then((snapshot) => {
             if (!cancelled) setPreflight(snapshot);
@@ -379,8 +388,15 @@ function App() {
     (destination) => destination.id === selectedDestinationId,
   );
   const suiteTimeline = useMemo(
-    () => buildSuiteTimeline(suiteStatus, recentRecordings, recentMarkers, events),
-    [events, recentMarkers, recentRecordings, suiteStatus],
+    () =>
+      buildSuiteTimeline(
+        suiteStatus,
+        recentRecordings,
+        recentMarkers,
+        events,
+        persistedSuiteTimeline,
+      ),
+    [events, persistedSuiteTimeline, recentMarkers, recentRecordings, suiteStatus],
   );
 
   async function refreshProfiles() {
@@ -546,6 +562,31 @@ function App() {
       setError(null);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Destination delete failed");
+    }
+  }
+
+  async function importTwitchStreamKeyFromConsole() {
+    try {
+      const imported = await fetchTwitchStreamKeyFromConsole();
+      setDestinationForm((current) => ({
+        ...current,
+        name:
+          current.name ||
+          (imported.broadcasterLogin
+            ? `Twitch - ${imported.broadcasterLogin}`
+            : "Twitch Manual RTMP"),
+        platform: "twitch",
+        ingest_url: current.ingest_url || "rtmp://live.twitch.tv/app",
+        stream_key: imported.streamKey,
+        enabled: current.enabled ?? true,
+      }));
+      setError(null);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Could not import the Twitch stream key from Console",
+      );
     }
   }
 
@@ -766,6 +807,7 @@ function App() {
             onDelete={deleteStreamDestination}
             onEdit={editStreamDestination}
             onFormChange={setDestinationForm}
+            onImportTwitchKey={importTwitchStreamKeyFromConsole}
             onUseTwitchManual={() =>
               setDestinationForm({
                 ...destinationForm,
@@ -828,6 +870,8 @@ function App() {
             selectedDestinationId={selectedDestinationId}
             selectedDestination={selectedDestination}
             selectedProfileId={selectedProfileId}
+            settings={settingsSnapshot?.settings ?? null}
+            onOpenSettings={handleOpenSettingsWindow}
             setSelectedDestinationId={setSelectedDestinationId}
             setSelectedProfileId={setSelectedProfileId}
             streamBandwidthTest={streamBandwidthTest}
@@ -1142,6 +1186,7 @@ function DestinationsPage(props: {
   onDelete: (destination: StreamDestination) => void;
   onEdit: (destination: StreamDestination) => void;
   onFormChange: (value: StreamDestinationInput) => void;
+  onImportTwitchKey: () => void;
   onUseTwitchManual: () => void;
   profiles: ProfilesSnapshot | null;
 }) {
@@ -1198,6 +1243,14 @@ function DestinationsPage(props: {
         >
           <Radio size={16} />
           Twitch Manual RTMP
+        </button>
+        <button
+          className="secondary-button full"
+          onClick={props.onImportTwitchKey}
+          type="button"
+        >
+          <Link2 size={16} />
+          Import Twitch Key from Console
         </button>
         <form className="form" onSubmit={props.onCreate}>
           <TextInput
@@ -1462,6 +1515,8 @@ function ControlsPage(props: {
   selectedDestinationId: string | undefined;
   selectedDestination: StreamDestination | undefined;
   selectedProfileId: string | undefined;
+  settings: AppSettings | null;
+  onOpenSettings: () => void;
   setSelectedDestinationId: (value: string) => void;
   setSelectedProfileId: (value: string) => void;
   streamBandwidthTest: boolean;
@@ -1476,6 +1531,9 @@ function ControlsPage(props: {
     props.mediaRunnerInfo,
     props.preflight,
   );
+  const enabledSources =
+    props.settings?.capture_sources.filter((source) => source.enabled) ?? [];
+  const defaultProfile = props.settings?.default_recording_profile;
 
   return (
     <div className="control-grid">
@@ -1562,6 +1620,46 @@ function ControlsPage(props: {
             Stop
           </button>
         </div>
+      </section>
+
+      <section className="panel">
+        <PanelTitle title="Broadcast Setup" />
+        <div className="checklist">
+          <div className="checklist-row">
+            <Pill tone={enabledSources.length ? "green" : "amber"}>
+              {enabledSources.length ? "Ready" : "Check"}
+            </Pill>
+            <div>
+              <strong>Capture</strong>
+              <span>
+                {enabledSources.length
+                  ? enabledSources.map((source) => source.name).join(", ")
+                  : "Enable a display, window, or camera source."}
+              </span>
+            </div>
+          </div>
+          <div className="checklist-row">
+            <Pill tone={defaultProfile ? "green" : "amber"}>
+              {defaultProfile ? "Ready" : "Check"}
+            </Pill>
+            <div>
+              <strong>Quality</strong>
+              <span>
+                {defaultProfile
+                  ? `${defaultProfile.resolution.width}x${defaultProfile.resolution.height} at ${defaultProfile.framerate} fps, ${defaultProfile.bitrate_kbps} kbps`
+                  : "Select a default recording profile."}
+              </span>
+            </div>
+          </div>
+        </div>
+        <button
+          className="secondary-button full"
+          onClick={props.onOpenSettings}
+          type="button"
+        >
+          <SlidersHorizontal size={16} />
+          Open Capture Settings
+        </button>
       </section>
 
       <section className="panel">
@@ -1667,6 +1765,9 @@ function ConnectedAppsPage(props: {
   const configuredApiUrl = props.config?.configuredApiUrl ?? apiUrl;
   const token = props.config?.token ?? "dev-auth-bypass";
   const runnerState = mediaRunnerState(props.mediaRunnerInfo, props.engine);
+  const consolePlatformUrl = props.suiteStatus
+    .find((app) => app.appId === "vaexcore-console")
+    ?.apiUrl?.replace(/\/$/, "");
 
   return (
     <div className="stack">
@@ -1787,6 +1888,16 @@ function ConnectedAppsPage(props: {
         {props.config?.discoveryFile && (
           <CopyLine label="Discovery File" value={props.config.discoveryFile} />
         )}
+        {consolePlatformUrl && (
+          <button
+            className="secondary-button full"
+            onClick={() => window.open(`${consolePlatformUrl}/platform`, "_blank")}
+            type="button"
+          >
+            <Link2 size={16} />
+            Open Platform Page
+          </button>
+        )}
         <CopyLine label="API Token" secret value={token} />
       </section>
       <section className="panel">
@@ -1900,7 +2011,16 @@ function buildSuiteTimeline(
   recordings: RecordingHistoryEntry[],
   markers: Marker[],
   events: StudioEvent[],
+  persistedEvents: SuiteTimelineEvent[],
 ): SuiteTimelineItem[] {
+  const persistedItems = persistedEvents.map((event) => ({
+    id: `persisted-${event.eventId}`,
+    kind: suiteTimelineItemKind(event.kind),
+    title: event.title,
+    detail: event.detail,
+    timestamp: event.createdAt,
+    source: event.sourceAppName,
+  }));
   const presence = suiteStatus
     .filter((app) => app.updatedAt)
     .map((app) => ({
@@ -1938,9 +2058,16 @@ function buildSuiteTimeline(
     source: "Studio",
   }));
 
-  return [...presence, ...recordingItems, ...markerItems, ...eventItems]
+  return [...persistedItems, ...presence, ...recordingItems, ...markerItems, ...eventItems]
     .sort((left, right) => suiteTimestampMs(right.timestamp) - suiteTimestampMs(left.timestamp))
     .slice(0, 18);
+}
+
+function suiteTimelineItemKind(kind: string): SuiteTimelineItem["kind"] {
+  if (kind.includes("recording")) return "recording";
+  if (kind.includes("marker")) return "marker";
+  if (kind.includes("presence") || kind.includes("session")) return "presence";
+  return "event";
 }
 
 function suiteTimestampMs(value: string): number {
