@@ -27,9 +27,8 @@ use vaexcore_media::{MediaRunnerConfig, MediaRunnerSupervisor};
 
 mod suite_protocol;
 use suite_protocol::{
-    CONSOLE_APP_ID, PULSE_APP_ID, PULSE_RECORDING_INTAKE_FILE, STUDIO_APP_ID,
+    SuiteAppDefinition, CONSOLE_APP_ID, PULSE_APP_ID, PULSE_RECORDING_INTAKE_FILE, STUDIO_APP_ID,
     SUITE_APP_DEFINITIONS, SUITE_DISCOVERY_SCHEMA_VERSION, VAEXCORE_SUITE_APPS,
-    SuiteAppDefinition,
 };
 
 const APP_NAME: &str = "vaexcore studio";

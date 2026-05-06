@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: macos-latest
@@ -29,6 +33,7 @@ jobs:
       - run: npm run test:scripts
       - run: npm run prepare:sidecars -w apps/desktop
       - run: npm run check:sidecars -w apps/desktop
+      - run: cargo fmt --all -- --check
       - run: cargo test -p vaexcore-api
       - run: cargo test -p vaexcore-studio-desktop
       - run: npm run typecheck
