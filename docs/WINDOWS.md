@@ -20,6 +20,12 @@ npm run app:build:windows
 
 The build prepares the media sidecar with `scripts/prepare-sidecars.mjs`, builds the web UI, and packages the Tauri NSIS installer.
 
+The suite-level build kit can also call:
+
+```sh
+npm run app:dist:windows
+```
+
 ## Local Paths
 
 - Suite discovery: `%APPDATA%\vaexcore\suite`

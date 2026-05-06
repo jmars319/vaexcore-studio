@@ -14,6 +14,7 @@
     "app:build": "npm run tauri -w apps/desktop -- build",
     "app:build:mac": "npm run tauri -w apps/desktop -- build --bundles app,dmg",
     "app:build:windows": "npm run tauri -w apps/desktop -- build --bundles nsis",
+    "app:dist:windows": "npm run app:build:windows",
     "tauri": "npm run tauri -w apps/desktop",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test:rust": "cargo test --workspace",
