@@ -25,6 +25,13 @@ use vaexcore_core::{
 };
 use vaexcore_media::{MediaRunnerConfig, MediaRunnerSupervisor};
 
+mod suite_protocol;
+use suite_protocol::{
+    CONSOLE_APP_ID, PULSE_APP_ID, PULSE_RECORDING_INTAKE_FILE, STUDIO_APP_ID,
+    SUITE_APP_DEFINITIONS, SUITE_DISCOVERY_SCHEMA_VERSION, VAEXCORE_SUITE_APPS,
+    SuiteAppDefinition,
+};
+
 const APP_NAME: &str = "vaexcore studio";
 const MAIN_WINDOW_LABEL: &str = "main";
 const SETTINGS_WINDOW_LABEL: &str = "settings";
@@ -41,8 +48,6 @@ const MENU_VIEW_CONTROLS: &str = "view-controls";
 const MENU_VIEW_CONNECTED_APPS: &str = "view-connected-apps";
 const MENU_VIEW_LOGS: &str = "view-logs";
 const FRONTEND_OPEN_SECTION_EVENT: &str = "vaexcore://open-section";
-const VAEXCORE_SUITE_APPS: &[&str] = &["vaexcore studio", "vaexcore pulse", "vaexcore console"];
-const SUITE_DISCOVERY_SCHEMA_VERSION: u8 = 1;
 const SUITE_DISCOVERY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const SUITE_DISCOVERY_STALE_AFTER: Duration = Duration::from_secs(45);
 
@@ -361,13 +366,6 @@ struct SuiteAppStatus {
     detail: String,
 }
 
-struct SuiteAppDefinition {
-    app_id: &'static str,
-    app_name: &'static str,
-    launch_name: &'static str,
-    bundle_identifier: &'static str,
-}
-
 #[derive(Clone)]
 struct DailyLogWriter {
     directory: PathBuf,
@@ -555,7 +553,7 @@ fn append_suite_timeline(input: SuiteTimelineInput) -> Result<(), String> {
 
 #[tauri::command]
 fn twitch_stream_key_from_console() -> Result<ConsoleTwitchStreamKey, String> {
-    let discovery = read_suite_discovery_document(&suite_discovery_file("vaexcore-console"))
+    let discovery = read_suite_discovery_document(&suite_discovery_file(CONSOLE_APP_ID))
         .ok_or_else(|| "Console is not publishing a suite heartbeat yet.".to_string())?;
     let api_url = discovery
         .api_url
@@ -595,7 +593,7 @@ fn twitch_stream_key_from_console() -> Result<ConsoleTwitchStreamKey, String> {
 
 #[tauri::command]
 fn twitch_broadcast_readiness_from_console() -> Result<ConsoleTwitchBroadcastReadiness, String> {
-    let discovery = read_suite_discovery_document(&suite_discovery_file("vaexcore-console"))
+    let discovery = read_suite_discovery_document(&suite_discovery_file(CONSOLE_APP_ID))
         .ok_or_else(|| "Console is not publishing a suite heartbeat yet.".to_string())?;
     let api_url = discovery
         .api_url
@@ -723,7 +721,7 @@ fn start_suite_discovery_heartbeat(
         let session = read_suite_session_document();
         let document = SuiteDiscoveryDocument {
             schema_version: SUITE_DISCOVERY_SCHEMA_VERSION,
-            app_id: "vaexcore-studio".to_string(),
+            app_id: STUDIO_APP_ID.to_string(),
             app_name: APP_NAME.to_string(),
             bundle_identifier: "com.vaexcore.studio".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -826,7 +824,7 @@ fn build_suite_session_document(title: Option<String>) -> SuiteSessionDocument {
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "VaexCore Suite Session".to_string()),
         status: "active".to_string(),
-        owner_app: "vaexcore-studio".to_string(),
+        owner_app: STUDIO_APP_ID.to_string(),
         created_at: read_suite_session_document()
             .map(|session| session.created_at)
             .unwrap_or_else(|| now.clone()),
@@ -866,13 +864,14 @@ fn write_suite_command(input: SuiteCommandInput) -> std::io::Result<SuiteCommand
     let document = SuiteCommandDocument {
         schema_version: SUITE_DISCOVERY_SCHEMA_VERSION,
         command_id: command_id.clone(),
-        source_app: "vaexcore-studio".to_string(),
+        source_app: STUDIO_APP_ID.to_string(),
         source_app_name: APP_NAME.to_string(),
         target_app: input.target_app,
         command: input.command,
         requested_at,
         payload: input.payload,
     };
+    validate_suite_command_document(&document).map_err(std::io::Error::other)?;
 
     fs::write(
         directory.join(format!("{command_id}.json")),
@@ -916,9 +915,9 @@ fn write_pulse_recording_handoff(recording: PulseRecordingHandoffInput) -> std::
     let document = PulseRecordingHandoffDocument {
         schema_version: SUITE_DISCOVERY_SCHEMA_VERSION,
         request_id,
-        source_app: "vaexcore-studio".to_string(),
+        source_app: STUDIO_APP_ID.to_string(),
         source_app_name: APP_NAME.to_string(),
-        target_app: "vaexcore-pulse".to_string(),
+        target_app: PULSE_APP_ID.to_string(),
         requested_at,
         recording: PulseRecordingHandoffRecording {
             session_id: recording.session_id,
@@ -928,43 +927,89 @@ fn write_pulse_recording_handoff(recording: PulseRecordingHandoffInput) -> std::
             stopped_at: recording.stopped_at,
         },
     };
+    validate_pulse_recording_handoff_document(&document).map_err(std::io::Error::other)?;
 
     let serialized = serde_json::to_vec_pretty(&document)?;
-    fs::write(directory.join("pulse-recording-intake.json"), serialized)?;
+    fs::write(directory.join(PULSE_RECORDING_INTAKE_FILE), serialized)?;
     let payload = serde_json::to_value(&document).map_err(std::io::Error::other)?;
     write_suite_command(SuiteCommandInput {
-        target_app: "vaexcore-pulse".to_string(),
+        target_app: PULSE_APP_ID.to_string(),
         command: "open-review".to_string(),
         payload,
     })
     .map(|_| ())
 }
 
-fn suite_app_definitions() -> [SuiteAppDefinition; 3] {
-    [
-        SuiteAppDefinition {
-            app_id: "vaexcore-studio",
-            app_name: "vaexcore studio",
-            launch_name: "vaexcore studio",
-            bundle_identifier: "com.vaexcore.studio",
-        },
-        SuiteAppDefinition {
-            app_id: "vaexcore-pulse",
-            app_name: "vaexcore pulse",
-            launch_name: "vaexcore pulse",
-            bundle_identifier: "com.vaexil.vaexcore.pulse",
-        },
-        SuiteAppDefinition {
-            app_id: "vaexcore-console",
-            app_name: "vaexcore console",
-            launch_name: "vaexcore console",
-            bundle_identifier: "com.vaexil.vaexcore.console",
-        },
-    ]
+fn suite_app_definitions() -> &'static [SuiteAppDefinition] {
+    SUITE_APP_DEFINITIONS
+}
+
+fn validate_suite_command_document(document: &SuiteCommandDocument) -> Result<(), String> {
+    if document.schema_version != SUITE_DISCOVERY_SCHEMA_VERSION {
+        return Err(format!(
+            "expected schema version {}, got {}",
+            SUITE_DISCOVERY_SCHEMA_VERSION, document.schema_version
+        ));
+    }
+    if document.source_app != STUDIO_APP_ID {
+        return Err(format!("unexpected source app {}", document.source_app));
+    }
+    if !suite_app_definitions()
+        .iter()
+        .any(|definition| definition.app_id == document.target_app)
+    {
+        return Err(format!("unknown target app {}", document.target_app));
+    }
+    if document.command_id.trim().is_empty() {
+        return Err("commandId is required".to_string());
+    }
+    if document.command.trim().is_empty() {
+        return Err("command is required".to_string());
+    }
+    if chrono::DateTime::parse_from_rfc3339(&document.requested_at).is_err() {
+        return Err("requestedAt must be an RFC3339 timestamp".to_string());
+    }
+    if !document.payload.is_object() {
+        return Err("payload must be an object".to_string());
+    }
+    Ok(())
+}
+
+fn validate_pulse_recording_handoff_document(
+    document: &PulseRecordingHandoffDocument,
+) -> Result<(), String> {
+    if document.schema_version != SUITE_DISCOVERY_SCHEMA_VERSION {
+        return Err(format!(
+            "expected schema version {}, got {}",
+            SUITE_DISCOVERY_SCHEMA_VERSION, document.schema_version
+        ));
+    }
+    if document.source_app != STUDIO_APP_ID {
+        return Err(format!("unexpected source app {}", document.source_app));
+    }
+    if document.target_app != PULSE_APP_ID {
+        return Err(format!("unexpected target app {}", document.target_app));
+    }
+    if document.request_id.trim().is_empty() {
+        return Err("requestId is required".to_string());
+    }
+    if chrono::DateTime::parse_from_rfc3339(&document.requested_at).is_err() {
+        return Err("requestedAt must be an RFC3339 timestamp".to_string());
+    }
+    if document.recording.session_id.trim().is_empty() {
+        return Err("recording.sessionId is required".to_string());
+    }
+    if document.recording.output_path.trim().is_empty() {
+        return Err("recording.outputPath is required".to_string());
+    }
+    if chrono::DateTime::parse_from_rfc3339(&document.recording.stopped_at).is_err() {
+        return Err("recording.stoppedAt must be an RFC3339 timestamp".to_string());
+    }
+    Ok(())
 }
 
 fn suite_app_status(definition: &SuiteAppDefinition) -> SuiteAppStatus {
-    let discovery_file = suite_discovery_file(definition.app_id);
+    let discovery_file = suite_discovery_dir().join(definition.discovery_file);
     let installed = desktop_app_is_installed(definition.launch_name);
     let discovery = read_suite_discovery_document(&discovery_file);
     let pid = discovery.as_ref().map(|document| document.pid);
@@ -1130,7 +1175,7 @@ fn append_suite_timeline_event(
             chrono::Utc::now().timestamp_millis(),
             std::process::id()
         ),
-        source_app: "vaexcore-studio".to_string(),
+        source_app: STUDIO_APP_ID.to_string(),
         source_app_name: APP_NAME.to_string(),
         kind: kind.to_string(),
         title: title.to_string(),
