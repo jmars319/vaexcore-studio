@@ -26,6 +26,10 @@ The suite-level build kit can also call:
 npm run app:dist:windows
 ```
 
+Studio also carries versioned Windows launchers under `tools/windows-launchers`.
+The `.cmd` files can be double-clicked to start the full suite or an individual
+installed app.
+
 ## Local Paths
 
 - Suite discovery: `%APPDATA%\vaexcore\suite`
