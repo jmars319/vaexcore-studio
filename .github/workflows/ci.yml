@@ -15,5 +15,9 @@ jobs:
           node-version: "22"
       - run: rustup default stable
       - run: npm ci
-      - run: cargo test -p vaexcore-api -p vaexcore-studio-desktop
+      - run: npm run test:scripts
+      - run: npm run prepare:sidecars -w apps/desktop
+      - run: npm run check:sidecars -w apps/desktop
+      - run: cargo test -p vaexcore-api
+      - run: cargo test -p vaexcore-studio-desktop
       - run: npm run typecheck
