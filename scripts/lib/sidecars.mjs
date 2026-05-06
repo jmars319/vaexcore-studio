@@ -36,6 +36,10 @@ export function detectTargetTriple({
   throw new Error("failed to determine Rust target triple");
 }
 
+export function targetTripleFromEnvironment(env = process.env, detect = detectTargetTriple) {
+  return env.TAURI_TARGET_TRIPLE || detect();
+}
+
 export function sidecarExtension(targetTriple) {
   return targetTriple.includes("windows") ? ".exe" : "";
 }

@@ -13,6 +13,7 @@ scripts/release-check.sh
 The script runs:
 
 - Rust formatting and tests.
+- Sidecar build and preflight for the active Rust target triple.
 - TypeScript typecheck and build.
 - Tauri production build.
 - bundle inspection for the `.app`, main executable, and bundled `media-runner`.

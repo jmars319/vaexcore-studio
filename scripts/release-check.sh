@@ -9,6 +9,8 @@ APP_BINARY="$APP_BUNDLE/Contents/MacOS/vaexcore-studio"
 MEDIA_RUNNER="$APP_BUNDLE/Contents/MacOS/media-runner"
 
 cargo fmt --all -- --check
+npm run prepare:sidecars
+npm run check:sidecars
 cargo test --workspace
 npm run typecheck
 npm run build

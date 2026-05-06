@@ -9,10 +9,21 @@ jobs:
   test:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
       - run: rustup default stable
       - run: npm ci
       - run: npm run test:scripts

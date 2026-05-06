@@ -19,6 +19,14 @@ npm run app:build:windows
 ```
 
 The build prepares the media sidecar with `scripts/prepare-sidecars.mjs`, builds the web UI, and packages the Tauri NSIS installer.
+Set `TAURI_TARGET_TRIPLE` when preparing a sidecar for a non-host target. The
+preflight check verifies the generated `apps/desktop/src-tauri/binaries/media-runner-*`
+file before desktop crate tests or packaging run:
+
+```sh
+TAURI_TARGET_TRIPLE=x86_64-pc-windows-msvc npm run prepare:sidecars
+TAURI_TARGET_TRIPLE=x86_64-pc-windows-msvc npm run check:sidecars
+```
 
 The suite-level build kit can also call:
 

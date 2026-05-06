@@ -3,11 +3,11 @@ import { dirname, resolve } from "node:path";
 import { platform } from "node:process";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { detectTargetTriple, studioSidecarPaths } from "./lib/sidecars.mjs";
+import { studioSidecarPaths, targetTripleFromEnvironment } from "./lib/sidecars.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
-const rootDir = resolve(scriptDir, "..");
-const targetTriple = process.env.TAURI_TARGET_TRIPLE || detectTargetTriple();
+const rootDir = process.env.VAEXCORE_STUDIO_ROOT_DIR || resolve(scriptDir, "..");
+const targetTriple = targetTripleFromEnvironment();
 const { binDir, source, destination } = studioSidecarPaths(rootDir, targetTriple);
 
 const build = spawnSync("cargo", ["build", "-p", "vaexcore-media-runner", "--release"], {

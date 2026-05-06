@@ -61,6 +61,9 @@ npm run tauri -w apps/desktop -- dev
 Run checks:
 
 ```bash
+npm run test:scripts
+npm run prepare:sidecars
+npm run check:sidecars
 npm run typecheck
 npm run build
 cargo test --workspace
@@ -77,6 +80,7 @@ Build and stage the sidecar executable for local desktop supervision and release
 
 ```bash
 npm run prepare:sidecars -w apps/desktop
+npm run check:sidecars -w apps/desktop
 ```
 
 The desktop app first checks bundled sidecar locations, then falls back to local build artifacts like `target/debug/media-runner` or `target/release/media-runner`. You can also point directly at a sidecar executable:
