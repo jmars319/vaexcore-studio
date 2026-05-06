@@ -44,7 +44,7 @@ Local API:
 - WebSocket event stream
 - Token auth with dev bypass
 - SQLite persistence
-- SecretStore implementation with macOS Keychain for stream keys and legacy SQLite ref migration
+- SecretStore implementation with macOS Keychain and Windows Credential Manager for stream keys and legacy SQLite ref migration
 - Command audit persistence
 - Recent client registry
 - Dry-run engine wiring
@@ -102,7 +102,7 @@ React UI
 - Start/stop commands are idempotent.
 - Events emit only on actual lifecycle transitions.
 - Secrets do not appear in logs, status, or events.
-- On macOS, new stream keys are stored in Keychain; legacy SQLite stream-key refs are migrated during store startup.
+- New stream keys are stored in the platform secure store where available: macOS Keychain on macOS and Windows Credential Manager on Windows. Legacy SQLite stream-key refs are migrated during store startup.
 - Command audit entries never store request bodies.
 - API responses use structured JSON envelopes.
 - Partial failures return explicit errors and do not mutate unrelated state.

@@ -4179,6 +4179,7 @@ dependencies = [
  "vaexcore-core",
  "vaexcore-media",
  "vaexcore-platforms",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

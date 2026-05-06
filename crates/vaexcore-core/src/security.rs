@@ -4,6 +4,7 @@ use std::fmt;
 const REDACTED: &str = "[redacted]";
 pub const LOCAL_SQLITE_SECRET_PROVIDER: &str = "local-sqlite";
 pub const MACOS_KEYCHAIN_SECRET_PROVIDER: &str = "macos-keychain";
+pub const WINDOWS_CREDENTIAL_MANAGER_SECRET_PROVIDER: &str = "windows-credential-manager";
 
 #[derive(Clone, Eq, PartialEq, Hash)]
 pub struct SensitiveString(String);
@@ -66,6 +67,13 @@ impl SecretRef {
     pub fn macos_keychain(id: impl Into<String>) -> Self {
         Self {
             provider: MACOS_KEYCHAIN_SECRET_PROVIDER.to_string(),
+            id: id.into(),
+        }
+    }
+
+    pub fn windows_credential_manager(id: impl Into<String>) -> Self {
+        Self {
+            provider: WINDOWS_CREDENTIAL_MANAGER_SECRET_PROVIDER.to_string(),
             id: id.into(),
         }
     }

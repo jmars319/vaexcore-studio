@@ -1,8 +1,10 @@
 # VaexCore Suite Protocol
 
-The three apps coordinate through local files under:
+The three apps coordinate through local files under the platform shared data folder:
 
-`~/Library/Application Support/vaexcore/suite`
+- macOS: `~/Library/Application Support/vaexcore/suite`
+- Windows: `%APPDATA%\vaexcore\suite`
+- Linux/dev fallback: `${XDG_DATA_HOME:-~/.local/share}/vaexcore/suite`
 
 Studio, Pulse, and Console remain independent apps. This protocol is the local contract that lets any one app launch the full suite, discover app health, pass workflow commands, publish shared timeline activity, and report whether its core workflow is locally capable without cloud services.
 
@@ -17,7 +19,7 @@ Studio, Pulse, and Console remain independent apps. This protocol is the local c
 ## Local Runtime Rules
 
 - Apps bind local APIs to loopback only.
-- Apps store durable state in app-owned Application Support paths, not repo-relative paths.
+- Apps store durable state in app-owned platform data paths, not repo-relative paths.
 - Apps publish a `localRuntime` object in their discovery heartbeat.
 - Apps should keep configuration and review workflows usable when network providers are disconnected.
 - Secrets must be stored in an app-owned secure store. Discovery must honestly report secure storage readiness and any migration fallback state.

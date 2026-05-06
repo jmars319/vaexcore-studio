@@ -44,7 +44,7 @@
 - Per-platform validation rules.
 - Optional OAuth helpers outside the media core.
 - macOS Keychain storage for Studio stream keys. Done.
-- Windows Credential Manager storage for Studio stream keys.
+- Windows Credential Manager storage for Studio stream keys. Done for Windows builds.
 
 ## External App Milestone
 

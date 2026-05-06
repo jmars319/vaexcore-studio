@@ -29,7 +29,7 @@ pub use responses::{
 };
 pub use security::{
     SecretRef, SecretStore, SecretStoreError, SensitiveString, LOCAL_SQLITE_SECRET_PROVIDER,
-    MACOS_KEYCHAIN_SECRET_PROVIDER,
+    MACOS_KEYCHAIN_SECRET_PROVIDER, WINDOWS_CREDENTIAL_MANAGER_SECRET_PROVIDER,
 };
 pub use settings::AppSettings;
 pub use status::{EngineMode, EngineStatus, RecordingSession, StreamSession};

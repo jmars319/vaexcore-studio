@@ -28,7 +28,7 @@
     "active": true,
     "targets": "all",
     "externalBin": ["binaries/media-runner"],
-    "icon": ["icons/icon.png", "icons/icon.icns"],
+    "icon": ["icons/icon.png", "icons/icon.icns", "icons/icon.ico"],
     "category": "DeveloperTool",
     "shortDescription": "Local streaming and recording control core",
     "longDescription": "vaexcore studio is a local-first streaming, recording, and app integration control system."

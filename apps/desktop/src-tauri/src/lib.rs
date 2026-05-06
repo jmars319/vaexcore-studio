@@ -483,7 +483,16 @@ fn open_data_directory(state: tauri::State<'_, AppRuntimeState>) -> Result<(), S
         return Ok(());
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&state.data_dir)
+            .spawn()
+            .map_err(|error| error.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Err("opening the data directory is not implemented on this platform".to_string())
     }
@@ -493,7 +502,7 @@ fn open_data_directory(state: tauri::State<'_, AppRuntimeState>) -> Result<(), S
 fn launch_vaexcore_suite() -> Vec<SuiteLaunchResult> {
     VAEXCORE_SUITE_APPS
         .iter()
-        .map(|app_name| launch_macos_app(app_name))
+        .map(|app_name| launch_desktop_app(app_name))
         .collect()
 }
 
@@ -620,10 +629,10 @@ fn handoff_recording_to_pulse(recording: PulseRecordingHandoffInput) -> Vec<Suit
         }];
     }
 
-    vec![launch_macos_app("vaexcore pulse")]
+    vec![launch_desktop_app("vaexcore pulse")]
 }
 
-fn launch_macos_app(app_name: &str) -> SuiteLaunchResult {
+fn launch_desktop_app(app_name: &str) -> SuiteLaunchResult {
     #[cfg(target_os = "macos")]
     {
         match std::process::Command::new("open")
@@ -655,12 +664,46 @@ fn launch_macos_app(app_name: &str) -> SuiteLaunchResult {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(executable_path) = windows_app_executable_path(app_name) {
+            return match std::process::Command::new(&executable_path).spawn() {
+                Ok(_) => SuiteLaunchResult {
+                    app_name: app_name.to_string(),
+                    ok: true,
+                    detail: format!("Launch requested: {}.", executable_path.display()),
+                },
+                Err(error) => SuiteLaunchResult {
+                    app_name: app_name.to_string(),
+                    ok: false,
+                    detail: error.to_string(),
+                },
+            };
+        }
+
+        match std::process::Command::new("cmd")
+            .args(["/C", "start", "", app_name])
+            .spawn()
+        {
+            Ok(_) => SuiteLaunchResult {
+                app_name: app_name.to_string(),
+                ok: true,
+                detail: "Launch requested through Windows shell.".to_string(),
+            },
+            Err(error) => SuiteLaunchResult {
+                app_name: app_name.to_string(),
+                ok: false,
+                detail: format!("Could not find or launch the Windows app: {error}"),
+            },
+        }
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         SuiteLaunchResult {
             app_name: app_name.to_string(),
             ok: false,
-            detail: "Launch Suite is only implemented for macOS Applications.".to_string(),
+            detail: "Launch Suite is not implemented on this platform.".to_string(),
         }
     }
 }
@@ -922,9 +965,7 @@ fn suite_app_definitions() -> [SuiteAppDefinition; 3] {
 
 fn suite_app_status(definition: &SuiteAppDefinition) -> SuiteAppStatus {
     let discovery_file = suite_discovery_file(definition.app_id);
-    let installed = Path::new("/Applications")
-        .join(format!("{}.app", definition.launch_name))
-        .exists();
+    let installed = desktop_app_is_installed(definition.launch_name);
     let discovery = read_suite_discovery_document(&discovery_file);
     let pid = discovery.as_ref().map(|document| document.pid);
     let running = pid.is_some_and(process_is_running);
@@ -991,7 +1032,7 @@ fn suite_status_detail(
     reachable: bool,
 ) -> String {
     if !installed {
-        return "Install this app in /Applications.".to_string();
+        return platform_install_hint().to_string();
     }
     if !discovered {
         return "No suite heartbeat has been published yet.".to_string();
@@ -1139,13 +1180,97 @@ fn sanitize_suite_file_component(value: &str) -> String {
 }
 
 fn suite_discovery_dir() -> PathBuf {
-    env::var("HOME")
+    vaexcore_shared_data_dir().join("suite")
+}
+
+fn vaexcore_shared_data_dir() -> PathBuf {
+    if cfg!(target_os = "windows") {
+        return env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                env::var_os("USERPROFILE")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(default_data_dir)
+                    .join("AppData")
+                    .join("Roaming")
+            })
+            .join("vaexcore");
+    }
+
+    if cfg!(target_os = "macos") {
+        return env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| default_data_dir())
+            .join("Library")
+            .join("Application Support")
+            .join("vaexcore");
+    }
+
+    env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| default_data_dir())
-        .join("Library")
-        .join("Application Support")
+        .unwrap_or_else(|| {
+            env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(default_data_dir)
+                .join(".local")
+                .join("share")
+        })
         .join("vaexcore")
-        .join("suite")
+}
+
+fn desktop_app_is_installed(app_name: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        return Path::new("/Applications")
+            .join(format!("{app_name}.app"))
+            .exists();
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        return windows_app_executable_path(app_name).is_some();
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = app_name;
+        false
+    }
+}
+
+fn platform_install_hint() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "Install this app with the Windows installer or place it under LocalAppData\\Programs."
+    } else if cfg!(target_os = "macos") {
+        "Install this app in /Applications."
+    } else {
+        "Install this app for the current desktop platform."
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_app_executable_path(app_name: &str) -> Option<PathBuf> {
+    windows_app_executable_candidates(app_name)
+        .into_iter()
+        .find(|path| path.is_file())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_app_executable_candidates(app_name: &str) -> Vec<PathBuf> {
+    let executable = format!("{app_name}.exe");
+    let mut candidates = Vec::new();
+    for root in [
+        env::var_os("LOCALAPPDATA").map(PathBuf::from),
+        env::var_os("ProgramFiles").map(PathBuf::from),
+        env::var_os("ProgramFiles(x86)").map(PathBuf::from),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        candidates.push(root.join("Programs").join(app_name).join(&executable));
+        candidates.push(root.join(app_name).join(&executable));
+    }
+    candidates
 }
 
 fn sanitize_handoff_id(value: &str) -> String {
@@ -1177,12 +1302,31 @@ fn suite_discovery_is_stale(path: &Path) -> bool {
 }
 
 fn process_is_running(pid: u32) -> bool {
-    let pid_arg = pid.to_string();
-    std::process::Command::new("ps")
-        .args(["-p", pid_arg.as_str()])
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    #[cfg(target_os = "windows")]
+    {
+        let pid_arg = pid.to_string();
+        let filter = format!("PID eq {pid_arg}");
+        return std::process::Command::new("tasklist")
+            .args(["/FI", filter.as_str(), "/NH"])
+            .output()
+            .map(|output| {
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout)
+                        .to_ascii_lowercase()
+                        .contains(&pid_arg)
+            })
+            .unwrap_or(false);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let pid_arg = pid.to_string();
+        std::process::Command::new("ps")
+            .args(["-p", pid_arg.as_str()])
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
 }
 
 fn health_url_is_reachable(url: &str) -> bool {

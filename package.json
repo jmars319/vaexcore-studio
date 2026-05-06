@@ -2,7 +2,7 @@
   "name": "vaexcore-studio",
   "version": "0.1.0",
   "private": true,
-  "description": "macOS-first desktop control system for streaming, recording, and local app integrations.",
+  "description": "Local-first desktop control system for streaming, recording, and local app integrations.",
   "workspaces": [
     "packages/shared-types",
     "packages/client-sdk",
@@ -11,6 +11,9 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "dev": "npm run dev -w apps/desktop",
+    "app:build": "npm run tauri -w apps/desktop -- build",
+    "app:build:mac": "npm run tauri -w apps/desktop -- build --bundles app,dmg",
+    "app:build:windows": "npm run tauri -w apps/desktop -- build --bundles nsis",
     "tauri": "npm run tauri -w apps/desktop",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test:rust": "cargo test --workspace",

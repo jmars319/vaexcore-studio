@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc -p tsconfig.json && vite build",
-    "prepare:sidecars": "../../scripts/prepare-sidecars.sh",
+    "prepare:sidecars": "node ../../scripts/prepare-sidecars.mjs",
     "preview": "vite preview --host 127.0.0.1 --port 1420",
     "tauri": "tauri",
     "typecheck": "tsc -p tsconfig.json --noEmit"

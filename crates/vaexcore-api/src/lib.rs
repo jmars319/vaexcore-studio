@@ -1242,13 +1242,42 @@ pub fn default_database_path() -> PathBuf {
 }
 
 fn suite_discovery_dir() -> PathBuf {
-    std::env::var("HOME")
+    vaexcore_shared_data_dir().join("suite")
+}
+
+fn vaexcore_shared_data_dir() -> PathBuf {
+    if cfg!(target_os = "windows") {
+        return std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::var_os("USERPROFILE")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join("AppData")
+                    .join("Roaming")
+            })
+            .join("vaexcore");
+    }
+
+    if cfg!(target_os = "macos") {
+        return std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join("Library")
+            .join("Application Support")
+            .join("vaexcore");
+    }
+
+    std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join("Library")
-        .join("Application Support")
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".local")
+                .join("share")
+        })
         .join("vaexcore")
-        .join("suite")
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ use vaexcore_core::{
     RecordingHistoryEntry, RecordingSession, Resolution, SecretRef, SecretStore, SecretStoreError,
     SensitiveString, StreamDestination, StreamDestinationBundleItem, StreamDestinationInput,
     LOCAL_SQLITE_SECRET_PROVIDER, MACOS_KEYCHAIN_SECRET_PROVIDER,
+    WINDOWS_CREDENTIAL_MANAGER_SECRET_PROVIDER,
 };
 use vaexcore_platforms::apply_platform_defaults;
 
@@ -19,6 +20,8 @@ const CURRENT_SCHEMA_VERSION: u32 = 4;
 const AUDIT_LOG_LIMIT: usize = 200;
 const MARKER_LIST_LIMIT: usize = 200;
 const MACOS_KEYCHAIN_SERVICE: &str = "com.vaexcore.studio.stream-keys";
+#[cfg(target_os = "windows")]
+const WINDOWS_CREDENTIAL_TARGET_PREFIX: &str = "vaexcore-studio-stream-key";
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
 
 #[derive(Clone, Debug, Default)]
@@ -47,7 +50,13 @@ pub struct SecretStorageReport {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum SecretBackend {
     LocalSqlite,
-    MacosKeychain { service: String },
+    MacosKeychain {
+        service: String,
+    },
+    #[cfg(target_os = "windows")]
+    WindowsCredentialManager {
+        target_prefix: String,
+    },
 }
 
 impl SecretBackend {
@@ -59,7 +68,14 @@ impl SecretBackend {
             }
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        {
+            Self::WindowsCredentialManager {
+                target_prefix: WINDOWS_CREDENTIAL_TARGET_PREFIX.to_string(),
+            }
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         {
             Self::LocalSqlite
         }
@@ -69,6 +85,8 @@ impl SecretBackend {
         match self {
             Self::LocalSqlite => LOCAL_SQLITE_SECRET_PROVIDER,
             Self::MacosKeychain { .. } => MACOS_KEYCHAIN_SECRET_PROVIDER,
+            #[cfg(target_os = "windows")]
+            Self::WindowsCredentialManager { .. } => WINDOWS_CREDENTIAL_MANAGER_SECRET_PROVIDER,
         }
     }
 
@@ -76,6 +94,8 @@ impl SecretBackend {
         match self {
             Self::LocalSqlite => "SQLite secret refs",
             Self::MacosKeychain { .. } => "macOS Keychain",
+            #[cfg(target_os = "windows")]
+            Self::WindowsCredentialManager { .. } => "Windows Credential Manager",
         }
     }
 
@@ -83,7 +103,24 @@ impl SecretBackend {
         match self {
             Self::LocalSqlite => None,
             Self::MacosKeychain { service } => Some(service),
+            #[cfg(target_os = "windows")]
+            Self::WindowsCredentialManager { .. } => None,
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn windows_credential_target(&self, secret_id: &str) -> Option<String> {
+        match self {
+            Self::WindowsCredentialManager { target_prefix } => {
+                Some(format!("{target_prefix}:{secret_id}"))
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn windows_credential_target(&self, _secret_id: &str) -> Option<String> {
+        None
     }
 }
 
@@ -176,6 +213,18 @@ impl ProfileStore {
             (SecretBackend::MacosKeychain { .. }, Some(_), _) => "keychain-migration-failed",
             (SecretBackend::MacosKeychain { .. }, None, 0) => "keychain-ready",
             (SecretBackend::MacosKeychain { .. }, None, _) => "needs-keychain-migration",
+            #[cfg(target_os = "windows")]
+            (SecretBackend::WindowsCredentialManager { .. }, Some(_), _) => {
+                "windows-credential-migration-failed"
+            }
+            #[cfg(target_os = "windows")]
+            (SecretBackend::WindowsCredentialManager { .. }, None, 0) => {
+                "windows-credential-manager-ready"
+            }
+            #[cfg(target_os = "windows")]
+            (SecretBackend::WindowsCredentialManager { .. }, None, _) => {
+                "needs-windows-credential-manager-migration"
+            }
             (SecretBackend::LocalSqlite, _, _) => "local-sqlite-fallback",
         }
         .to_string();
@@ -1059,7 +1108,7 @@ impl ProfileStore {
     }
 
     fn try_migrate_legacy_stream_keys_to_backend(&self) {
-        if !matches!(self.secret_backend, SecretBackend::MacosKeychain { .. }) {
+        if matches!(self.secret_backend, SecretBackend::LocalSqlite) {
             return;
         }
 
@@ -1070,10 +1119,6 @@ impl ProfileStore {
     }
 
     fn migrate_legacy_stream_keys_to_backend(&self) -> Result<(), StoreError> {
-        let Some(service) = self.secret_backend.keychain_service() else {
-            return Ok(());
-        };
-
         let legacy_secrets = {
             let connection = self
                 .connection
@@ -1097,7 +1142,7 @@ impl ProfileStore {
         }
 
         for (secret_id, secret) in &legacy_secrets {
-            write_keychain_secret(service, secret_id, secret.as_bytes())
+            write_backend_secret(&self.secret_backend, secret_id, secret.as_bytes())
                 .map_err(StoreError::SecretStore)?;
         }
 
@@ -1113,7 +1158,7 @@ impl ProfileStore {
                  WHERE stream_key_ref_provider = ?2
                    AND stream_key_ref_id = ?3",
                 params![
-                    MACOS_KEYCHAIN_SECRET_PROVIDER,
+                    self.secret_backend.provider(),
                     LOCAL_SQLITE_SECRET_PROVIDER,
                     secret_id,
                 ],
@@ -1164,6 +1209,11 @@ impl ProfileStore {
                 if let Some(service) = self.secret_backend.keychain_service() {
                     delete_keychain_secret(service, &reference.id)
                         .map_err(StoreError::SecretStore)?;
+                }
+            }
+            WINDOWS_CREDENTIAL_MANAGER_SECRET_PROVIDER => {
+                if let Some(target) = self.secret_backend.windows_credential_target(&reference.id) {
+                    delete_windows_credential_secret(&target).map_err(StoreError::SecretStore)?;
                 }
             }
             _ => {}
@@ -1319,6 +1369,32 @@ fn schema_version(connection: &Connection) -> Result<u32, StoreError> {
         .unwrap_or(0))
 }
 
+fn write_backend_secret(
+    backend: &SecretBackend,
+    secret_id: &str,
+    secret: &[u8],
+) -> Result<SecretRef, SecretStoreError> {
+    match backend {
+        SecretBackend::LocalSqlite => Err(SecretStoreError::Store(
+            "local SQLite secret writes must use the ProfileStore connection".to_string(),
+        )),
+        SecretBackend::MacosKeychain { service } => {
+            write_keychain_secret(service, secret_id, secret)?;
+            Ok(SecretRef::macos_keychain(secret_id))
+        }
+        #[cfg(target_os = "windows")]
+        SecretBackend::WindowsCredentialManager { .. } => {
+            let Some(target) = backend.windows_credential_target(secret_id) else {
+                return Err(SecretStoreError::Store(
+                    "Windows credential target was unavailable".to_string(),
+                ));
+            };
+            write_windows_credential_secret(&target, secret)?;
+            Ok(SecretRef::windows_credential_manager(secret_id))
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn write_keychain_secret(
     service: &str,
@@ -1387,6 +1463,143 @@ fn delete_keychain_secret(_service: &str, _account: &str) -> Result<(), SecretSt
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+fn write_windows_credential_secret(target: &str, secret: &[u8]) -> Result<(), SecretStoreError> {
+    use std::ptr;
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::Security::Credentials::{
+        CredWriteW, CREDENTIALW, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
+    };
+
+    let mut target_name = windows_wide(target);
+    let mut user_name = windows_wide("vaexcore studio");
+    let mut secret_bytes = secret.to_vec();
+    let credential = CREDENTIALW {
+        Flags: 0,
+        Type: CRED_TYPE_GENERIC,
+        TargetName: target_name.as_mut_ptr(),
+        Comment: ptr::null_mut(),
+        LastWritten: FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        },
+        CredentialBlobSize: secret_bytes.len() as u32,
+        CredentialBlob: secret_bytes.as_mut_ptr(),
+        Persist: CRED_PERSIST_LOCAL_MACHINE,
+        AttributeCount: 0,
+        Attributes: ptr::null_mut(),
+        TargetAlias: ptr::null_mut(),
+        UserName: user_name.as_mut_ptr(),
+    };
+
+    let ok = unsafe { CredWriteW(&credential, 0) };
+    if ok == 0 {
+        return Err(SecretStoreError::Store(format!(
+            "Windows Credential Manager write failed: {}",
+            windows_last_error_message()
+        )));
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn read_windows_credential_secret(
+    target: &str,
+) -> Result<Option<SensitiveString>, SecretStoreError> {
+    use std::{ptr, slice};
+    use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
+    use windows_sys::Win32::Security::Credentials::{
+        CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
+    };
+
+    let target_name = windows_wide(target);
+    let mut credential: *mut CREDENTIALW = ptr::null_mut();
+    let ok = unsafe { CredReadW(target_name.as_ptr(), CRED_TYPE_GENERIC, 0, &mut credential) };
+    if ok == 0 {
+        let code = windows_last_error_code();
+        if code == ERROR_NOT_FOUND {
+            return Ok(None);
+        }
+        return Err(SecretStoreError::Store(format!(
+            "Windows Credential Manager read failed: {}",
+            windows_last_error_message()
+        )));
+    }
+
+    let credential_ref = unsafe { &*credential };
+    let bytes = unsafe {
+        slice::from_raw_parts(
+            credential_ref.CredentialBlob,
+            credential_ref.CredentialBlobSize as usize,
+        )
+    };
+    let value_bytes = bytes.to_vec();
+    unsafe { CredFree(credential.cast()) };
+    let value = String::from_utf8(value_bytes).map_err(|error| {
+        SecretStoreError::Store(format!(
+            "Windows Credential Manager value was not valid UTF-8: {error}"
+        ))
+    })?;
+    Ok(Some(SensitiveString::new(value)))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn read_windows_credential_secret(
+    _target: &str,
+) -> Result<Option<SensitiveString>, SecretStoreError> {
+    Err(SecretStoreError::Store(
+        "Windows Credential Manager is unavailable on this platform".to_string(),
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn delete_windows_credential_secret(target: &str) -> Result<(), SecretStoreError> {
+    use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
+    use windows_sys::Win32::Security::Credentials::{CredDeleteW, CRED_TYPE_GENERIC};
+
+    let target_name = windows_wide(target);
+    let ok = unsafe { CredDeleteW(target_name.as_ptr(), CRED_TYPE_GENERIC, 0) };
+    if ok == 0 {
+        let code = windows_last_error_code();
+        if code == ERROR_NOT_FOUND {
+            return Ok(());
+        }
+        return Err(SecretStoreError::Store(format!(
+            "Windows Credential Manager delete failed: {}",
+            windows_last_error_message()
+        )));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn delete_windows_credential_secret(_target: &str) -> Result<(), SecretStoreError> {
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_wide(value: &str) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+
+    std::ffi::OsStr::new(value)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn windows_last_error_code() -> u32 {
+    unsafe { windows_sys::Win32::Foundation::GetLastError() }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_last_error_message() -> String {
+    let code = windows_last_error_code();
+    format!("Windows error {code}")
+}
+
 impl SecretStore for ProfileStore {
     fn put_secret(
         &self,
@@ -1413,6 +1626,16 @@ impl SecretStore for ProfileStore {
             SecretBackend::MacosKeychain { service } => {
                 write_keychain_secret(service, &id, value.expose_secret().as_bytes())?;
                 Ok(SecretRef::macos_keychain(id))
+            }
+            #[cfg(target_os = "windows")]
+            SecretBackend::WindowsCredentialManager { .. } => {
+                let Some(target) = self.secret_backend.windows_credential_target(&id) else {
+                    return Err(SecretStoreError::Store(
+                        "Windows credential target was unavailable".to_string(),
+                    ));
+                };
+                write_windows_credential_secret(&target, value.expose_secret().as_bytes())?;
+                Ok(SecretRef::windows_credential_manager(id))
             }
         }
     }
@@ -1441,6 +1664,13 @@ impl SecretStore for ProfileStore {
             MACOS_KEYCHAIN_SECRET_PROVIDER => {
                 if let Some(service) = self.secret_backend.keychain_service() {
                     read_keychain_secret(service, &reference.id)
+                } else {
+                    Ok(None)
+                }
+            }
+            WINDOWS_CREDENTIAL_MANAGER_SECRET_PROVIDER => {
+                if let Some(target) = self.secret_backend.windows_credential_target(&reference.id) {
+                    read_windows_credential_secret(&target)
                 } else {
                     Ok(None)
                 }
