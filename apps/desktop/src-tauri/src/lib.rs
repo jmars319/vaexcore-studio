@@ -6,7 +6,7 @@ use std::{
     net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     sync::Mutex,
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use tauri::{
@@ -1173,7 +1173,10 @@ fn suite_status_detail(
 }
 
 fn suite_discovery_file(app_id: &str) -> PathBuf {
-    suite_discovery_dir().join(format!("{app_id}.json"))
+    let discovery_file = suite_app_definition_for(app_id)
+        .map(|definition| definition.discovery_file.to_string())
+        .unwrap_or_else(|| format!("{app_id}.json"));
+    suite_discovery_dir().join(discovery_file)
 }
 
 fn local_http_get(endpoint: &str) -> Result<(u16, String), String> {
@@ -1419,7 +1422,12 @@ fn suite_discovery_is_stale(path: &Path) -> bool {
     fs::metadata(path)
         .and_then(|metadata| metadata.modified())
         .ok()
-        .and_then(|modified| modified.elapsed().ok())
+        .map(|modified| suite_discovery_modified_is_stale(modified, SystemTime::now()))
+        .unwrap_or(true)
+}
+
+fn suite_discovery_modified_is_stale(modified: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(modified)
         .map(|elapsed| elapsed > SUITE_DISCOVERY_STALE_AFTER)
         .unwrap_or(true)
 }
@@ -3232,6 +3240,45 @@ mod suite_contract_tests {
         assert!(validate_suite_discovery_document(&document)
             .unwrap_err()
             .contains("updatedAt"));
+    }
+
+    #[test]
+    fn suite_discovery_validation_rejects_non_local_urls() {
+        let mut document = valid_suite_discovery();
+        document.health_url = Some("https://example.com/health".to_string());
+
+        assert!(validate_suite_discovery_document(&document)
+            .unwrap_err()
+            .contains("localhost"));
+    }
+
+    #[test]
+    fn malformed_suite_discovery_files_are_ignored() {
+        let path = std::env::temp_dir().join(format!(
+            "vaexcore-studio-bad-discovery-{}.json",
+            std::process::id()
+        ));
+        fs::write(&path, "{bad json").unwrap();
+
+        assert!(read_suite_discovery_document(&path).is_none());
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn suite_discovery_stale_classification_uses_heartbeat_age() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        let fresh = now - Duration::from_secs(10);
+        let stale = now - SUITE_DISCOVERY_STALE_AFTER - Duration::from_secs(1);
+
+        assert!(!suite_discovery_modified_is_stale(fresh, now));
+        assert!(suite_discovery_modified_is_stale(stale, now));
+    }
+
+    #[test]
+    fn suite_discovery_file_uses_contract_discovery_filename() {
+        assert!(suite_discovery_file(STUDIO_APP_ID).ends_with("vaexcore-studio.json"));
+        assert!(suite_discovery_file("vaexcore-unknown").ends_with("vaexcore-unknown.json"));
     }
 
     fn valid_suite_command() -> SuiteCommandDocument {
