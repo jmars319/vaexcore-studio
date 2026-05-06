@@ -1,0 +1,19 @@
+name: Studio CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: rustup default stable
+      - run: npm ci
+      - run: cargo test -p vaexcore-api -p vaexcore-studio-desktop
+      - run: npm run typecheck

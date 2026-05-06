@@ -896,9 +896,13 @@ fn write_suite_command(input: SuiteCommandInput) -> std::io::Result<SuiteCommand
 }
 
 fn write_suite_discovery_document(document: &SuiteDiscoveryDocument) -> std::io::Result<()> {
+    validate_suite_discovery_document(document).map_err(std::io::Error::other)?;
     let directory = suite_discovery_dir();
     fs::create_dir_all(&directory)?;
-    let path = directory.join(format!("{}.json", document.app_id));
+    let discovery_file = suite_app_definition_for(&document.app_id)
+        .map(|definition| definition.discovery_file)
+        .unwrap_or_else(|| document.app_id.as_str());
+    let path = directory.join(discovery_file);
     let serialized = serde_json::to_vec_pretty(document)?;
     fs::write(path, serialized)
 }
@@ -942,6 +946,80 @@ fn write_pulse_recording_handoff(recording: PulseRecordingHandoffInput) -> std::
 
 fn suite_app_definitions() -> &'static [SuiteAppDefinition] {
     SUITE_APP_DEFINITIONS
+}
+
+fn suite_app_definition_for(app_id: &str) -> Option<&'static SuiteAppDefinition> {
+    suite_app_definitions()
+        .iter()
+        .find(|definition| definition.app_id == app_id)
+}
+
+fn validate_suite_discovery_document(document: &SuiteDiscoveryDocument) -> Result<(), String> {
+    if document.schema_version != SUITE_DISCOVERY_SCHEMA_VERSION {
+        return Err(format!(
+            "expected schema version {}, got {}",
+            SUITE_DISCOVERY_SCHEMA_VERSION, document.schema_version
+        ));
+    }
+    let definition = suite_app_definition_for(&document.app_id)
+        .ok_or_else(|| format!("unknown suite app {}", document.app_id))?;
+    if document.app_name != definition.app_name {
+        return Err(format!("unexpected appName {}", document.app_name));
+    }
+    if document.bundle_identifier != definition.bundle_identifier {
+        return Err(format!(
+            "unexpected bundleIdentifier {}",
+            document.bundle_identifier
+        ));
+    }
+    if document.launch_name != definition.launch_name {
+        return Err(format!("unexpected launchName {}", document.launch_name));
+    }
+    if document.version.trim().is_empty() {
+        return Err("version is required".to_string());
+    }
+    if document.pid == 0 {
+        return Err("pid must be greater than 0".to_string());
+    }
+    if chrono::DateTime::parse_from_rfc3339(&document.started_at).is_err() {
+        return Err("startedAt must be an RFC3339 timestamp".to_string());
+    }
+    if chrono::DateTime::parse_from_rfc3339(&document.updated_at).is_err() {
+        return Err("updatedAt must be an RFC3339 timestamp".to_string());
+    }
+    if document.capabilities.is_empty() {
+        return Err("capabilities must not be empty".to_string());
+    }
+    if let Some(api_url) = document.api_url.as_deref() {
+        validate_local_url(api_url, "apiUrl")?;
+    }
+    if let Some(ws_url) = document.ws_url.as_deref() {
+        validate_local_url(ws_url, "wsUrl")?;
+    }
+    if let Some(health_url) = document.health_url.as_deref() {
+        validate_local_url(health_url, "healthUrl")?;
+    }
+    if let Some(runtime) = document.local_runtime.as_ref() {
+        if runtime.contract_version != SUITE_DISCOVERY_SCHEMA_VERSION {
+            return Err("localRuntime.contractVersion mismatch".to_string());
+        }
+        if runtime.dependencies.is_empty() {
+            return Err("localRuntime.dependencies must not be empty".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn validate_local_url(value: &str, field: &str) -> Result<(), String> {
+    if value.starts_with("http://127.0.0.1:")
+        || value.starts_with("http://localhost:")
+        || value.starts_with("ws://127.0.0.1:")
+        || value.starts_with("ws://localhost:")
+    {
+        Ok(())
+    } else {
+        Err(format!("{field} must be a localhost URL"))
+    }
 }
 
 fn validate_suite_command_document(document: &SuiteCommandDocument) -> Result<(), String> {
@@ -3100,4 +3178,128 @@ fn settings_restart_required(settings: &AppSettings, active_addr: SocketAddr) ->
     settings_bind_addr(settings)
         .map(|settings_addr| settings_addr != active_addr)
         .unwrap_or(true)
+}
+
+#[cfg(test)]
+mod suite_contract_tests {
+    use super::*;
+
+    #[test]
+    fn suite_command_validation_rejects_unknown_target_app() {
+        let mut document = valid_suite_command();
+        document.target_app = "vaexcore-unknown".to_string();
+
+        assert!(validate_suite_command_document(&document)
+            .unwrap_err()
+            .contains("unknown target app"));
+    }
+
+    #[test]
+    fn suite_command_validation_rejects_non_object_payload() {
+        let mut document = valid_suite_command();
+        document.payload = serde_json::json!("not-object");
+
+        assert!(validate_suite_command_document(&document)
+            .unwrap_err()
+            .contains("payload"));
+    }
+
+    #[test]
+    fn pulse_handoff_validation_rejects_empty_output_path() {
+        let mut document = valid_pulse_handoff();
+        document.recording.output_path = " ".to_string();
+
+        assert!(validate_pulse_recording_handoff_document(&document)
+            .unwrap_err()
+            .contains("outputPath"));
+    }
+
+    #[test]
+    fn pulse_handoff_validation_rejects_wrong_target() {
+        let mut document = valid_pulse_handoff();
+        document.target_app = CONSOLE_APP_ID.to_string();
+
+        assert!(validate_pulse_recording_handoff_document(&document)
+            .unwrap_err()
+            .contains("target app"));
+    }
+
+    #[test]
+    fn suite_discovery_validation_rejects_epoch_timestamp() {
+        let mut document = valid_suite_discovery();
+        document.updated_at = "1778048017".to_string();
+
+        assert!(validate_suite_discovery_document(&document)
+            .unwrap_err()
+            .contains("updatedAt"));
+    }
+
+    fn valid_suite_command() -> SuiteCommandDocument {
+        SuiteCommandDocument {
+            schema_version: SUITE_DISCOVERY_SCHEMA_VERSION,
+            command_id: "open-review-1".to_string(),
+            source_app: STUDIO_APP_ID.to_string(),
+            source_app_name: APP_NAME.to_string(),
+            target_app: PULSE_APP_ID.to_string(),
+            command: "open-review".to_string(),
+            requested_at: "2026-05-06T12:00:00Z".to_string(),
+            payload: serde_json::json!({ "recordingSessionId": "rec_smoke" }),
+        }
+    }
+
+    fn valid_pulse_handoff() -> PulseRecordingHandoffDocument {
+        PulseRecordingHandoffDocument {
+            schema_version: SUITE_DISCOVERY_SCHEMA_VERSION,
+            request_id: "studio-recording-rec-smoke-1".to_string(),
+            source_app: STUDIO_APP_ID.to_string(),
+            source_app_name: APP_NAME.to_string(),
+            target_app: PULSE_APP_ID.to_string(),
+            requested_at: "2026-05-06T12:00:00Z".to_string(),
+            recording: PulseRecordingHandoffRecording {
+                session_id: "rec_smoke".to_string(),
+                output_path: "/tmp/rec_smoke.mkv".to_string(),
+                profile_id: Some("profile_1080p".to_string()),
+                profile_name: Some("1080p".to_string()),
+                stopped_at: "2026-05-06T12:05:00Z".to_string(),
+            },
+        }
+    }
+
+    fn valid_suite_discovery() -> SuiteDiscoveryDocument {
+        SuiteDiscoveryDocument {
+            schema_version: SUITE_DISCOVERY_SCHEMA_VERSION,
+            app_id: STUDIO_APP_ID.to_string(),
+            app_name: APP_NAME.to_string(),
+            bundle_identifier: "com.vaexcore.studio".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            pid: 1234,
+            started_at: "2026-05-06T12:00:00Z".to_string(),
+            updated_at: "2026-05-06T12:00:15Z".to_string(),
+            api_url: Some("http://127.0.0.1:51287".to_string()),
+            ws_url: Some("ws://127.0.0.1:51287/events".to_string()),
+            health_url: Some("http://127.0.0.1:51287/health".to_string()),
+            capabilities: vec!["studio.api".to_string()],
+            launch_name: "vaexcore studio".to_string(),
+            suite_session_id: None,
+            activity: Some("ready".to_string()),
+            activity_detail: None,
+            local_runtime: Some(SuiteLocalRuntime {
+                contract_version: SUITE_DISCOVERY_SCHEMA_VERSION,
+                mode: "local-first".to_string(),
+                state: "ready".to_string(),
+                app_storage_dir: "/tmp/studio".to_string(),
+                suite_dir: "/tmp/vaexcore/suite".to_string(),
+                secure_storage: "keychain".to_string(),
+                secret_storage_state: "ready".to_string(),
+                durable_storage: vec!["sqlite".to_string()],
+                network_policy: "localhost-only".to_string(),
+                dependencies: vec![SuiteLocalRuntimeDependency {
+                    name: "studio-api".to_string(),
+                    kind: "local-http-service".to_string(),
+                    state: "reachable".to_string(),
+                    detail: "http://127.0.0.1:51287".to_string(),
+                }],
+            }),
+        }
+    }
 }
