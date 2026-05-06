@@ -28,7 +28,8 @@ npm run app:dist:windows
 
 Studio also carries versioned Windows launchers under `tools/windows-launchers`.
 The `.cmd` files can be double-clicked to start the full suite or an individual
-installed app.
+installed app. `Install-VaexcoreLaunchers.cmd` creates Start Menu shortcuts and
+a desktop suite shortcut using the suite logo.
 
 ## Local Paths
 
