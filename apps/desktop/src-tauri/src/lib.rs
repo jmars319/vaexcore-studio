@@ -9,6 +9,9 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use tauri::{
     menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu},
     Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
@@ -47,8 +50,19 @@ const MENU_VIEW_CONTROLS: &str = "view-controls";
 const MENU_VIEW_CONNECTED_APPS: &str = "view-connected-apps";
 const MENU_VIEW_LOGS: &str = "view-logs";
 const FRONTEND_OPEN_SECTION_EVENT: &str = "vaexcore://open-section";
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(target_os = "windows")]
+const DETACHED_PROCESS: u32 = 0x00000008;
 const SUITE_DISCOVERY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const SUITE_DISCOVERY_STALE_AFTER: Duration = Duration::from_secs(45);
+
+fn suppress_windows_console(_command: &mut std::process::Command) {
+    #[cfg(target_os = "windows")]
+    {
+        _command.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+    }
+}
 
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -664,7 +678,9 @@ fn launch_desktop_app(app_name: &str) -> SuiteLaunchResult {
     #[cfg(target_os = "windows")]
     {
         if let Some(executable_path) = windows_app_executable_path(app_name) {
-            return match std::process::Command::new(&executable_path).spawn() {
+            let mut command = std::process::Command::new(&executable_path);
+            suppress_windows_console(&mut command);
+            return match command.spawn() {
                 Ok(_) => SuiteLaunchResult {
                     app_name: app_name.to_string(),
                     ok: true,
@@ -678,10 +694,10 @@ fn launch_desktop_app(app_name: &str) -> SuiteLaunchResult {
             };
         }
 
-        match std::process::Command::new("cmd")
-            .args(["/C", "start", "", app_name])
-            .spawn()
-        {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", "", app_name]);
+        suppress_windows_console(&mut command);
+        match command.spawn() {
             Ok(_) => SuiteLaunchResult {
                 app_name: app_name.to_string(),
                 ok: true,
@@ -1436,7 +1452,9 @@ fn process_is_running(pid: u32) -> bool {
     {
         let pid_arg = pid.to_string();
         let filter = format!("PID eq {pid_arg}");
-        return std::process::Command::new("tasklist")
+        let mut command = std::process::Command::new("tasklist");
+        suppress_windows_console(&mut command);
+        return command
             .args(["/FI", filter.as_str(), "/NH"])
             .output()
             .map(|output| {

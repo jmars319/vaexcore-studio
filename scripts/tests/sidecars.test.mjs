@@ -52,11 +52,12 @@ test("sidecar target triple prefers TAURI_TARGET_TRIPLE", () => {
 });
 
 test("studio sidecar paths point at Tauri binaries", () => {
-  const paths = studioSidecarPaths("/repo", "aarch64-apple-darwin");
+  const rootDir = resolve("/repo");
+  const paths = studioSidecarPaths(rootDir, "aarch64-apple-darwin");
 
-  assert.equal(paths.binDir, "/repo/apps/desktop/src-tauri/binaries");
-  assert.equal(paths.source, "/repo/target/release/media-runner");
-  assert.equal(paths.destination, "/repo/apps/desktop/src-tauri/binaries/media-runner-aarch64-apple-darwin");
+  assert.equal(paths.binDir, resolve(rootDir, "apps/desktop/src-tauri/binaries"));
+  assert.equal(paths.source, resolve(rootDir, "target/release/media-runner"));
+  assert.equal(paths.destination, resolve(rootDir, "apps/desktop/src-tauri/binaries/media-runner-aarch64-apple-darwin"));
 });
 
 test("sidecar preflight reports a missing prepared binary", () => {

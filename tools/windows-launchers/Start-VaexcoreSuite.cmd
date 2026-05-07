@@ -1,4 +1,3 @@
 @echo off
 setlocal
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0Launch-VaexcoreSuite.ps1"
-if errorlevel 1 pause
+start "" "%SystemRoot%\System32\wscript.exe" "%~dp0Start-VaexcoreSuite.vbs"

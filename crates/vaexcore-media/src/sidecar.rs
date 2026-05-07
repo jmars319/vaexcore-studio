@@ -3,6 +3,8 @@ use crate::{MediaEngine, MediaError, MediaEventSink, MediaTransition};
 use async_trait::async_trait;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpStream},
@@ -16,6 +18,11 @@ use vaexcore_core::{
     MediaPipelineValidation, MediaProfile, RecordingSession, StreamSession, StudioEvent,
     StudioEventKind,
 };
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(target_os = "windows")]
+const DETACHED_PROCESS: u32 = 0x00000008;
 
 #[derive(Clone, Debug)]
 pub struct MediaRunnerConfig {
@@ -335,10 +342,18 @@ fn spawn_media_runner_child(
         command.arg("--dry-run");
     }
 
+    suppress_windows_console(&mut command);
     command.spawn().map_err(|source| SidecarError::Spawn {
         path: executable_path.clone(),
         source,
     })
+}
+
+fn suppress_windows_console(_command: &mut Command) {
+    #[cfg(target_os = "windows")]
+    {
+        _command.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+    }
 }
 
 impl MediaRunnerSupervisorInner {

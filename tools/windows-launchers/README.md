@@ -7,14 +7,14 @@ install locations, and they also fall back to Start Menu shortcuts.
 Double-click from Explorer:
 
 ```text
-Install-VaexcoreLaunchers.cmd
-Start-VaexcoreSuite.cmd
-Start-VaexcoreStudio.cmd
-Start-VaexcorePulse.cmd
-Start-VaexcoreConsole.cmd
+Install-VaexcoreLaunchers.vbs
+Start-VaexcoreSuite.vbs
+Start-VaexcoreStudio.vbs
+Start-VaexcorePulse.vbs
+Start-VaexcoreConsole.vbs
 ```
 
-`Install-VaexcoreLaunchers.cmd` creates Start Menu shortcuts plus a desktop
+`Install-VaexcoreLaunchers.vbs` creates Start Menu shortcuts plus a desktop
 `vaexcore suite` shortcut using `assets\vaexcore-suite.ico`.
 
 PowerShell equivalents:

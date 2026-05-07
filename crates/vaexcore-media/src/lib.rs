@@ -2,9 +2,11 @@ use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::{
-    env, fmt,
-    path::PathBuf,
+    env, fmt, fs,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex as StdMutex},
     time::Duration,
@@ -18,6 +20,18 @@ use vaexcore_core::{
 };
 
 mod sidecar;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(target_os = "windows")]
+const DETACHED_PROCESS: u32 = 0x00000008;
+
+fn suppress_windows_console(_command: &mut Command) {
+    #[cfg(target_os = "windows")]
+    {
+        _command.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+    }
+}
 
 pub use sidecar::{
     MediaRunnerConfig, MediaRunnerStatus, MediaRunnerSupervisor, SidecarError, SidecarMediaEngine,
@@ -775,11 +789,17 @@ impl Drop for FfmpegRtmpEngineInner {
 
 pub fn find_ffmpeg_binary() -> Option<PathBuf> {
     let mut candidates = Vec::new();
+    if let Some(explicit_path) = env::var_os("VAEXCORE_FFMPEG_PATH") {
+        candidates.push(PathBuf::from(explicit_path));
+    }
     if let Some(path) = env::var_os("PATH") {
         for directory in env::split_paths(&path) {
-            candidates.push(directory.join("ffmpeg"));
+            for executable_name in ffmpeg_executable_names() {
+                candidates.push(directory.join(executable_name));
+            }
         }
     }
+    add_windows_ffmpeg_candidates(&mut candidates);
     candidates.extend([
         PathBuf::from("/opt/homebrew/bin/ffmpeg"),
         PathBuf::from("/usr/local/bin/ffmpeg"),
@@ -787,6 +807,64 @@ pub fn find_ffmpeg_binary() -> Option<PathBuf> {
     ]);
 
     candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
+fn ffmpeg_executable_names() -> &'static [&'static str] {
+    if cfg!(target_os = "windows") {
+        &["ffmpeg.exe", "ffmpeg"]
+    } else {
+        &["ffmpeg"]
+    }
+}
+
+fn add_windows_ffmpeg_candidates(candidates: &mut Vec<PathBuf>) {
+    if !cfg!(target_os = "windows") {
+        return;
+    }
+
+    candidates.extend([
+        PathBuf::from("C:\\ffmpeg\\bin\\ffmpeg.exe"),
+        PathBuf::from("C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe"),
+        PathBuf::from("C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe"),
+    ]);
+
+    if let Some(user_profile) = env::var_os("USERPROFILE") {
+        candidates.push(PathBuf::from(user_profile).join("scoop\\shims\\ffmpeg.exe"));
+    }
+
+    if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+        let winget_root = PathBuf::from(local_app_data).join("Microsoft\\WinGet");
+        candidates.push(winget_root.join("Links\\ffmpeg.exe"));
+        add_winget_ffmpeg_package_candidates(
+            &winget_root.join("Packages"),
+            "ffmpeg.exe",
+            candidates,
+        );
+    }
+}
+
+fn add_winget_ffmpeg_package_candidates(
+    packages_root: &Path,
+    executable_name: &str,
+    candidates: &mut Vec<PathBuf>,
+) {
+    let Ok(packages) = fs::read_dir(packages_root) else {
+        return;
+    };
+
+    for package in packages.flatten() {
+        let package_name = package.file_name().to_string_lossy().to_string();
+        if !package_name.starts_with("Gyan.FFmpeg_") {
+            continue;
+        }
+
+        let Ok(package_children) = fs::read_dir(package.path()) else {
+            continue;
+        };
+        for package_child in package_children.flatten() {
+            candidates.push(package_child.path().join("bin").join(executable_name));
+        }
+    }
 }
 
 fn build_rtmp_publish_url(request: &StreamLaunchRequest) -> Result<String, MediaError> {
@@ -935,7 +1013,9 @@ fn spawn_ffmpeg_stream(
         publish_url.to_string(),
     ]);
 
-    Command::new(ffmpeg_path)
+    let mut command = Command::new(ffmpeg_path);
+    suppress_windows_console(&mut command);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
