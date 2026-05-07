@@ -12,6 +12,7 @@ concurrency:
 jobs:
   test:
     runs-on: macos-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -25,9 +26,9 @@ jobs:
             ~/.cargo/git
             ~/.cargo/registry
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
-      - run: rustup default stable
+      - run: rustup show
       - run: npm ci
       - run: npm run ci
