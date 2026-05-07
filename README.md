@@ -1,162 +1,82 @@
 # vaexcore studio
 
-`vaexcore studio` is a macOS-first desktop control system for streaming, local recording, and localhost integrations. It is designed as the foundation layer that Twitch bots, highlight locators, stream deck tools, and future overlay systems can trust.
+vaexcore studio is a local-first desktop control system for streaming, recording, and localhost integrations. It is the foundation layer that other vaexcore tools can use for local API discovery, recording control, marker capture, and connected-app coordination.
 
-It is not a giveaway, moderation, highlight detection, scene editing, cloud, or plugin marketplace app.
+Studio is not a cloud control plane, giveaway bot, highlight detector, scene editor, or plugin marketplace. Its role is local infrastructure.
 
-## Stack
+## Operational Purpose
 
-- Tauri v2 desktop shell
-- React + TypeScript frontend
-- Rust core/API/media crates
-- SQLite for local profiles, markers, and secret references
-- Local HTTP + WebSocket API
-- Dry-run media engine behind a media abstraction
-- Supervised, replaceable `media-runner` sidecar with HTTP command transport
-- Recent client registry and command audit log for localhost integrations
+- Provide a trusted local API for creator tooling.
+- Coordinate local recording, stream control, markers, profiles, and connected clients.
+- Keep media execution behind a replaceable sidecar boundary.
+- Give companion apps a durable discovery and command surface.
 
-## Repository Layout
+## Design Posture
+
+- Localhost integration over hosted dependency.
+- Desktop app owns supervision and operator visibility.
+- Rust crates own core contracts, API, media, and platform boundaries.
+- Dry-run media behavior remains available for safe development.
+- Connected-client registry and audit logs are part of the operational model.
+
+## Architecture
 
 ```text
 apps/
-  desktop/                 Tauri v2 + React app
+  desktop/                 Tauri v2 + React desktop app
+
 crates/
-  vaexcore-core/           shared Rust contracts, profiles, events, responses
-  vaexcore-api/            localhost HTTP + WebSocket API
-  vaexcore-media/          media traits and dry-run engine
-  vaexcore-platforms/      Twitch, YouTube, Kick, custom RTMP definitions
+  vaexcore-core/           Shared Rust contracts, profiles, events, responses
+  vaexcore-api/            Local HTTP and WebSocket API
+  vaexcore-media/          Media traits, dry-run engine, sidecar control
+  vaexcore-platforms/      Streaming platform definitions
+
 packages/
-  shared-types/            TypeScript API/event contracts
+  shared-types/            TypeScript API and event contracts
   client-sdk/              TypeScript client for localhost integrations
+
 sidecars/
-  media-runner/            replaceable media execution sidecar
-docs/
-  ARCHITECTURE.md
-  API.md
-  MEDIA_ENGINE.md
-  RELEASE.md
-  ROADMAP.md
+  media-runner/            Replaceable media execution sidecar
 ```
 
-## Setup
+## Current State
 
-Prerequisites:
+- The macOS-first Tauri desktop app is the active product surface.
+- A local HTTP/WebSocket API starts from the desktop process.
+- API discovery is written locally when the default port changes.
+- The media runner can run as a supervised dry-run sidecar.
+- Client SDK and smoke examples exist for companion integration testing.
+- Windows launcher material is present, but platform maturity still centers on local desktop validation.
 
-- Node.js 20+
-- Rust 1.82+
-- Xcode command line tools on macOS
+## Deployment Posture
 
-Install dependencies:
+Studio is currently a local desktop infrastructure app. It supports local packaging and release staging, but it should be evaluated as operator-controlled local software, not a hosted service.
+
+## Working Locally
 
 ```bash
 npm install
-```
-
-Run the desktop app in development:
-
-```bash
 npm run tauri -w apps/desktop -- dev
-```
-
-Run checks:
-
-```bash
-npm run test:scripts
-npm run prepare:sidecars
-npm run check:sidecars
 npm run typecheck
 npm run build
+npm run prepare:sidecars
+npm run check:sidecars
 cargo test --workspace
 ```
 
-Build and run the TypeScript client SDK smoke example after Studio is running:
+The local API defaults to `http://127.0.0.1:51287` and `ws://127.0.0.1:51287/events`.
 
-```bash
-npm run build -w @vaexcore/client-sdk
-node packages/client-sdk/examples/node-smoke.mjs
-```
+## Direction
 
-Build and stage the sidecar executable for local desktop supervision and release bundling:
+- Continue hardening the local API and discovery contract.
+- Expand sidecar supervision without coupling Studio to one media backend.
+- Keep companion app integration explicit through the SDK and suite protocol.
+- Preserve dry-run behavior as a safety path for development and testing.
 
-```bash
-npm run prepare:sidecars -w apps/desktop
-npm run check:sidecars -w apps/desktop
-```
+## Related Documentation
 
-The desktop app first checks bundled sidecar locations, then falls back to local build artifacts like `target/debug/media-runner` or `target/release/media-runner`. You can also point directly at a sidecar executable:
-
-```bash
-VAEXCORE_MEDIA_RUNNER_PATH=/absolute/path/to/media-runner npm run tauri -w apps/desktop -- dev
-```
-
-Run the sidecar dry-run status service manually:
-
-```bash
-cargo run -p vaexcore-media-runner -- --status-addr 127.0.0.1:51387 --dry-run
-```
-
-When running as a service, `media-runner` exposes `/health`, `/status`, and dry-run recording/stream command endpoints.
-
-## Local API
-
-The desktop process starts the local API on:
-
-```text
-http://127.0.0.1:51287
-ws://127.0.0.1:51287/events
-```
-
-If that port is occupied, the app binds a fallback localhost port and writes the active URLs to `api-discovery.json` in the app data directory. Connected tools should use that discovery file when available instead of assuming the default port.
-
-In debug builds, auth bypass is enabled by default. For token-protected local clients, set:
-
-```bash
-VAEXCORE_DEV_AUTH_BYPASS=0
-VAEXCORE_API_TOKEN=replace-with-a-local-token
-```
-
-Example:
-
-```bash
-curl http://127.0.0.1:51287/health
-curl -H "x-vaexcore-token: replace-with-a-local-token" http://127.0.0.1:51287/status
-```
-
-HTTP responses include an `x-vaexcore-request-id` header. Local clients may send their own request ID with the same header for log correlation.
-External clients can identify themselves with `x-vaexcore-client-id` and `x-vaexcore-client-name`; Studio shows recent clients on the Connected Apps page.
-
-TypeScript integrations can use `@vaexcore/client-sdk`:
-
-```ts
-import { VaexcoreStudioClient } from "@vaexcore/client-sdk";
-
-const client = new VaexcoreStudioClient({
-  apiUrl: "http://127.0.0.1:51287",
-  token: process.env.VAEXCORE_API_TOKEN,
-});
-
-await client.createMarker("manual-marker");
-```
-
-## MVP Behavior
-
-- Create Twitch, YouTube, Kick, and custom RTMP stream destinations.
-- Create recording profiles with output path, filename pattern, container, resolution, framerate, bitrate, and encoder preference.
-- Start/stop recording and streaming independently or together.
-- Create manual markers.
-- Stream lifecycle events over WebSocket.
-- Track recent localhost clients.
-- Record a bounded command audit log without storing request bodies.
-- Export/import profile bundles without raw stream keys.
-- Write structured JSONL app logs under the local app data directory.
-- Run macOS-first preflight checks for API, token, output folder, capture readiness, and sidecar health.
-- Build and validate dry-run media pipeline plans through the API and sidecar.
-- Simulate media execution with `DryRunMediaEngine`.
-- Prefer supervised `media-runner` dry-run execution when the sidecar is available, with in-process dry-run fallback when it is missing during startup.
-
-## Security Notes
-
-- Stream keys are accepted as sensitive inputs and stored behind `SecretStore`.
-- API responses expose secret references, not raw stream keys.
-- Stream keys are never included in media events or status payloads.
-- The API is localhost-only by default.
+- [Architecture](docs/ARCHITECTURE.md)
+- [API](docs/API.md)
+- [Media Engine](docs/MEDIA_ENGINE.md)
+- [Suite Protocol](docs/SUITE_PROTOCOL.md)
+- [Roadmap](docs/ROADMAP.md)
