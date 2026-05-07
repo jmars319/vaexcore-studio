@@ -1,4 +1,5 @@
 use std::{
+    cmp::Reverse,
     collections::HashMap,
     sync::{Arc, Mutex},
 };
@@ -83,7 +84,7 @@ impl ClientRegistry {
             .values()
             .cloned()
             .collect::<Vec<_>>();
-        clients.sort_by(|a, b| b.last_seen_at.cmp(&a.last_seen_at));
+        clients.sort_by_key(|client| Reverse(client.last_seen_at));
         clients
     }
 }
