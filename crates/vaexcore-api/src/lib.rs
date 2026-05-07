@@ -42,7 +42,7 @@ use vaexcore_media::{
 pub use auth::{AuthConfig, SharedAuthConfig};
 use client_registry::{ClientRegistry, ClientSeen};
 pub use event_bus::EventBus;
-use store::MarkerFilters;
+use store::{MarkerCreateInput, MarkerFilters};
 pub use store::{ProfileStore, StoreError};
 
 const REQUEST_ID_HEADER: &str = "x-vaexcore-request-id";
@@ -995,16 +995,16 @@ async fn create_marker(
 ) -> Result<Json<ApiResponse<Marker>>, ApiError> {
     auth::authorize_headers(&headers, &state.auth)?;
     let request = payload.map(|Json(payload)| payload).unwrap_or_default();
-    let result = state.store.create_marker(
-        request.label,
-        request.source_app,
-        request.source_event_id,
-        request.recording_session_id,
-        request.media_path,
-        request.start_seconds,
-        request.end_seconds,
-        request.metadata,
-    )?;
+    let result = state.store.create_marker(MarkerCreateInput {
+        label: request.label,
+        source_app: request.source_app,
+        source_event_id: request.source_event_id,
+        recording_session_id: request.recording_session_id,
+        media_path: request.media_path,
+        start_seconds: request.start_seconds,
+        end_seconds: request.end_seconds,
+        metadata: request.metadata,
+    })?;
     let marker = result.marker;
     if result.created {
         state.events.emit(StudioEvent::new(

@@ -477,7 +477,7 @@ fn open_data_directory(state: tauri::State<'_, AppRuntimeState>) -> Result<(), S
             .arg(&state.data_dir)
             .spawn()
             .map_err(|error| error.to_string())?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "windows")]
@@ -486,7 +486,7 @@ fn open_data_directory(state: tauri::State<'_, AppRuntimeState>) -> Result<(), S
             .arg(&state.data_dir)
             .spawn()
             .map_err(|error| error.to_string())?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -1346,14 +1346,14 @@ fn vaexcore_shared_data_dir() -> PathBuf {
 fn desktop_app_is_installed(app_name: &str) -> bool {
     #[cfg(target_os = "macos")]
     {
-        return Path::new("/Applications")
+        Path::new("/Applications")
             .join(format!("{app_name}.app"))
-            .exists();
+            .exists()
     }
 
     #[cfg(target_os = "windows")]
     {
-        return windows_app_executable_path(app_name).is_some();
+        windows_app_executable_path(app_name).is_some()
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -1637,7 +1637,6 @@ async fn media_runner_info(
     state: tauri::State<'_, AppRuntimeState>,
 ) -> Result<FrontendMediaRunnerInfo, String> {
     let runner = state.media_runner.clone();
-    drop(state);
 
     let running = match &runner {
         Some(runner) => runner.health().await.is_ok(),
@@ -2881,14 +2880,8 @@ fn macos_media_permission_status(service: &str) -> Option<String> {
         return None;
     }
 
-    let class = unsafe { objc_getClass(b"AVCaptureDevice\0".as_ptr().cast::<c_char>()) };
-    let selector = unsafe {
-        sel_registerName(
-            b"authorizationStatusForMediaType:\0"
-                .as_ptr()
-                .cast::<c_char>(),
-        )
-    };
+    let class = unsafe { objc_getClass(c"AVCaptureDevice".as_ptr()) };
+    let selector = unsafe { sel_registerName(c"authorizationStatusForMediaType:".as_ptr()) };
     if class.is_null() || selector.is_null() {
         return None;
     }
@@ -2922,7 +2915,7 @@ fn open_macos_privacy_settings(pane: &str) -> Result<(), String> {
             ))
             .spawn()
             .map_err(|error| error.to_string())?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(target_os = "macos"))]

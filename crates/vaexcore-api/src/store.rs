@@ -32,6 +32,18 @@ pub struct MarkerFilters {
     pub limit: Option<usize>,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct MarkerCreateInput {
+    pub label: Option<String>,
+    pub source_app: Option<String>,
+    pub source_event_id: Option<String>,
+    pub recording_session_id: Option<String>,
+    pub media_path: Option<String>,
+    pub start_seconds: Option<f64>,
+    pub end_seconds: Option<f64>,
+    pub metadata: Option<Value>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct MarkerWriteResult {
     pub marker: Marker,
@@ -683,21 +695,21 @@ impl ProfileStore {
             .find(|destination| destination.id == id))
     }
 
-    pub fn create_marker(
-        &self,
-        label: Option<String>,
-        source_app: Option<String>,
-        source_event_id: Option<String>,
-        recording_session_id: Option<String>,
-        media_path: Option<String>,
-        start_seconds: Option<f64>,
-        end_seconds: Option<f64>,
-        metadata: Option<Value>,
-    ) -> Result<MarkerWriteResult, StoreError> {
+    pub fn create_marker(&self, input: MarkerCreateInput) -> Result<MarkerWriteResult, StoreError> {
         let connection = self
             .connection
             .lock()
             .expect("profile store mutex poisoned");
+        let MarkerCreateInput {
+            label,
+            source_app,
+            source_event_id,
+            recording_session_id,
+            media_path,
+            start_seconds,
+            end_seconds,
+            metadata,
+        } = input;
 
         if let (Some(source_app), Some(source_event_id)) = (&source_app, &source_event_id) {
             if let Some(marker) = marker_by_source_event(&connection, source_app, source_event_id)?
@@ -1981,16 +1993,16 @@ mod tests {
         let store = ProfileStore::open_memory().unwrap();
 
         let result = store
-            .create_marker(
-                Some("Pulse keep: opener".to_string()),
-                Some("vaexcore-pulse".to_string()),
-                Some("pulse:session:candidate".to_string()),
-                Some("rec_123".to_string()),
-                Some("/tmp/recording.mkv".to_string()),
-                Some(12.5),
-                Some(24.0),
-                Some(serde_json::json!({ "confidenceBand": "high" })),
-            )
+            .create_marker(MarkerCreateInput {
+                label: Some("Pulse keep: opener".to_string()),
+                source_app: Some("vaexcore-pulse".to_string()),
+                source_event_id: Some("pulse:session:candidate".to_string()),
+                recording_session_id: Some("rec_123".to_string()),
+                media_path: Some("/tmp/recording.mkv".to_string()),
+                start_seconds: Some(12.5),
+                end_seconds: Some(24.0),
+                metadata: Some(serde_json::json!({ "confidenceBand": "high" })),
+            })
             .unwrap();
         let marker = result.marker;
 
@@ -2003,16 +2015,16 @@ mod tests {
         assert_eq!(marker.metadata["confidenceBand"], "high");
 
         let duplicate = store
-            .create_marker(
-                Some("Pulse keep: duplicate".to_string()),
-                Some("vaexcore-pulse".to_string()),
-                Some("pulse:session:candidate".to_string()),
-                Some("rec_123".to_string()),
-                Some("/tmp/recording.mkv".to_string()),
-                Some(12.5),
-                Some(24.0),
-                Some(serde_json::json!({ "confidenceBand": "low" })),
-            )
+            .create_marker(MarkerCreateInput {
+                label: Some("Pulse keep: duplicate".to_string()),
+                source_app: Some("vaexcore-pulse".to_string()),
+                source_event_id: Some("pulse:session:candidate".to_string()),
+                recording_session_id: Some("rec_123".to_string()),
+                media_path: Some("/tmp/recording.mkv".to_string()),
+                start_seconds: Some(12.5),
+                end_seconds: Some(24.0),
+                metadata: Some(serde_json::json!({ "confidenceBand": "low" })),
+            })
             .unwrap();
 
         assert!(!duplicate.created);
@@ -2028,29 +2040,29 @@ mod tests {
         let store = ProfileStore::open_memory().unwrap();
 
         let pulse_marker = store
-            .create_marker(
-                Some("Pulse keep".to_string()),
-                Some("vaexcore-pulse".to_string()),
-                Some("pulse:one".to_string()),
-                Some("rec_123".to_string()),
-                Some("/tmp/recording.mkv".to_string()),
-                Some(1.0),
-                Some(2.0),
-                None,
-            )
+            .create_marker(MarkerCreateInput {
+                label: Some("Pulse keep".to_string()),
+                source_app: Some("vaexcore-pulse".to_string()),
+                source_event_id: Some("pulse:one".to_string()),
+                recording_session_id: Some("rec_123".to_string()),
+                media_path: Some("/tmp/recording.mkv".to_string()),
+                start_seconds: Some(1.0),
+                end_seconds: Some(2.0),
+                metadata: None,
+            })
             .unwrap()
             .marker;
         store
-            .create_marker(
-                Some("Console marker".to_string()),
-                Some("vaexcore-console".to_string()),
-                Some("chat:one".to_string()),
-                Some("rec_123".to_string()),
-                None,
-                None,
-                None,
-                None,
-            )
+            .create_marker(MarkerCreateInput {
+                label: Some("Console marker".to_string()),
+                source_app: Some("vaexcore-console".to_string()),
+                source_event_id: Some("chat:one".to_string()),
+                recording_session_id: Some("rec_123".to_string()),
+                media_path: None,
+                start_seconds: None,
+                end_seconds: None,
+                metadata: None,
+            })
             .unwrap();
 
         let pulse_markers = store
