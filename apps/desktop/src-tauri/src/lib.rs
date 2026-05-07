@@ -57,11 +57,9 @@ const DETACHED_PROCESS: u32 = 0x00000008;
 const SUITE_DISCOVERY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const SUITE_DISCOVERY_STALE_AFTER: Duration = Duration::from_secs(45);
 
-fn suppress_windows_console(_command: &mut std::process::Command) {
-    #[cfg(target_os = "windows")]
-    {
-        _command.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
-    }
+#[cfg(target_os = "windows")]
+fn suppress_windows_console(command: &mut std::process::Command) {
+    command.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
 }
 
 #[cfg(target_os = "macos")]
