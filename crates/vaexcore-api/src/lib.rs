@@ -1719,6 +1719,11 @@ mod tests {
             .unwrap()
             .iter()
             .any(|step| step["id"] == serde_json::json!("scene.software_renderer")));
+        assert!(body["data"]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["id"] == serde_json::json!("performance.telemetry")));
         assert_eq!(
             body["data"]["config"]["active_scene"]["id"],
             serde_json::json!("scene-main")
@@ -1737,6 +1742,10 @@ mod tests {
         );
         assert_eq!(
             body["data"]["config"]["compositor_render_plan"]["graph"]["scene_id"],
+            serde_json::json!("scene-main")
+        );
+        assert_eq!(
+            body["data"]["config"]["performance_telemetry_plan"]["scene_id"],
             serde_json::json!("scene-main")
         );
     }

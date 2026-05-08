@@ -61,8 +61,10 @@ foundation to OBS-class scene editing and output.
     automatic backup rotation are not started.
 25. Hotkeys and workflow shortcuts: not started.
 26. Active-scene recording and streaming integration: not started.
-27. Performance tuning: frame pacing, latency, dropped frames, GPU/CPU load: not
-    started.
+27. Performance tuning: frame pacing, latency, dropped frames, GPU/CPU load:
+    started with per-target frame budget, latency, dropped-frame tolerance, and
+    estimated throughput contracts. Live profiler sampling, GPU counters, and
+    long-run tuning are not started.
 28. Full validation matrix: automated, visual, Windows/macOS hardware, installer,
     and long-run soak tests: not started.
 
@@ -93,4 +95,5 @@ npm run app:build:windows
 
 The generated `pipeline-config.json` must include `active_scene`,
 `capture_frame_plan`, `audio_mixer_plan`, `compositor_graph`, and
-`compositor_render_plan` before Phase 1 is considered wired.
+`compositor_render_plan`, and `performance_telemetry_plan` before Phase 1 is
+considered wired.

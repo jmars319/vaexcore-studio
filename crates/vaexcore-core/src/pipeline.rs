@@ -1,8 +1,9 @@
 use crate::{
     build_audio_mixer_plan, build_capture_frame_plan, build_compositor_graph,
-    build_compositor_render_plan, compositor_render_target, AudioMixerPlan, CaptureFramePlan,
-    CaptureSourceSelection, CompositorGraph, CompositorRenderPlan, CompositorRenderTarget,
-    CompositorRenderTargetKind, MediaProfile, Scene, StreamDestination,
+    build_compositor_render_plan, build_performance_telemetry_plan, compositor_render_target,
+    AudioMixerPlan, CaptureFramePlan, CaptureSourceSelection, CompositorGraph,
+    CompositorRenderPlan, CompositorRenderTarget, CompositorRenderTargetKind, MediaProfile,
+    PerformanceTelemetryPlan, Scene, StreamDestination,
 };
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +31,8 @@ pub struct MediaPipelineConfig {
     pub compositor_graph: Option<CompositorGraph>,
     #[serde(default)]
     pub compositor_render_plan: Option<CompositorRenderPlan>,
+    #[serde(default)]
+    pub performance_telemetry_plan: Option<PerformanceTelemetryPlan>,
     pub recording_profile: Option<MediaProfile>,
     pub stream_destinations: Vec<StreamDestination>,
 }
@@ -95,6 +98,9 @@ impl MediaPipelinePlanRequest {
                 ),
             )
         });
+        let performance_telemetry_plan = compositor_render_plan
+            .as_ref()
+            .map(build_performance_telemetry_plan);
 
         MediaPipelineConfig {
             version: 1,
@@ -106,6 +112,7 @@ impl MediaPipelinePlanRequest {
             audio_mixer_plan,
             compositor_graph,
             compositor_render_plan,
+            performance_telemetry_plan,
             recording_profile: self.recording_profile,
             stream_destinations: self.stream_destinations,
         }

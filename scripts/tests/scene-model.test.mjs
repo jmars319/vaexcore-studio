@@ -139,10 +139,12 @@ test("compositor graph builder preserves source order and warnings", async () =>
     buildCompositorGraph,
     buildCompositorRenderPlan,
     buildDefaultCompositorRenderTargets,
+    buildPerformanceTelemetryPlan,
     createDefaultSceneCollection,
     evaluateCompositorFrame,
     validateCompositorGraph,
     validateCompositorRenderPlan,
+    validatePerformanceTelemetryPlan,
   } = await sharedTypes;
   const scene = createDefaultSceneCollection("2026-05-08T12:00:00.000Z").scenes[0];
   const graph = buildCompositorGraph(scene);
@@ -153,6 +155,8 @@ test("compositor graph builder preserves source order and warnings", async () =>
   const validation = validateCompositorGraph(graph);
   const renderValidation = validateCompositorRenderPlan(renderPlan);
   const frame = evaluateCompositorFrame(renderPlan, 2);
+  const performancePlan = buildPerformanceTelemetryPlan(renderPlan);
+  const performanceValidation = validatePerformanceTelemetryPlan(performancePlan);
 
   assert.equal(graph.version, 1);
   assert.equal(graph.scene_id, scene.id);
@@ -171,10 +175,15 @@ test("compositor graph builder preserves source order and warnings", async () =>
   assert.equal(validation.ready, true);
   assert.ok(validation.warnings.length >= 1);
   assert.equal(renderValidation.ready, true);
+  assert.equal(performanceValidation.ready, true);
   assert.deepEqual(
     renderPlan.targets.map((target) => target.kind),
     ["preview", "program", "recording"],
   );
+  assert.equal(performancePlan.scene_id, scene.id);
+  assert.equal(performancePlan.targets.length, 3);
+  assert.equal(performancePlan.targets[0].frame_budget_nanos, 16_666_666);
+  assert.equal(performancePlan.targets[0].max_dropped_frames_per_minute, 18);
   assert.equal(frame.clock.framerate, 60);
   assert.equal(frame.targets.length, 3);
   assert.equal(frame.targets[0].nodes[0].rect.width, 1920);

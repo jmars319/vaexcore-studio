@@ -18,6 +18,7 @@ The shared contracts also define:
 - `CaptureSourceInventory`
 - `CaptureFramePlan`
 - `AudioMixerPlan`
+- `PerformanceTelemetryPlan`
 - `MediaPipelinePlanRequest`
 - `MediaPipelinePlan`
 - `MediaPipelineValidation`
@@ -34,6 +35,11 @@ contract and validation layer only; it does not start platform capture.
 recording, and stream buses. It carries gain, mute, monitoring, meter, and sync
 offset fields so the UI and future mixer engine agree on routing before real
 audio mixing is implemented.
+
+`PerformanceTelemetryPlan` maps enabled compositor render targets to frame
+budget, render budget, encode budget, dropped-frame tolerance, latency ceiling,
+and estimated RGBA throughput. It is a contract and validation layer for frame
+pacing and hardware-readiness reporting; it does not start runtime profiling.
 
 ## macOS Source Inventory
 
@@ -107,7 +113,7 @@ The desktop process writes two files in the app data directory:
 The config file includes the dry-run flag, sidecar status address when known, pipeline name, and resolved `MediaPipelineConfig`. It contains stream secret references only, not raw stream keys.
 When an active scene is present, `MediaPipelineConfig` includes
 `active_scene`, `capture_frame_plan`, `audio_mixer_plan`, `compositor_graph`,
-and `compositor_render_plan`.
+`compositor_render_plan`, and `performance_telemetry_plan`.
 
 Example:
 

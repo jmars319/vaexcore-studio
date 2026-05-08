@@ -15,12 +15,12 @@ use tokio::sync::Mutex;
 use vaexcore_core::{
     build_compositor_graph, evaluate_compositor_frame, new_id, render_software_compositor_frame,
     validate_audio_mixer_plan, validate_capture_frame_plan, validate_compositor_graph,
-    validate_compositor_render_plan, AudioMixSourceStatus, CaptureFrameBindingStatus,
-    CaptureFrameMediaKind, CaptureSourceKind, CaptureSourceSelection, CompositorFrameFormat,
-    CompositorRenderPlan, EngineMode, EngineStatus, MediaPipelineConfig, MediaPipelinePlan,
-    MediaPipelinePlanRequest, MediaPipelineStep, MediaProfile, PipelineIntent, PipelineStepStatus,
-    PlatformKind, RecordingContainer, RecordingSession, Scene, StreamDestination, StreamSession,
-    StudioEvent, StudioEventKind,
+    validate_compositor_render_plan, validate_performance_telemetry_plan, AudioMixSourceStatus,
+    CaptureFrameBindingStatus, CaptureFrameMediaKind, CaptureSourceKind, CaptureSourceSelection,
+    CompositorFrameFormat, CompositorRenderPlan, EngineMode, EngineStatus, MediaPipelineConfig,
+    MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep, MediaProfile, PipelineIntent,
+    PipelineStepStatus, PlatformKind, RecordingContainer, RecordingSession, Scene,
+    StreamDestination, StreamSession, StudioEvent, StudioEventKind,
 };
 
 mod sidecar;
@@ -138,6 +138,7 @@ pub fn build_dry_run_pipeline_plan(request: MediaPipelinePlanRequest) -> MediaPi
     validate_capture_frame_bindings(&config, &mut steps, &mut warnings, &mut errors);
     validate_audio_mixer(&config, &mut steps, &mut warnings, &mut errors);
     validate_scene_compositor(&config, &mut steps, &mut warnings, &mut errors);
+    validate_performance_telemetry(&config, &mut steps, &mut warnings, &mut errors);
     validate_recording(&config, &mut steps, &mut errors);
     validate_streaming(&config, &mut steps, &mut warnings, &mut errors);
     steps.push(MediaPipelineStep {
@@ -693,6 +694,57 @@ fn compact_software_probe_plan(render_plan: &CompositorRenderPlan) -> Compositor
     probe_target.enabled = true;
     probe_plan.targets = vec![probe_target];
     probe_plan
+}
+
+fn validate_performance_telemetry(
+    config: &MediaPipelineConfig,
+    steps: &mut Vec<MediaPipelineStep>,
+    warnings: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    let Some(plan) = &config.performance_telemetry_plan else {
+        warnings.push("pipeline has no performance telemetry plan".to_string());
+        steps.push(MediaPipelineStep {
+            id: "performance.telemetry".to_string(),
+            label: "Performance telemetry".to_string(),
+            status: PipelineStepStatus::Warning,
+            detail: "No frame budget plan was generated for the active scene.".to_string(),
+        });
+        return;
+    };
+
+    let validation = validate_performance_telemetry_plan(plan);
+    warnings.extend(validation.warnings.iter().cloned());
+    errors.extend(validation.errors.iter().cloned());
+
+    let target_count = plan.targets.len();
+    let max_framerate = plan
+        .targets
+        .iter()
+        .map(|target| target.framerate)
+        .max()
+        .unwrap_or(0);
+    let total_rgba_bytes_per_second = plan
+        .targets
+        .iter()
+        .map(|target| target.estimated_rgba_bytes_per_second)
+        .sum::<u64>();
+
+    steps.push(MediaPipelineStep {
+        id: "performance.telemetry".to_string(),
+        label: "Performance telemetry".to_string(),
+        status: if !validation.ready {
+            PipelineStepStatus::Blocked
+        } else if validation.warnings.is_empty() {
+            PipelineStepStatus::Ready
+        } else {
+            PipelineStepStatus::Warning
+        },
+        detail: format!(
+            "{target_count} target budget(s), {max_framerate} fps max, {} MB/s estimated RGBA throughput.",
+            total_rgba_bytes_per_second / 1_000_000
+        ),
+    });
 }
 
 fn validate_recording(
@@ -1568,6 +1620,11 @@ mod tests {
             .iter()
             .find(|step| step.id == "audio.mixer")
             .expect("audio mixer step");
+        let performance_step = plan
+            .steps
+            .iter()
+            .find(|step| step.id == "performance.telemetry")
+            .expect("performance telemetry step");
 
         assert!(plan.ready, "{:?}", plan.errors);
         assert_eq!(capture_frame_step.status, PipelineStepStatus::Warning);
@@ -1579,6 +1636,9 @@ mod tests {
         assert_eq!(software_step.status, PipelineStepStatus::Ready);
         assert!(software_step.detail.contains("RGBA probe"));
         assert!(software_step.detail.contains("checksum"));
+        assert_eq!(performance_step.status, PipelineStepStatus::Ready);
+        assert!(performance_step.detail.contains("target budget"));
+        assert!(plan.config.performance_telemetry_plan.is_some());
     }
 
     #[test]

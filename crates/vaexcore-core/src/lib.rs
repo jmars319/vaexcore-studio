@@ -2,6 +2,7 @@ pub mod audio;
 pub mod capture;
 pub mod compositor;
 pub mod events;
+pub mod performance;
 pub mod pipeline;
 pub mod profiles;
 pub mod responses;
@@ -32,6 +33,10 @@ pub use compositor::{
     SoftwareCompositorRenderResult,
 };
 pub use events::{StudioEvent, StudioEventKind};
+pub use performance::{
+    build_performance_telemetry_plan, validate_performance_telemetry_plan, PerformanceTargetBudget,
+    PerformanceTelemetryPlan, PerformanceTelemetryValidation,
+};
 pub use pipeline::{
     MediaPipelineConfig, MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep,
     MediaPipelineValidation, PipelineIntent, PipelineStepStatus,

@@ -49,16 +49,18 @@ npm run app:build:windows
 Scene Designer state is stored in the local Studio SQLite database through the
 `/scenes` API and is included in the generated `pipeline-config.json` as
 `active_scene`, `capture_frame_plan`, `audio_mixer_plan`, `compositor_graph`,
-and `compositor_render_plan`. On Windows, verify that creating/editing a scene
-in Studio, saving it, quitting, and reopening Studio preserves the scene
-collection before running a full suite recording/streaming pass. Also verify
+`compositor_render_plan`, and `performance_telemetry_plan`. On Windows, verify
+that creating/editing a scene in Studio, saving it, quitting, and reopening
+Studio preserves the scene collection before running a full suite
+recording/streaming pass. Also verify
 `GET /scenes/export` returns a versioned scene bundle and `POST /scenes/import`
 restores that bundle while refreshing the default media plan. Also confirm
 that the default media plan reports `capture.frames`, `audio.mixer`,
-`scene.compositor`, and `scene.render_targets` steps, writes
+`scene.compositor`, `scene.render_targets`, and `performance.telemetry` steps, writes
 `capture_frame_plan.scene_id`, `audio_mixer_plan.scene_id`, and
-`compositor_graph.scene_id` matching the active scene, and includes preview,
-program, and requested recording/stream render targets.
+`compositor_graph.scene_id` matching the active scene, includes preview,
+program, and requested recording/stream render targets, and reports non-empty
+performance target budgets for enabled targets.
 
 Studio also carries versioned Windows launchers under `tools/windows-launchers`.
 The `.cmd` files can be double-clicked to start the full suite or an individual

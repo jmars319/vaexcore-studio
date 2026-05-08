@@ -292,6 +292,40 @@ export interface CompositorRenderPlan {
   targets: CompositorRenderTarget[];
 }
 
+export interface PerformanceTargetBudget {
+  target_id: string;
+  target_name: string;
+  target_kind: CompositorRenderTargetKind;
+  width: number;
+  height: number;
+  framerate: number;
+  frame_budget_nanos: number;
+  render_budget_nanos: number;
+  encode_budget_nanos: number;
+  max_latency_ms: number;
+  max_dropped_frames_per_minute: number;
+  pixel_count: number;
+  estimated_rgba_bytes_per_frame: number;
+  estimated_rgba_bytes_per_second: number;
+}
+
+export interface PerformanceTelemetryPlan {
+  version: number;
+  scene_id: string;
+  scene_name: string;
+  sample_window_seconds: number;
+  cpu_warning_percent: number;
+  gpu_warning_percent: number;
+  targets: PerformanceTargetBudget[];
+  validation: PerformanceTelemetryValidation;
+}
+
+export interface PerformanceTelemetryValidation {
+  ready: boolean;
+  warnings: string[];
+  errors: string[];
+}
+
 export interface CompositorFrameClock {
   frame_index: number;
   framerate: number;
@@ -776,6 +810,7 @@ export interface MediaPipelineConfig {
   audio_mixer_plan?: AudioMixerPlan | null;
   compositor_graph?: CompositorGraph | null;
   compositor_render_plan?: CompositorRenderPlan | null;
+  performance_telemetry_plan?: PerformanceTelemetryPlan | null;
   recording_profile: MediaProfile | null;
   stream_destinations: StreamDestination[];
 }
@@ -1861,6 +1896,109 @@ export function validateCompositorRenderPlan(
   };
 }
 
+export function buildPerformanceTelemetryPlan(
+  renderPlan: CompositorRenderPlan,
+): PerformanceTelemetryPlan {
+  const plan: PerformanceTelemetryPlan = {
+    version: 1,
+    scene_id: renderPlan.graph.scene_id,
+    scene_name: renderPlan.graph.scene_name,
+    sample_window_seconds: 10,
+    cpu_warning_percent: 85,
+    gpu_warning_percent: 85,
+    targets: renderPlan.targets
+      .filter((target) => target.enabled)
+      .map(performanceTargetBudget),
+    validation: {
+      ready: true,
+      warnings: [],
+      errors: [],
+    },
+  };
+  plan.validation = validatePerformanceTelemetryPlan(plan);
+  return plan;
+}
+
+export function validatePerformanceTelemetryPlan(
+  plan: PerformanceTelemetryPlan,
+): PerformanceTelemetryValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const targetIds = new Set<string>();
+
+  if (!Number.isInteger(plan.version) || plan.version < 1) {
+    errors.push("Performance telemetry plan version must be a positive integer.");
+  }
+  if (!plan.scene_id.trim()) {
+    errors.push("Performance telemetry scene id is required.");
+  }
+  if (!plan.scene_name.trim()) {
+    errors.push("Performance telemetry scene name is required.");
+  }
+  if (!Number.isInteger(plan.sample_window_seconds) || plan.sample_window_seconds < 1) {
+    errors.push("Performance telemetry sample window must be greater than zero.");
+  }
+  validatePercent(plan.cpu_warning_percent, "CPU warning percent", errors);
+  validatePercent(plan.gpu_warning_percent, "GPU warning percent", errors);
+  if (plan.targets.length === 0) {
+    warnings.push("Performance telemetry has no enabled render targets.");
+  }
+
+  for (const target of plan.targets) {
+    if (targetIds.has(target.target_id)) {
+      errors.push(`Duplicate performance target id "${target.target_id}".`);
+    }
+    targetIds.add(target.target_id);
+    if (!target.target_id.trim()) {
+      errors.push("Performance target id is required.");
+    }
+    if (!target.target_name.trim()) {
+      errors.push(`Performance target "${target.target_id}" name is required.`);
+    }
+    validateGraphPositiveNumber(target.width, `${target.target_id}.width`, errors);
+    validateGraphPositiveNumber(target.height, `${target.target_id}.height`, errors);
+    validateGraphPositiveNumber(target.framerate, `${target.target_id}.framerate`, errors);
+    validateGraphPositiveNumber(
+      target.frame_budget_nanos,
+      `${target.target_id}.frame_budget_nanos`,
+      errors,
+    );
+    validateGraphPositiveNumber(
+      target.render_budget_nanos,
+      `${target.target_id}.render_budget_nanos`,
+      errors,
+    );
+    if (target.framerate > 120) {
+      warnings.push(
+        `${target.target_name} targets ${target.framerate} fps; validate frame pacing on target hardware.`,
+      );
+    }
+    if (target.estimated_rgba_bytes_per_frame > 33_177_600) {
+      warnings.push(
+        `${target.target_name} exceeds a 4K RGBA frame budget; validate GPU and encoder load.`,
+      );
+    }
+  }
+
+  const totalRgbaBytesPerSecond = plan.targets.reduce(
+    (total, target) => total + target.estimated_rgba_bytes_per_second,
+    0,
+  );
+  if (totalRgbaBytesPerSecond > 2_000_000_000) {
+    warnings.push(
+      `Estimated RGBA throughput is ${Math.floor(
+        totalRgbaBytesPerSecond / 1_000_000,
+      )} MB/s across enabled targets.`,
+    );
+  }
+
+  return {
+    ready: errors.length === 0,
+    warnings,
+    errors,
+  };
+}
+
 export function evaluateCompositorFrame(
   plan: CompositorRenderPlan,
   frameIndex: number,
@@ -1894,6 +2032,40 @@ export function evaluateCompositorFrame(
     targets,
     validation,
   };
+}
+
+function performanceTargetBudget(
+  target: CompositorRenderTarget,
+): PerformanceTargetBudget {
+  const frameBudgetNanos = Math.floor(1_000_000_000 / Math.max(1, target.framerate));
+  const pixelCount = target.width * target.height;
+  const estimatedRgbaBytesPerFrame = pixelCount * 4;
+
+  return {
+    target_id: target.id,
+    target_name: target.name,
+    target_kind: target.kind,
+    width: target.width,
+    height: target.height,
+    framerate: target.framerate,
+    frame_budget_nanos: frameBudgetNanos,
+    render_budget_nanos: Math.floor((frameBudgetNanos * 70) / 100),
+    encode_budget_nanos: Math.floor((frameBudgetNanos * 20) / 100),
+    max_latency_ms: Math.ceil((frameBudgetNanos * 2) / 1_000_000),
+    max_dropped_frames_per_minute: Math.max(
+      1,
+      Math.floor((target.framerate * 60) / 200),
+    ),
+    pixel_count: pixelCount,
+    estimated_rgba_bytes_per_frame: estimatedRgbaBytesPerFrame,
+    estimated_rgba_bytes_per_second: estimatedRgbaBytesPerFrame * target.framerate,
+  };
+}
+
+function validatePercent(value: number, label: string, errors: string[]) {
+  if (!Number.isFinite(value) || value <= 0 || value > 100) {
+    errors.push(`Performance telemetry ${label} must be 1-100.`);
+  }
 }
 
 function evaluateNodeForTarget(
