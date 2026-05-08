@@ -179,6 +179,11 @@ type DesignerDragState = {
   startSize: SceneSize;
 };
 
+type DesignerSnapGuide = {
+  axis: "x" | "y";
+  position: number;
+};
+
 type SceneHistory = {
   past: SceneCollection[];
   future: SceneCollection[];
@@ -189,6 +194,7 @@ type SceneUpdateOptions = {
 };
 
 const designerHistoryLimit = 50;
+const designerSnapThreshold = 12;
 
 const sectionIds: readonly Section[] = [
   "dashboard",
@@ -1627,6 +1633,7 @@ function DesignerPage(props: {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const renderCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [dragState, setDragState] = useState<DesignerDragState | null>(null);
+  const [snapGuides, setSnapGuides] = useState<DesignerSnapGuide[]>([]);
   const [newSourceKind, setNewSourceKind] = useState<SceneSourceKind>("display");
 
   useEffect(() => {
@@ -1647,6 +1654,7 @@ function DesignerPage(props: {
     event.stopPropagation();
     props.onSelectSource(source.id);
     canvasRef.current?.setPointerCapture(event.pointerId);
+    setSnapGuides([]);
     setDragState({
       mode,
       pointerId: event.pointerId,
@@ -1671,28 +1679,40 @@ function DesignerPage(props: {
     const options = { historyGroup: `drag:${dragState.sourceId}` };
 
     if (dragState.mode === "move") {
+      const snapped = snapSourcePosition(
+        props.scene,
+        dragState.startSize,
+        {
+          x: Math.round(dragState.startPosition.x + deltaX),
+          y: Math.round(dragState.startPosition.y + deltaY),
+        },
+      );
+      setSnapGuides(snapped.guides);
       props.onUpdateSource(
         props.scene.id,
         dragState.sourceId,
         {
-          position: {
-            x: Math.round(dragState.startPosition.x + deltaX),
-            y: Math.round(dragState.startPosition.y + deltaY),
-          },
+          position: snapped.position,
         },
         options,
       );
       return;
     }
 
+    const snapped = snapSourceSize(
+      props.scene,
+      dragState.startPosition,
+      {
+        width: Math.max(16, Math.round(dragState.startSize.width + deltaX)),
+        height: Math.max(16, Math.round(dragState.startSize.height + deltaY)),
+      },
+    );
+    setSnapGuides(snapped.guides);
     props.onUpdateSource(
       props.scene.id,
       dragState.sourceId,
       {
-        size: {
-          width: Math.max(16, Math.round(dragState.startSize.width + deltaX)),
-          height: Math.max(16, Math.round(dragState.startSize.height + deltaY)),
-        },
+        size: snapped.size,
       },
       options,
     );
@@ -1701,6 +1721,7 @@ function DesignerPage(props: {
   function endDrag(event: ReactPointerEvent) {
     if (dragState?.pointerId === event.pointerId) {
       setDragState(null);
+      setSnapGuides([]);
       props.onFinishContinuousEdit();
     }
   }
@@ -1979,6 +2000,14 @@ function DesignerPage(props: {
               ref={renderCanvasRef}
               width={props.graph.output.width}
             />
+            {snapGuides.map((guide) => (
+              <div
+                aria-hidden="true"
+                className={`designer-snap-guide ${guide.axis}`}
+                key={`${guide.axis}-${guide.position}`}
+                style={snapGuideStyle(guide, props.scene)}
+              />
+            ))}
             {sortedSceneSources(props.scene, "asc").map((source) => (
               <div
                 className={[
@@ -3795,6 +3824,101 @@ function sceneSourcePreviewStyle(
     transform: `rotate(${source.rotation_degrees}deg)`,
     zIndex: source.z_index,
   };
+}
+
+function snapGuideStyle(guide: DesignerSnapGuide, scene: Scene): CSSProperties {
+  if (guide.axis === "x") {
+    return {
+      left: `${(guide.position / scene.canvas.width) * 100}%`,
+    };
+  }
+
+  return {
+    top: `${(guide.position / scene.canvas.height) * 100}%`,
+  };
+}
+
+function snapSourcePosition(
+  scene: Scene,
+  size: SceneSize,
+  position: ScenePoint,
+): { position: ScenePoint; guides: DesignerSnapGuide[] } {
+  const guides: DesignerSnapGuide[] = [];
+  const snappedPosition = { ...position };
+  const horizontalTargets = [
+    { coordinate: 0, position: 0 },
+    {
+      coordinate: scene.canvas.width / 2,
+      position: Math.round((scene.canvas.width - size.width) / 2),
+    },
+    {
+      coordinate: scene.canvas.width,
+      position: Math.round(scene.canvas.width - size.width),
+    },
+  ];
+  const verticalTargets = [
+    { coordinate: 0, position: 0 },
+    {
+      coordinate: scene.canvas.height / 2,
+      position: Math.round((scene.canvas.height - size.height) / 2),
+    },
+    {
+      coordinate: scene.canvas.height,
+      position: Math.round(scene.canvas.height - size.height),
+    },
+  ];
+  const xTarget = nearestSnapTarget(position.x, horizontalTargets);
+  const yTarget = nearestSnapTarget(position.y, verticalTargets);
+
+  if (xTarget) {
+    snappedPosition.x = xTarget.position;
+    guides.push({ axis: "x", position: xTarget.coordinate });
+  }
+  if (yTarget) {
+    snappedPosition.y = yTarget.position;
+    guides.push({ axis: "y", position: yTarget.coordinate });
+  }
+
+  return { position: snappedPosition, guides };
+}
+
+function snapSourceSize(
+  scene: Scene,
+  position: ScenePoint,
+  size: SceneSize,
+): { size: SceneSize; guides: DesignerSnapGuide[] } {
+  const guides: DesignerSnapGuide[] = [];
+  const snappedSize = { ...size };
+  const rightEdge = position.x + size.width;
+  const bottomEdge = position.y + size.height;
+  const rightTarget = nearestSnapTarget(rightEdge, [
+    { coordinate: scene.canvas.width / 2, position: scene.canvas.width / 2 },
+    { coordinate: scene.canvas.width, position: scene.canvas.width },
+  ]);
+  const bottomTarget = nearestSnapTarget(bottomEdge, [
+    { coordinate: scene.canvas.height / 2, position: scene.canvas.height / 2 },
+    { coordinate: scene.canvas.height, position: scene.canvas.height },
+  ]);
+
+  if (rightTarget) {
+    snappedSize.width = Math.max(16, Math.round(rightTarget.position - position.x));
+    guides.push({ axis: "x", position: rightTarget.coordinate });
+  }
+  if (bottomTarget) {
+    snappedSize.height = Math.max(16, Math.round(bottomTarget.position - position.y));
+    guides.push({ axis: "y", position: bottomTarget.coordinate });
+  }
+
+  return { size: snappedSize, guides };
+}
+
+function nearestSnapTarget(
+  value: number,
+  targets: Array<{ coordinate: number; position: number }>,
+) {
+  return targets.find(
+    (target) => Math.abs(value - target.position) <= designerSnapThreshold,
+  );
 }
 
 type SourceCanvasAlignment =

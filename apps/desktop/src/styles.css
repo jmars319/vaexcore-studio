@@ -566,6 +566,28 @@ nav {
   content: "locked";
 }
 
+.designer-snap-guide {
+  position: absolute;
+  z-index: 80;
+  pointer-events: none;
+}
+
+.designer-snap-guide.x {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(117, 240, 207, 0.9);
+  box-shadow: 0 0 12px rgba(117, 240, 207, 0.55);
+}
+
+.designer-snap-guide.y {
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: rgba(117, 240, 207, 0.9);
+  box-shadow: 0 0 12px rgba(117, 240, 207, 0.55);
+}
+
 .designer-resize-handle {
   position: absolute;
   right: 0;
