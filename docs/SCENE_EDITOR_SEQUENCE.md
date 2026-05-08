@@ -64,7 +64,9 @@ foundation to OBS-class scene editing and output.
     app data bundle path. Desktop imports write a timestamped backup of the
     current scene collection and retain the newest 10 backups. Designer-facing
     file picker UX is not started.
-25. Hotkeys and workflow shortcuts: not started.
+25. Hotkeys and workflow shortcuts: started with Designer-level save,
+    undo/redo, and selected-source delete shortcuts. Full configurable hotkeys
+    and app-wide shortcut routing are not started.
 26. Active-scene recording and streaming integration: not started.
 27. Performance tuning: frame pacing, latency, dropped frames, GPU/CPU load:
     started with per-target frame budget, latency, dropped-frame tolerance, and

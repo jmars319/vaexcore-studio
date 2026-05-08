@@ -1760,6 +1760,57 @@ function DesignerPage(props: {
   const [newSourceKind, setNewSourceKind] = useState<SceneSourceKind>("display");
 
   useEffect(() => {
+    function handleDesignerKeyDown(event: KeyboardEvent) {
+      if (isEditableEventTarget(event.target)) return;
+      const key = event.key.toLowerCase();
+      const commandKey = event.metaKey || event.ctrlKey;
+
+      if (commandKey && key === "s") {
+        event.preventDefault();
+        if (validation.ok && props.dirty) {
+          props.onSave();
+        }
+        return;
+      }
+
+      if (commandKey && key === "z") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          if (props.canRedo) props.onRedo();
+        } else if (props.canUndo) {
+          props.onUndo();
+        }
+        return;
+      }
+
+      if (commandKey && key === "y") {
+        event.preventDefault();
+        if (props.canRedo) props.onRedo();
+        return;
+      }
+
+      if (
+        props.selectedSource &&
+        (event.key === "Delete" || event.key === "Backspace")
+      ) {
+        event.preventDefault();
+        props.onDeleteSource(props.scene.id, props.selectedSource.id);
+      }
+    }
+
+    window.addEventListener("keydown", handleDesignerKeyDown);
+    return () => window.removeEventListener("keydown", handleDesignerKeyDown);
+  }, [
+    props,
+    props.canRedo,
+    props.canUndo,
+    props.dirty,
+    props.scene.id,
+    props.selectedSource,
+    validation.ok,
+  ]);
+
+  useEffect(() => {
     drawCompositorPreview(
       renderCanvasRef.current,
       props.graph,
@@ -4108,6 +4159,12 @@ function defaultSceneSourceFilterConfig(
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isEditableEventTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  return ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName);
 }
 
 function drawCompositorPreview(
