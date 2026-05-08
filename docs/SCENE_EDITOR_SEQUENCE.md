@@ -81,8 +81,9 @@ foundation to OBS-class scene editing and output.
     long-run tuning are not started.
 28. Full validation matrix: automated, visual, Windows/macOS hardware, installer,
     and long-run soak tests: started with repeatable macOS app build validation
-    and a Windows validation runner/guide. Real Windows hardware results,
-    visual assertions, installer QA, and long-run soak tests are not started.
+    a Windows validation runner/guide, and Chrome screenshot smoke checks with
+    PNG size/dimension assertions. Real Windows hardware results, installer QA,
+    and long-run soak tests are not started.
 
 ## Validation Contract
 

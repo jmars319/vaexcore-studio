@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -8,11 +8,27 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const baseUrl = "http://127.0.0.1:1420";
 const outputDir = join(root, ".local", "visual-smoke");
 const targets = [
-  ["control-room", "/?section=dashboard"],
-  ["designer", "/?section=designer"],
-  ["broadcast-setup", "/?section=controls"],
-  ["suite", "/?section=apps"],
-  ["settings", "/?window=settings"]
+  {
+    name: "control-room",
+    path: "/?section=dashboard",
+  },
+  {
+    name: "designer",
+    path: "/?section=designer",
+    minBytes: 50_000,
+  },
+  {
+    name: "broadcast-setup",
+    path: "/?section=controls",
+  },
+  {
+    name: "suite",
+    path: "/?section=apps",
+  },
+  {
+    name: "settings",
+    path: "/?window=settings",
+  },
 ];
 
 const chrome = findChrome();
@@ -26,10 +42,11 @@ const server = spawn("npm", ["run", "dev", "-w", "apps/desktop"], {
 
 try {
   await waitFor(baseUrl);
-  for (const [name, path] of targets) {
-    const screenshot = join(outputDir, `studio-${name}.png`);
-    await capture(`${baseUrl}${path}`, screenshot);
-    assertScreenshot(screenshot);
+  for (const target of targets) {
+    const url = `${baseUrl}${target.path}`;
+    const screenshot = join(outputDir, `studio-${target.name}.png`);
+    await capture(url, screenshot);
+    assertScreenshot(screenshot, target);
     console.log(`visual smoke: wrote ${screenshot}`);
   }
 } finally {
@@ -94,11 +111,27 @@ async function capture(url, screenshot) {
   }
 }
 
-function assertScreenshot(path) {
+function assertScreenshot(path, target) {
   const size = statSync(path).size;
-  if (size < 20_000) {
+  const minBytes = target.minBytes ?? 20_000;
+  if (size < minBytes) {
     throw new Error(`Screenshot ${path} is too small (${size} bytes).`);
   }
+  const { width, height } = readPngSize(path);
+  if (width < 1000 || height < 700) {
+    throw new Error(`Screenshot ${path} has unexpected dimensions ${width}x${height}.`);
+  }
+}
+
+function readPngSize(path) {
+  const buffer = readFileSync(path);
+  if (buffer.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a") {
+    throw new Error(`Screenshot ${path} is not a PNG file.`);
+  }
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20),
+  };
 }
 
 async function waitForScreenshot(path, timeoutMs) {
