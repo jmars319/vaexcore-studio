@@ -9,10 +9,11 @@ use serde_json::{json, Value};
 use vaexcore_core::{
     new_id, now_utc, AppSettings, AuditLogEntry, Marker, MediaProfile, MediaProfileInput,
     PlatformKind, ProfileBundle, ProfileBundleImportResult, ProfilesSnapshot, RecordingContainer,
-    RecordingHistoryEntry, RecordingSession, Resolution, SceneCollection, SceneValidationResult,
-    SecretRef, SecretStore, SecretStoreError, SensitiveString, StreamDestination,
-    StreamDestinationBundleItem, StreamDestinationInput, LOCAL_SQLITE_SECRET_PROVIDER,
-    MACOS_KEYCHAIN_SECRET_PROVIDER, WINDOWS_CREDENTIAL_MANAGER_SECRET_PROVIDER,
+    RecordingHistoryEntry, RecordingSession, Resolution, SceneCollection, SceneCollectionBundle,
+    SceneCollectionImportResult, SceneValidationResult, SecretRef, SecretStore, SecretStoreError,
+    SensitiveString, StreamDestination, StreamDestinationBundleItem, StreamDestinationInput,
+    LOCAL_SQLITE_SECRET_PROVIDER, MACOS_KEYCHAIN_SECRET_PROVIDER,
+    WINDOWS_CREDENTIAL_MANAGER_SECRET_PROVIDER,
 };
 use vaexcore_platforms::apply_platform_defaults;
 
@@ -354,6 +355,35 @@ impl ProfileStore {
         }
 
         self.save_scene_collection(SceneCollection::default_collection(now_utc()))
+    }
+
+    pub fn export_scene_collection(&self) -> Result<SceneCollectionBundle, StoreError> {
+        Ok(SceneCollectionBundle::new(
+            self.scene_collection()?,
+            now_utc(),
+        ))
+    }
+
+    pub fn import_scene_collection(
+        &self,
+        bundle: SceneCollectionBundle,
+    ) -> Result<SceneCollectionImportResult, StoreError> {
+        if bundle.version != 1 {
+            return Err(StoreError::InvalidValue(format!(
+                "unsupported scene collection bundle version {}",
+                bundle.version
+            )));
+        }
+
+        let imported_scenes = bundle.collection.scenes.len();
+        let imported_transitions = bundle.collection.transitions.len();
+        let collection = self.save_scene_collection(bundle.collection)?;
+
+        Ok(SceneCollectionImportResult {
+            imported_scenes,
+            imported_transitions,
+            collection,
+        })
     }
 
     pub fn save_scene_collection(
@@ -1961,6 +1991,25 @@ mod tests {
         assert!(error
             .to_string()
             .contains("Active scene id must match a scene"));
+    }
+
+    #[test]
+    fn scene_collection_bundle_round_trip_replaces_collection() {
+        let source = ProfileStore::open_memory().unwrap();
+        let mut bundle = source.export_scene_collection().unwrap();
+        bundle.collection.name = "Imported Scene Collection".to_string();
+        bundle.collection.scenes[0].name = "Imported Main".to_string();
+
+        let target = ProfileStore::open_memory().unwrap();
+        let result = target.import_scene_collection(bundle).unwrap();
+
+        assert_eq!(result.imported_scenes, 1);
+        assert_eq!(result.imported_transitions, 2);
+        assert_eq!(result.collection.name, "Imported Scene Collection");
+        assert_eq!(
+            target.scene_collection().unwrap().scenes[0].name,
+            "Imported Main"
+        );
     }
 
     #[test]

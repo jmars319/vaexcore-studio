@@ -183,6 +183,24 @@ export interface SceneCollection {
   updated_at: string;
 }
 
+export interface SceneCollectionBundle {
+  version: number;
+  exported_at: string;
+  collection: SceneCollection;
+}
+
+export interface SceneCollectionImportResult {
+  imported_scenes: number;
+  imported_transitions: number;
+  collection: SceneCollection;
+}
+
+export type SceneCollectionBundleInput = Partial<
+  Omit<SceneCollectionBundle, "collection">
+> & {
+  collection?: Partial<SceneCollection> | null;
+};
+
 export interface SceneValidationIssue {
   path: string;
   message: string;
@@ -1095,6 +1113,27 @@ export function normalizeSceneCollection(
     scenes,
     created_at: collection.created_at || fallback.created_at,
     updated_at: collection.updated_at || fallback.updated_at,
+  };
+}
+
+export function createSceneCollectionBundle(
+  collection: SceneCollection,
+  exportedAt = new Date().toISOString(),
+): SceneCollectionBundle {
+  return {
+    version: 1,
+    exported_at: exportedAt,
+    collection: cloneJson(collection),
+  };
+}
+
+export function normalizeSceneCollectionBundle(
+  bundle: SceneCollectionBundleInput | null | undefined,
+): SceneCollectionBundle {
+  return {
+    version: bundle?.version || 1,
+    exported_at: bundle?.exported_at || new Date().toISOString(),
+    collection: normalizeSceneCollection(bundle?.collection),
   };
 }
 

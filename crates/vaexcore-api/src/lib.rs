@@ -32,8 +32,9 @@ use vaexcore_core::{
     CommandStatus, ConnectedClientsSnapshot, HealthResponse, LocalRuntimeDependency,
     LocalRuntimeHealth, Marker, MarkersSnapshot, MediaPipelinePlan, MediaPipelinePlanRequest,
     MediaPipelineValidation, MediaProfileInput, PipelineIntent, ProfilesSnapshot,
-    RecentRecordingsSnapshot, SceneCollection, SceneValidationResult, SecretStore,
-    StreamDestinationInput, StudioEvent, StudioEventKind, StudioStatus, APP_NAME,
+    RecentRecordingsSnapshot, SceneCollection, SceneCollectionBundle, SceneCollectionImportResult,
+    SceneValidationResult, SecretStore, StreamDestinationInput, StudioEvent, StudioEventKind,
+    StudioStatus, APP_NAME,
 };
 use vaexcore_media::{
     build_dry_run_pipeline_plan, DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor,
@@ -277,6 +278,8 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .route("/stream/start", post(start_stream))
         .route("/stream/stop", post(stop_stream))
         .route("/scenes", get(get_scenes).put(put_scenes))
+        .route("/scenes/export", get(get_scenes_export))
+        .route("/scenes/import", post(post_scenes_import))
         .route("/scenes/validate", post(post_scenes_validate))
         .route(
             "/media/plan",
@@ -439,6 +442,7 @@ fn command_action(method: &Method, path: &str) -> Option<String> {
         ("POST", "/stream/start") => "stream.start",
         ("POST", "/stream/stop") => "stream.stop",
         ("PUT", "/scenes") => "scenes.save",
+        ("POST", "/scenes/import") => "scenes.import",
         ("POST", "/scenes/validate") => "scenes.validate",
         ("POST", "/media/plan") => "media.plan",
         ("POST", "/media/validate") => "media.validate",
@@ -650,6 +654,27 @@ async fn put_scenes(
     let saved = state.store.save_scene_collection(collection)?;
     refresh_default_pipeline_contract(&state).await;
     Ok(Json(ApiResponse::ok(saved)))
+}
+
+async fn get_scenes_export(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<SceneCollectionBundle>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    Ok(Json(ApiResponse::ok(
+        state.store.export_scene_collection()?,
+    )))
+}
+
+async fn post_scenes_import(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(bundle): Json<SceneCollectionBundle>,
+) -> Result<Json<ApiResponse<SceneCollectionImportResult>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let result = state.store.import_scene_collection(bundle)?;
+    refresh_default_pipeline_contract(&state).await;
+    Ok(Json(ApiResponse::ok(result)))
 }
 
 async fn post_scenes_validate(
@@ -1732,7 +1757,7 @@ mod tests {
         assert_eq!(saved["data"]["name"], "API Scenes");
 
         let (status, validation) = request_json(
-            app,
+            app.clone(),
             "POST",
             "/scenes/validate".to_string(),
             Some(saved["data"].clone()),
@@ -1740,6 +1765,26 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(validation["data"]["ok"], true);
+
+        let (status, exported) =
+            request_json(app.clone(), "GET", "/scenes/export".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(exported["data"]["version"], 1);
+        assert_eq!(exported["data"]["collection"]["name"], "API Scenes");
+
+        let mut bundle = exported["data"].clone();
+        bundle["collection"]["name"] = serde_json::json!("Imported API Scenes");
+        bundle["collection"]["scenes"][0]["name"] = serde_json::json!("Imported API Main");
+
+        let (status, imported) =
+            request_json(app, "POST", "/scenes/import".to_string(), Some(bundle)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(imported["data"]["imported_scenes"], 1);
+        assert_eq!(imported["data"]["imported_transitions"], 2);
+        assert_eq!(
+            imported["data"]["collection"]["name"],
+            "Imported API Scenes"
+        );
     }
 
     #[tokio::test]

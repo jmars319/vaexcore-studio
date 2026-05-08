@@ -51,7 +51,9 @@ Scene Designer state is stored in the local Studio SQLite database through the
 `active_scene`, `capture_frame_plan`, `audio_mixer_plan`, `compositor_graph`,
 and `compositor_render_plan`. On Windows, verify that creating/editing a scene
 in Studio, saving it, quitting, and reopening Studio preserves the scene
-collection before running a full suite recording/streaming pass. Also confirm
+collection before running a full suite recording/streaming pass. Also verify
+`GET /scenes/export` returns a versioned scene bundle and `POST /scenes/import`
+restores that bundle while refreshing the default media plan. Also confirm
 that the default media plan reports `capture.frames`, `audio.mixer`,
 `scene.compositor`, and `scene.render_targets` steps, writes
 `capture_frame_plan.scene_id`, `audio_mixer_plan.scene_id`, and

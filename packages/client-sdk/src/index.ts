@@ -16,6 +16,8 @@ import type {
   ProfilesSnapshot,
   RecentRecordingsSnapshot,
   SceneCollection,
+  SceneCollectionBundle,
+  SceneCollectionImportResult,
   SceneValidationResult,
   StudioStatus,
   StreamDestinationInput,
@@ -96,6 +98,17 @@ export class VaexcoreStudioClient {
     return this.request<SceneCollection>("/scenes", {
       method: "PUT",
       body: JSON.stringify(collection),
+    });
+  }
+
+  exportSceneCollection(): Promise<SceneCollectionBundle> {
+    return this.request<SceneCollectionBundle>("/scenes/export");
+  }
+
+  importSceneCollection(bundle: SceneCollectionBundle): Promise<SceneCollectionImportResult> {
+    return this.request<SceneCollectionImportResult>("/scenes/import", {
+      method: "POST",
+      body: JSON.stringify(bundle),
     });
   }
 

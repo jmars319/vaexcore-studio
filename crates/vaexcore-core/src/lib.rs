@@ -49,9 +49,9 @@ pub use responses::{
 };
 pub use scenes::{
     scene_capture_sources, scene_resolution, validate_scene_collection, Scene, SceneCanvas,
-    SceneCollection, SceneCrop, ScenePoint, SceneSize, SceneSource, SceneSourceKind,
-    SceneTransition, SceneTransitionEasing, SceneTransitionKind, SceneValidationIssue,
-    SceneValidationResult,
+    SceneCollection, SceneCollectionBundle, SceneCollectionImportResult, SceneCrop, ScenePoint,
+    SceneSize, SceneSource, SceneSourceKind, SceneTransition, SceneTransitionEasing,
+    SceneTransitionKind, SceneValidationIssue, SceneValidationResult,
 };
 pub use security::{
     SecretRef, SecretStore, SecretStoreError, SensitiveString, LOCAL_SQLITE_SECRET_PROVIDER,

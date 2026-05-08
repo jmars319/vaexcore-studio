@@ -18,6 +18,8 @@ import type {
   ProfilesSnapshot,
   RecentRecordingsSnapshot,
   SceneCollection,
+  SceneCollectionBundle,
+  SceneCollectionImportResult,
   SceneValidationResult,
   StudioStatus,
   StreamDestinationInput,
@@ -64,6 +66,12 @@ export interface ProfileBundleFileResult {
   path: string;
   recordingProfiles: number;
   streamDestinations: number;
+}
+
+export interface SceneCollectionBundleFileResult {
+  path: string;
+  scenes: number;
+  transitions: number;
 }
 
 export interface PermissionStatus {
@@ -406,6 +414,16 @@ export async function importProfileBundle(): Promise<ProfileBundleFileResult> {
   return invoke<ProfileBundleFileResult>("import_profile_bundle");
 }
 
+export async function exportSceneCollectionBundle(): Promise<SceneCollectionBundleFileResult> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<SceneCollectionBundleFileResult>("export_scene_collection_bundle");
+}
+
+export async function importSceneCollectionBundle(): Promise<SceneCollectionBundleFileResult> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<SceneCollectionBundleFileResult>("import_scene_collection_bundle");
+}
+
 export async function loadMediaRunnerInfo(): Promise<MediaRunnerInfo> {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -475,6 +493,16 @@ export const StudioApi = {
     apiRequest<SceneCollection>(config, "/scenes", {
       method: "PUT",
       body: JSON.stringify(collection),
+    }),
+  exportSceneCollection: (config: RuntimeApiConfig) =>
+    apiRequest<SceneCollectionBundle>(config, "/scenes/export"),
+  importSceneCollection: (
+    config: RuntimeApiConfig,
+    bundle: SceneCollectionBundle,
+  ) =>
+    apiRequest<SceneCollectionImportResult>(config, "/scenes/import", {
+      method: "POST",
+      body: JSON.stringify(bundle),
     }),
   validateSceneCollection: (
     config: RuntimeApiConfig,

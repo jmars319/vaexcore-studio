@@ -112,6 +112,20 @@ pub struct SceneCollection {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SceneCollectionBundle {
+    pub version: u32,
+    pub exported_at: chrono::DateTime<chrono::Utc>,
+    pub collection: SceneCollection,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SceneCollectionImportResult {
+    pub imported_scenes: usize,
+    pub imported_transitions: usize,
+    pub collection: SceneCollection,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SceneValidationIssue {
     pub path: String,
@@ -269,6 +283,16 @@ impl SceneCollection {
 
     pub fn validation(&self) -> SceneValidationResult {
         validate_scene_collection(self)
+    }
+}
+
+impl SceneCollectionBundle {
+    pub fn new(collection: SceneCollection, exported_at: chrono::DateTime<chrono::Utc>) -> Self {
+        Self {
+            version: 1,
+            exported_at,
+            collection,
+        }
     }
 }
 

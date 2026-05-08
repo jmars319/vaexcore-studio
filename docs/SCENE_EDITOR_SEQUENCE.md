@@ -55,7 +55,10 @@ foundation to OBS-class scene editing and output.
 23. Scene transitions and transition preview: started with persisted transition
     contracts, validation, and Designer controls; live transition preview and
     renderer application are not started.
-24. Scene collection import/export/backup: not started.
+24. Scene collection import/export/backup: started with versioned bundle
+    contracts, local API export/import routes, SDK helpers, desktop bridge
+    commands, and store validation. Designer-facing file picker UX and
+    automatic backup rotation are not started.
 25. Hotkeys and workflow shortcuts: not started.
 26. Active-scene recording and streaming integration: not started.
 27. Performance tuning: frame pacing, latency, dropped frames, GPU/CPU load: not

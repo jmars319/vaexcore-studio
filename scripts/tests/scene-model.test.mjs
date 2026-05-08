@@ -24,9 +24,21 @@ async function loadSharedTypesRuntime() {
 const sharedTypes = loadSharedTypesRuntime();
 
 test("default scene collection is serializable and valid", async () => {
-  const { createDefaultSceneCollection, validateSceneCollection } = await sharedTypes;
+  const {
+    createDefaultSceneCollection,
+    createSceneCollectionBundle,
+    normalizeSceneCollectionBundle,
+    validateSceneCollection,
+  } = await sharedTypes;
   const collection = createDefaultSceneCollection("2026-05-08T12:00:00.000Z");
   const scene = collection.scenes[0];
+  const bundle = createSceneCollectionBundle(collection, "2026-05-08T13:00:00.000Z");
+  const normalizedBundle = normalizeSceneCollectionBundle({
+    collection: {
+      name: "Imported Scenes",
+      scenes: collection.scenes,
+    },
+  });
 
   assert.equal(collection.version, 1);
   assert.equal(collection.active_scene_id, scene.id);
@@ -43,6 +55,12 @@ test("default scene collection is serializable and valid", async () => {
   );
   assert.equal(validateSceneCollection(collection).ok, true);
   assert.deepEqual(JSON.parse(JSON.stringify(collection)), collection);
+  assert.equal(bundle.version, 1);
+  assert.equal(bundle.exported_at, "2026-05-08T13:00:00.000Z");
+  assert.deepEqual(bundle.collection, collection);
+  assert.equal(normalizedBundle.version, 1);
+  assert.equal(normalizedBundle.collection.name, "Imported Scenes");
+  assert.equal(validateSceneCollection(normalizedBundle.collection).ok, true);
 });
 
 test("scene source defaults cover supported source kinds", async () => {

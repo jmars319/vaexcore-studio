@@ -175,6 +175,34 @@ Supported query parameters:
 - `recording_session_id`
 - `limit`
 
+### `GET /scenes`
+
+Returns the saved `SceneCollection` used by Designer and media planning.
+
+### `PUT /scenes`
+
+Saves a complete `SceneCollection`, validates it, updates `updated_at`, and refreshes the default pipeline contract files.
+
+### `GET /scenes/export`
+
+Returns a versioned `SceneCollectionBundle`:
+
+```json
+{
+  "version": 1,
+  "exported_at": "2026-05-08T12:00:00Z",
+  "collection": {}
+}
+```
+
+### `POST /scenes/import`
+
+Accepts a `SceneCollectionBundle`, validates and saves the contained collection, refreshes the default pipeline contract files, and returns imported scene and transition counts.
+
+### `POST /scenes/validate`
+
+Accepts a `SceneCollection` and returns validation issues without saving.
+
 ### `GET /media/plan`
 
 Returns the current dry-run pipeline plan using the saved capture sources, first recording profile, and enabled stream destinations.

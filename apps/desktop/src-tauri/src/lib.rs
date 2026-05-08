@@ -25,6 +25,7 @@ use vaexcore_api::{
 use vaexcore_core::{
     AppSettings, CaptureSourceCandidate, CaptureSourceInventory, CaptureSourceKind,
     CaptureSourceSelection, PreflightCheck, PreflightSnapshot, PreflightStatus, ProfileBundle,
+    SceneCollectionBundle,
 };
 use vaexcore_media::{MediaRunnerConfig, MediaRunnerSupervisor};
 
@@ -181,6 +182,14 @@ struct FrontendProfileBundleResult {
     path: String,
     recording_profiles: usize,
     stream_destinations: usize,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FrontendSceneCollectionBundleResult {
+    path: String,
+    scenes: usize,
+    transitions: usize,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -1674,6 +1683,65 @@ fn import_profile_bundle(
 }
 
 #[tauri::command]
+fn export_scene_collection_bundle(
+    state: tauri::State<'_, AppRuntimeState>,
+) -> Result<FrontendSceneCollectionBundleResult, String> {
+    let bundle = state
+        .settings_store
+        .export_scene_collection()
+        .map_err(|error| error.to_string())?;
+    let path = scene_collection_bundle_path(&state);
+    let result = FrontendSceneCollectionBundleResult {
+        path: path.display().to_string(),
+        scenes: bundle.collection.scenes.len(),
+        transitions: bundle.collection.transitions.len(),
+    };
+    let serialized = serde_json::to_vec_pretty(&bundle).map_err(|error| error.to_string())?;
+    std::fs::write(path, serialized).map_err(|error| error.to_string())?;
+    write_app_log(
+        &state.log_dir,
+        "scenes.bundle_exported",
+        serde_json::json!({
+            "scenes": result.scenes,
+            "transitions": result.transitions,
+            "path": &result.path,
+        }),
+    );
+    Ok(result)
+}
+
+#[tauri::command]
+fn import_scene_collection_bundle(
+    state: tauri::State<'_, AppRuntimeState>,
+) -> Result<FrontendSceneCollectionBundleResult, String> {
+    let path = scene_collection_bundle_path(&state);
+    let contents = std::fs::read(&path).map_err(|error| error.to_string())?;
+    let bundle: SceneCollectionBundle =
+        serde_json::from_slice(&contents).map_err(|error| error.to_string())?;
+    let result = state
+        .settings_store
+        .import_scene_collection(bundle)
+        .map_err(|error| error.to_string())?;
+
+    Ok(FrontendSceneCollectionBundleResult {
+        path: path.display().to_string(),
+        scenes: result.imported_scenes,
+        transitions: result.imported_transitions,
+    })
+    .inspect(|result| {
+        write_app_log(
+            &state.log_dir,
+            "scenes.bundle_imported",
+            serde_json::json!({
+                "scenes": result.scenes,
+                "transitions": result.transitions,
+                "path": &result.path,
+            }),
+        );
+    })
+}
+
+#[tauri::command]
 async fn open_settings_window(app: tauri::AppHandle) -> Result<(), String> {
     show_settings_window(&app).map_err(|error| error.to_string())
 }
@@ -2005,6 +2073,8 @@ pub fn run() {
             preflight_snapshot,
             export_profile_bundle,
             import_profile_bundle,
+            export_scene_collection_bundle,
+            import_scene_collection_bundle,
             open_settings_window,
             media_runner_info,
             launch_vaexcore_suite,
@@ -3088,6 +3158,10 @@ fn macos_screen_recording_granted() -> bool {
 
 fn profile_bundle_path(state: &AppRuntimeState) -> PathBuf {
     state.data_dir.join("profile-bundle.json")
+}
+
+fn scene_collection_bundle_path(state: &AppRuntimeState) -> PathBuf {
+    state.data_dir.join("scene-collection-bundle.json")
 }
 
 fn write_seed_pipeline_config(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
