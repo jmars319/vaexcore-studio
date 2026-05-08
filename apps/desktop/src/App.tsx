@@ -6,7 +6,10 @@ import {
   ArrowUp,
   Cable,
   CheckCircle2,
+  ClipboardCopy,
+  ClipboardPaste,
   Copy,
+  CopyPlus,
   Crosshair,
   Crop,
   Download,
@@ -370,6 +373,8 @@ function App() {
     past: [],
     future: [],
   });
+  const [designerSourceClipboard, setDesignerSourceClipboard] =
+    useState<SceneSource | null>(null);
   const designerHistoryGroupRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -1317,18 +1322,10 @@ function App() {
   }
 
   function handleDuplicateDesignerSource(sceneId: string, sourceId: string) {
-    const source = activeDesignerScene.sources.find((item) => item.id === sourceId);
-    if (!source) return;
-    const duplicate = {
-      ...source,
-      id: designerId("source"),
-      name: `${source.name} Copy`,
-      position: {
-        x: source.position.x + 32,
-        y: source.position.y + 32,
-      },
-      z_index: nextSceneZIndex(activeDesignerScene),
-    } as SceneSource;
+    const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
+    const source = scene?.sources.find((item) => item.id === sourceId);
+    if (!scene || !source) return;
+    const duplicate = cloneDesignerSourceForInsert(source, scene, "Copy");
     updateDesignerCollection((current) => ({
       ...current,
       scenes: current.scenes.map((scene) =>
@@ -1338,6 +1335,34 @@ function App() {
       ),
     }));
     setSelectedSceneSourceId(duplicate.id);
+  }
+
+  function handleCopyDesignerSource(sceneId: string, sourceId: string) {
+    const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
+    const source = scene?.sources.find((item) => item.id === sourceId);
+    if (!source) return;
+    setDesignerSourceClipboard(cloneSceneSource(source));
+    setSceneSaveStatus(`Copied ${source.name}`);
+  }
+
+  function handlePasteDesignerSource(sceneId: string) {
+    if (!designerSourceClipboard) return;
+    const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
+    if (!scene) return;
+    const pasted = cloneDesignerSourceForInsert(
+      designerSourceClipboard,
+      scene,
+      "Pasted",
+    );
+    updateDesignerCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) =>
+        scene.id === sceneId
+          ? { ...scene, sources: [...scene.sources, pasted] }
+          : scene,
+      ),
+    }));
+    setSelectedSceneSourceId(pasted.id);
   }
 
   function handleDeleteDesignerSource(sceneId: string, sourceId: string) {
@@ -1402,7 +1427,9 @@ function App() {
           <DesignerPage
             captureInventory={captureInventory}
             collection={designerSceneCollection}
+            clipboardSource={designerSourceClipboard}
             dirty={sceneDirty}
+            onCopySource={handleCopyDesignerSource}
             onCreateScene={handleCreateDesignerScene}
             onCreateSource={handleCreateDesignerSource}
             onDeleteScene={handleDeleteDesignerScene}
@@ -1412,6 +1439,7 @@ function App() {
             onExportCollection={handleExportSceneCollectionBundle}
             onFinishContinuousEdit={handleFinishDesignerContinuousEdit}
             onImportCollection={handleImportSceneCollectionBundle}
+            onPasteSource={handlePasteDesignerSource}
             onRenameScene={handleRenameDesignerScene}
             canRedo={sceneHistory.future.length > 0}
             canUndo={sceneHistory.past.length > 0}
@@ -1576,6 +1604,7 @@ function App() {
     activeDesignerScene,
     captureInventory,
     designerSceneCollection,
+    designerSourceClipboard,
     sceneCollection,
     sceneDirty,
     sceneHistory,
@@ -1719,7 +1748,9 @@ function DesignerPage(props: {
   canUndo: boolean;
   captureInventory: CaptureSourceInventory | null;
   collection: SceneCollection;
+  clipboardSource: SceneSource | null;
   dirty: boolean;
+  onCopySource: (sceneId: string, sourceId: string) => void;
   onCreateScene: () => void;
   onCreateSource: (sceneId: string, kind: SceneSourceKind) => void;
   onDeleteScene: (sceneId: string) => void;
@@ -1729,6 +1760,7 @@ function DesignerPage(props: {
   onExportCollection: () => void;
   onFinishContinuousEdit: () => void;
   onImportCollection: () => void;
+  onPasteSource: (sceneId: string) => void;
   onRenameScene: (sceneId: string, name: string) => void;
   graph: CompositorGraph;
   scene: Scene;
@@ -1806,6 +1838,24 @@ function DesignerPage(props: {
         return;
       }
 
+      if (commandKey && key === "c" && props.selectedSource) {
+        event.preventDefault();
+        props.onCopySource(props.scene.id, props.selectedSource.id);
+        return;
+      }
+
+      if (commandKey && key === "v") {
+        event.preventDefault();
+        if (props.clipboardSource) props.onPasteSource(props.scene.id);
+        return;
+      }
+
+      if (commandKey && key === "d" && props.selectedSource) {
+        event.preventDefault();
+        props.onDuplicateSource(props.scene.id, props.selectedSource.id);
+        return;
+      }
+
       if (
         props.selectedSource &&
         (event.key === "Delete" || event.key === "Backspace")
@@ -1821,6 +1871,7 @@ function DesignerPage(props: {
     props,
     props.canRedo,
     props.canUndo,
+    props.clipboardSource,
     props.dirty,
     props.scene.id,
     props.selectedSource,
@@ -2124,6 +2175,20 @@ function DesignerPage(props: {
                   <Plus size={14} />
                   Source
                 </button>
+                <button
+                  className="secondary-button compact"
+                  disabled={!props.clipboardSource}
+                  onClick={() => props.onPasteSource(props.scene.id)}
+                  title={
+                    props.clipboardSource
+                      ? `Paste ${props.clipboardSource.name}`
+                      : "No copied source"
+                  }
+                  type="button"
+                >
+                  <ClipboardPaste size={14} />
+                  Paste
+                </button>
               </div>
             }
             title="Source Stack"
@@ -2205,6 +2270,15 @@ function DesignerPage(props: {
                     <ArrowDown size={14} />
                   </button>
                   <button
+                    aria-label={`Copy ${source.name}`}
+                    className="icon-button compact"
+                    onClick={() => props.onCopySource(props.scene.id, source.id)}
+                    title={`Copy ${source.name}`}
+                    type="button"
+                  >
+                    <ClipboardCopy size={14} />
+                  </button>
+                  <button
                     aria-label={`Duplicate ${source.name}`}
                     className="icon-button compact"
                     onClick={() =>
@@ -2213,7 +2287,7 @@ function DesignerPage(props: {
                     title={`Duplicate ${source.name}`}
                     type="button"
                   >
-                    <Copy size={14} />
+                    <CopyPlus size={14} />
                   </button>
                   <button
                     aria-label={`Delete ${source.name}`}
@@ -4094,6 +4168,28 @@ function mergeSceneSourcePatch(
     size: patch.size ? { ...source.size, ...patch.size } : source.size,
     crop: patch.crop ? { ...source.crop, ...patch.crop } : source.crop,
     config: patch.config ? { ...source.config, ...patch.config } : source.config,
+  } as SceneSource;
+}
+
+function cloneSceneSource(source: SceneSource): SceneSource {
+  return JSON.parse(JSON.stringify(source)) as SceneSource;
+}
+
+function cloneDesignerSourceForInsert(
+  source: SceneSource,
+  scene: Scene,
+  suffix: string,
+): SceneSource {
+  const clone = cloneSceneSource(source);
+  return {
+    ...clone,
+    id: designerId("source"),
+    name: `${source.name} ${suffix}`,
+    position: {
+      x: source.position.x + 32,
+      y: source.position.y + 32,
+    },
+    z_index: nextSceneZIndex(scene),
   } as SceneSource;
 }
 

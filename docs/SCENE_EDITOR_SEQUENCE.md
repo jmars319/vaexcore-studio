@@ -48,8 +48,8 @@ foundation to OBS-class scene editing and output.
     clipping, scaling inheritance, and group editor actions are not started.
 20. Full editor interactions: started with drag/resize, keyboard nudging,
     undo/redo, transform command buttons, align-to-canvas controls, and
-    edge/center snapping guides; multi-select, rotate handles, distribute, and
-    copy/paste are not started.
+    edge/center snapping guides, source duplicate, and source copy/paste;
+    multi-select, rotate handles, and distribute are not started.
 21. Crop, bounds modes, fit/fill/stretch/center controls: started with numeric
     crop fields, reset crop, fit-to-canvas, center controls, serializable source
     bounds modes, Designer bounds controls, and first-pass compositor
@@ -69,8 +69,8 @@ foundation to OBS-class scene editing and output.
     current scene collection and retain the newest 10 backups. Designer-facing
     file picker UX is not started.
 25. Hotkeys and workflow shortcuts: started with Designer-level save,
-    undo/redo, and selected-source delete shortcuts. Full configurable hotkeys
-    and app-wide shortcut routing are not started.
+    undo/redo, selected-source delete, copy, paste, and duplicate shortcuts.
+    Full configurable hotkeys and app-wide shortcut routing are not started.
 26. Active-scene recording and streaming integration: started with API launch
     requests carrying the active scene into recording/streaming engines and
     start events reporting active scene identity. Real capture-backed
