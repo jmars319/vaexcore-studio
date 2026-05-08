@@ -129,6 +129,56 @@ pub struct CompositorRenderPlan {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct CompositorFrameClock {
+    pub frame_index: u64,
+    pub framerate: u32,
+    pub pts_nanos: u64,
+    pub duration_nanos: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CompositorRect {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CompositorEvaluatedNode {
+    pub node_id: String,
+    pub source_id: String,
+    pub name: String,
+    pub role: CompositorNodeRole,
+    pub status: CompositorNodeStatus,
+    pub rect: CompositorRect,
+    pub crop: SceneCrop,
+    pub rotation_degrees: f64,
+    pub opacity: f64,
+    pub z_index: i32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CompositorRenderedTarget {
+    pub target_id: String,
+    pub target_kind: CompositorRenderTargetKind,
+    pub width: u32,
+    pub height: u32,
+    pub frame_format: CompositorFrameFormat,
+    pub nodes: Vec<CompositorEvaluatedNode>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CompositorRenderedFrame {
+    pub renderer: CompositorRendererKind,
+    pub scene_id: String,
+    pub scene_name: String,
+    pub clock: CompositorFrameClock,
+    pub targets: Vec<CompositorRenderedTarget>,
+    pub validation: CompositorValidation,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct CompositorValidation {
     pub ready: bool,
     pub warnings: Vec<String>,
@@ -363,6 +413,127 @@ pub fn compositor_render_target(
         frame_format: CompositorFrameFormat::Bgra8,
         scale_mode: CompositorScaleMode::Fit,
         enabled: true,
+    }
+}
+
+pub fn evaluate_compositor_frame(
+    plan: &CompositorRenderPlan,
+    frame_index: u64,
+) -> CompositorRenderedFrame {
+    let validation = validate_compositor_render_plan(plan);
+    let framerate = plan
+        .targets
+        .iter()
+        .find(|target| target.enabled)
+        .map(|target| target.framerate)
+        .unwrap_or(60);
+    let duration_nanos = 1_000_000_000_u64 / u64::from(framerate.max(1));
+    let clock = CompositorFrameClock {
+        frame_index,
+        framerate,
+        pts_nanos: frame_index.saturating_mul(duration_nanos),
+        duration_nanos,
+    };
+
+    let targets = plan
+        .targets
+        .iter()
+        .filter(|target| target.enabled)
+        .map(|target| CompositorRenderedTarget {
+            target_id: target.id.clone(),
+            target_kind: target.kind.clone(),
+            width: target.width,
+            height: target.height,
+            frame_format: target.frame_format.clone(),
+            nodes: plan
+                .graph
+                .nodes
+                .iter()
+                .filter(|node| node.visible)
+                .map(|node| evaluate_node_for_target(node, &plan.graph.output, target))
+                .collect(),
+        })
+        .collect();
+
+    CompositorRenderedFrame {
+        renderer: plan.renderer.clone(),
+        scene_id: plan.graph.scene_id.clone(),
+        scene_name: plan.graph.scene_name.clone(),
+        clock,
+        targets,
+        validation,
+    }
+}
+
+fn evaluate_node_for_target(
+    node: &CompositorNode,
+    output: &CompositorOutput,
+    target: &CompositorRenderTarget,
+) -> CompositorEvaluatedNode {
+    let (scale_x, scale_y, offset_x, offset_y) = target_mapping(output, target);
+    CompositorEvaluatedNode {
+        node_id: node.id.clone(),
+        source_id: node.source_id.clone(),
+        name: node.name.clone(),
+        role: node.role.clone(),
+        status: node.status.clone(),
+        rect: CompositorRect {
+            x: offset_x + node.transform.position.x * scale_x,
+            y: offset_y + node.transform.position.y * scale_y,
+            width: node.transform.size.width * scale_x,
+            height: node.transform.size.height * scale_y,
+        },
+        crop: SceneCrop {
+            top: node.transform.crop.top * scale_y,
+            right: node.transform.crop.right * scale_x,
+            bottom: node.transform.crop.bottom * scale_y,
+            left: node.transform.crop.left * scale_x,
+        },
+        rotation_degrees: node.transform.rotation_degrees,
+        opacity: node.transform.opacity,
+        z_index: node.z_index,
+    }
+}
+
+fn target_mapping(
+    output: &CompositorOutput,
+    target: &CompositorRenderTarget,
+) -> (f64, f64, f64, f64) {
+    let source_width = f64::from(output.width.max(1));
+    let source_height = f64::from(output.height.max(1));
+    let target_width = f64::from(target.width.max(1));
+    let target_height = f64::from(target.height.max(1));
+    match target.scale_mode {
+        CompositorScaleMode::Stretch => (
+            target_width / source_width,
+            target_height / source_height,
+            0.0,
+            0.0,
+        ),
+        CompositorScaleMode::Fit => {
+            let scale = (target_width / source_width).min(target_height / source_height);
+            (
+                scale,
+                scale,
+                (target_width - source_width * scale) / 2.0,
+                (target_height - source_height * scale) / 2.0,
+            )
+        }
+        CompositorScaleMode::Fill => {
+            let scale = (target_width / source_width).max(target_height / source_height);
+            (
+                scale,
+                scale,
+                (target_width - source_width * scale) / 2.0,
+                (target_height - source_height * scale) / 2.0,
+            )
+        }
+        CompositorScaleMode::OriginalSize => (
+            1.0,
+            1.0,
+            (target_width - source_width) / 2.0,
+            (target_height - source_height) / 2.0,
+        ),
     }
 }
 
@@ -623,5 +794,33 @@ mod tests {
         assert!(validation.ready, "{:?}", validation.errors);
         assert_eq!(plan.targets.len(), 2);
         assert_eq!(plan.targets[1].kind, CompositorRenderTargetKind::Program);
+    }
+
+    #[test]
+    fn compositor_frame_evaluation_maps_nodes_to_targets() {
+        let collection = crate::SceneCollection::default_collection(crate::now_utc());
+        let scene = collection.active_scene().unwrap();
+        let graph = build_compositor_graph(scene);
+        let plan = build_compositor_render_plan(
+            &graph,
+            vec![compositor_render_target(
+                "program-720",
+                "Program 720p",
+                CompositorRenderTargetKind::Program,
+                1280,
+                720,
+                30,
+            )],
+        );
+
+        let frame = evaluate_compositor_frame(&plan, 2);
+
+        assert!(frame.validation.ready, "{:?}", frame.validation.errors);
+        assert_eq!(frame.clock.framerate, 30);
+        assert_eq!(frame.clock.pts_nanos, 66_666_666);
+        assert_eq!(frame.targets.len(), 1);
+        assert_eq!(frame.targets[0].nodes.len(), graph.nodes.len());
+        assert_eq!(frame.targets[0].nodes[0].rect.width, 1280.0);
+        assert_eq!(frame.targets[0].nodes[0].rect.height, 720.0);
     }
 }

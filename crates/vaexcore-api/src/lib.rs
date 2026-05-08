@@ -1674,6 +1674,11 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["data"]["dry_run"], true);
         assert!(body["data"]["steps"].as_array().unwrap().len() >= 2);
+        assert!(body["data"]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["id"] == serde_json::json!("scene.render_runtime")));
         assert_eq!(
             body["data"]["config"]["active_scene"]["id"],
             serde_json::json!("scene-main")

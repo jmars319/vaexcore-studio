@@ -106,6 +106,7 @@ test("compositor graph builder preserves source order and warnings", async () =>
     buildCompositorRenderPlan,
     buildDefaultCompositorRenderTargets,
     createDefaultSceneCollection,
+    evaluateCompositorFrame,
     validateCompositorGraph,
     validateCompositorRenderPlan,
   } = await sharedTypes;
@@ -117,6 +118,7 @@ test("compositor graph builder preserves source order and warnings", async () =>
   );
   const validation = validateCompositorGraph(graph);
   const renderValidation = validateCompositorRenderPlan(renderPlan);
+  const frame = evaluateCompositorFrame(renderPlan, 2);
 
   assert.equal(graph.version, 1);
   assert.equal(graph.scene_id, scene.id);
@@ -139,4 +141,7 @@ test("compositor graph builder preserves source order and warnings", async () =>
     renderPlan.targets.map((target) => target.kind),
     ["preview", "program", "recording"],
   );
+  assert.equal(frame.clock.framerate, 60);
+  assert.equal(frame.targets.length, 3);
+  assert.equal(frame.targets[0].nodes[0].rect.width, 1920);
 });

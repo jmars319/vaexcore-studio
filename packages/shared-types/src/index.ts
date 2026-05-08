@@ -254,6 +254,51 @@ export interface CompositorRenderPlan {
   targets: CompositorRenderTarget[];
 }
 
+export interface CompositorFrameClock {
+  frame_index: number;
+  framerate: number;
+  pts_nanos: number;
+  duration_nanos: number;
+}
+
+export interface CompositorRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface CompositorEvaluatedNode {
+  node_id: string;
+  source_id: string;
+  name: string;
+  role: CompositorNodeRole;
+  status: CompositorNodeStatus;
+  rect: CompositorRect;
+  crop: SceneCrop;
+  rotation_degrees: number;
+  opacity: number;
+  z_index: number;
+}
+
+export interface CompositorRenderedTarget {
+  target_id: string;
+  target_kind: CompositorRenderTargetKind;
+  width: number;
+  height: number;
+  frame_format: CompositorFrameFormat;
+  nodes: CompositorEvaluatedNode[];
+}
+
+export interface CompositorRenderedFrame {
+  renderer: CompositorRendererKind;
+  scene_id: string;
+  scene_name: string;
+  clock: CompositorFrameClock;
+  targets: CompositorRenderedTarget[];
+  validation: CompositorValidation;
+}
+
 export interface CompositorValidation {
   ready: boolean;
   warnings: string[];
@@ -1202,6 +1247,115 @@ export function validateCompositorRenderPlan(
   return {
     ...validation,
     ready: validation.errors.length === 0,
+  };
+}
+
+export function evaluateCompositorFrame(
+  plan: CompositorRenderPlan,
+  frameIndex: number,
+): CompositorRenderedFrame {
+  const validation = validateCompositorRenderPlan(plan);
+  const framerate = plan.targets.find((target) => target.enabled)?.framerate ?? 60;
+  const durationNanos = Math.floor(1_000_000_000 / Math.max(1, framerate));
+  const targets = plan.targets
+    .filter((target) => target.enabled)
+    .map((target) => ({
+      target_id: target.id,
+      target_kind: target.kind,
+      width: target.width,
+      height: target.height,
+      frame_format: target.frame_format,
+      nodes: plan.graph.nodes
+        .filter((node) => node.visible)
+        .map((node) => evaluateNodeForTarget(node, plan.graph.output, target)),
+    }));
+
+  return {
+    renderer: plan.renderer,
+    scene_id: plan.graph.scene_id,
+    scene_name: plan.graph.scene_name,
+    clock: {
+      frame_index: frameIndex,
+      framerate,
+      pts_nanos: frameIndex * durationNanos,
+      duration_nanos: durationNanos,
+    },
+    targets,
+    validation,
+  };
+}
+
+function evaluateNodeForTarget(
+  node: CompositorNode,
+  output: CompositorOutput,
+  target: CompositorRenderTarget,
+): CompositorEvaluatedNode {
+  const { scaleX, scaleY, offsetX, offsetY } = targetMapping(output, target);
+  return {
+    node_id: node.id,
+    source_id: node.source_id,
+    name: node.name,
+    role: node.role,
+    status: node.status,
+    rect: {
+      x: offsetX + node.transform.position.x * scaleX,
+      y: offsetY + node.transform.position.y * scaleY,
+      width: node.transform.size.width * scaleX,
+      height: node.transform.size.height * scaleY,
+    },
+    crop: {
+      top: node.transform.crop.top * scaleY,
+      right: node.transform.crop.right * scaleX,
+      bottom: node.transform.crop.bottom * scaleY,
+      left: node.transform.crop.left * scaleX,
+    },
+    rotation_degrees: node.transform.rotation_degrees,
+    opacity: node.transform.opacity,
+    z_index: node.z_index,
+  };
+}
+
+function targetMapping(
+  output: CompositorOutput,
+  target: CompositorRenderTarget,
+): { scaleX: number; scaleY: number; offsetX: number; offsetY: number } {
+  const sourceWidth = Math.max(1, output.width);
+  const sourceHeight = Math.max(1, output.height);
+  const targetWidth = Math.max(1, target.width);
+  const targetHeight = Math.max(1, target.height);
+
+  if (target.scale_mode === "stretch") {
+    return {
+      scaleX: targetWidth / sourceWidth,
+      scaleY: targetHeight / sourceHeight,
+      offsetX: 0,
+      offsetY: 0,
+    };
+  }
+  if (target.scale_mode === "fill") {
+    const scale = Math.max(targetWidth / sourceWidth, targetHeight / sourceHeight);
+    return {
+      scaleX: scale,
+      scaleY: scale,
+      offsetX: (targetWidth - sourceWidth * scale) / 2,
+      offsetY: (targetHeight - sourceHeight * scale) / 2,
+    };
+  }
+  if (target.scale_mode === "original_size") {
+    return {
+      scaleX: 1,
+      scaleY: 1,
+      offsetX: (targetWidth - sourceWidth) / 2,
+      offsetY: (targetHeight - sourceHeight) / 2,
+    };
+  }
+
+  const scale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
+  return {
+    scaleX: scale,
+    scaleY: scale,
+    offsetX: (targetWidth - sourceWidth * scale) / 2,
+    offsetY: (targetHeight - sourceHeight * scale) / 2,
   };
 }
 

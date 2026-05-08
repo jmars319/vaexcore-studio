@@ -13,11 +13,12 @@ use std::{
 };
 use tokio::sync::Mutex;
 use vaexcore_core::{
-    build_compositor_graph, new_id, validate_compositor_graph, validate_compositor_render_plan,
-    CaptureSourceKind, CaptureSourceSelection, EngineMode, EngineStatus, MediaPipelineConfig,
-    MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep, MediaProfile, PipelineIntent,
-    PipelineStepStatus, PlatformKind, RecordingContainer, RecordingSession, Scene,
-    StreamDestination, StreamSession, StudioEvent, StudioEventKind,
+    build_compositor_graph, evaluate_compositor_frame, new_id, validate_compositor_graph,
+    validate_compositor_render_plan, CaptureSourceKind, CaptureSourceSelection, EngineMode,
+    EngineStatus, MediaPipelineConfig, MediaPipelinePlan, MediaPipelinePlanRequest,
+    MediaPipelineStep, MediaProfile, PipelineIntent, PipelineStepStatus, PlatformKind,
+    RecordingContainer, RecordingSession, Scene, StreamDestination, StreamSession, StudioEvent,
+    StudioEventKind,
 };
 
 mod sidecar;
@@ -493,6 +494,7 @@ fn validate_scene_compositor(
     });
 
     if let Some(render_plan) = render_plan {
+        let rendered_frame = evaluate_compositor_frame(&render_plan, 0);
         let enabled_targets = render_plan
             .targets
             .iter()
@@ -513,6 +515,21 @@ fn validate_scene_compositor(
                     .trim_matches('"'),
                 enabled_targets,
                 render_plan.targets.len()
+            ),
+        });
+        steps.push(MediaPipelineStep {
+            id: "scene.render_runtime".to_string(),
+            label: "Compositor frame runtime".to_string(),
+            status: if rendered_frame.validation.ready {
+                PipelineStepStatus::Ready
+            } else {
+                PipelineStepStatus::Blocked
+            },
+            detail: format!(
+                "Frame {} evaluates {} target(s) at {} fps.",
+                rendered_frame.clock.frame_index,
+                rendered_frame.targets.len(),
+                rendered_frame.clock.framerate
             ),
         });
     }
