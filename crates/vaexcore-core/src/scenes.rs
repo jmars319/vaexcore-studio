@@ -38,6 +38,31 @@ pub enum SceneSourceKind {
     Group,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneSourceFilterKind {
+    ColorCorrection,
+    ChromaKey,
+    CropPad,
+    MaskBlend,
+    Blur,
+    Sharpen,
+    Lut,
+    AudioGain,
+    NoiseGate,
+    Compressor,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SceneSourceFilter {
+    pub id: String,
+    pub name: String,
+    pub kind: SceneSourceFilterKind,
+    pub enabled: bool,
+    pub order: i32,
+    pub config: serde_json::Value,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SceneSource {
     pub id: String,
@@ -51,6 +76,8 @@ pub struct SceneSource {
     pub visible: bool,
     pub locked: bool,
     pub z_index: i32,
+    #[serde(default)]
+    pub filters: Vec<SceneSourceFilter>,
     pub config: serde_json::Value,
 }
 
@@ -358,6 +385,7 @@ impl SceneSource {
             visible: true,
             locked: false,
             z_index,
+            filters: Vec::new(),
             config,
         }
     }
@@ -529,6 +557,39 @@ fn validate_scene_sources(scene: &Scene, scene_path: &str, issues: &mut Vec<Scen
                 "Source opacity must be between 0 and 1.",
             );
         }
+        validate_source_filters(&source.filters, &source_path, issues);
+    }
+}
+
+fn validate_source_filters(
+    filters: &[SceneSourceFilter],
+    source_path: &str,
+    issues: &mut Vec<SceneValidationIssue>,
+) {
+    let mut filter_ids = HashSet::new();
+    for (filter_index, filter) in filters.iter().enumerate() {
+        let filter_path = format!("{source_path}.filters[{filter_index}]");
+        if !filter_ids.insert(filter.id.as_str()) {
+            issue(
+                issues,
+                format!("{filter_path}.id"),
+                format!("Duplicate source filter id \"{}\".", filter.id),
+            );
+        }
+        if filter.id.trim().is_empty() {
+            issue(
+                issues,
+                format!("{filter_path}.id"),
+                "Source filter id is required.",
+            );
+        }
+        if filter.name.trim().is_empty() {
+            issue(
+                issues,
+                format!("{filter_path}.name"),
+                "Source filter name is required.",
+            );
+        }
     }
 }
 
@@ -681,6 +742,24 @@ mod tests {
         let scene = collection.scenes.first_mut().unwrap();
         scene.sources[1].id = scene.sources[0].id.clone();
         scene.sources[0].opacity = 2.0;
+        scene.sources[0].filters = vec![
+            SceneSourceFilter {
+                id: "filter-duplicate".to_string(),
+                name: "Color".to_string(),
+                kind: SceneSourceFilterKind::ColorCorrection,
+                enabled: true,
+                order: 0,
+                config: json!({ "brightness": 0.1 }),
+            },
+            SceneSourceFilter {
+                id: "filter-duplicate".to_string(),
+                name: "Chroma".to_string(),
+                kind: SceneSourceFilterKind::ChromaKey,
+                enabled: false,
+                order: 10,
+                config: json!({ "key_color": "#00ff00" }),
+            },
+        ];
 
         let validation = collection.validation();
 
@@ -693,6 +772,10 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.path.ends_with("opacity")));
+        assert!(validation
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("Duplicate source filter")));
     }
 
     #[test]

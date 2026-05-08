@@ -36,6 +36,27 @@ export type SceneSourceKind =
   | "text"
   | "group";
 
+export type SceneSourceFilterKind =
+  | "color_correction"
+  | "chroma_key"
+  | "crop_pad"
+  | "mask_blend"
+  | "blur"
+  | "sharpen"
+  | "lut"
+  | "audio_gain"
+  | "noise_gate"
+  | "compressor";
+
+export interface SceneSourceFilter {
+  id: string;
+  name: string;
+  kind: SceneSourceFilterKind;
+  enabled: boolean;
+  order: number;
+  config: Record<string, unknown>;
+}
+
 export type SceneSourceAvailabilityState =
   | "available"
   | "permission_required"
@@ -132,6 +153,7 @@ export interface SceneSourceBase<
   visible: boolean;
   locked: boolean;
   z_index: number;
+  filters: SceneSourceFilter[];
   config: Config;
 }
 
@@ -252,6 +274,7 @@ export interface CompositorNode {
   scale_mode: CompositorScaleMode;
   status: CompositorNodeStatus;
   status_detail: string;
+  filters: SceneSourceFilter[];
   config: SceneSourceConfig;
 }
 
@@ -388,6 +411,7 @@ export interface SceneSourceDefaults {
   visible?: boolean;
   locked?: boolean;
   z_index?: number;
+  filters?: SceneSourceFilter[];
   config?: Partial<SceneSourceConfig>;
 }
 
@@ -1021,6 +1045,7 @@ export function createDefaultSceneSource(
     visible: defaults.visible ?? true,
     locked: defaults.locked ?? false,
     z_index: defaults.z_index ?? 0,
+    filters: cloneJson(defaults.filters ?? []),
     config,
   } as SceneSource;
 }
@@ -1607,6 +1632,7 @@ export function buildCompositorGraph(scene: Scene): CompositorGraph {
         scale_mode: "stretch",
         status,
         status_detail: detail,
+        filters: cloneJson(source.filters ?? []),
         config: source.config,
       } satisfies CompositorNode;
     });
@@ -2305,6 +2331,32 @@ function validateSceneSources(
         message: "Source opacity must be between 0 and 1.",
       });
     }
+    validateSceneSourceFilters(source.filters ?? [], sourcePath, issues);
+  });
+}
+
+function validateSceneSourceFilters(
+  filters: SceneSourceFilter[],
+  sourcePath: string,
+  issues: SceneValidationIssue[],
+) {
+  const filterIds = new Set<string>();
+  filters.forEach((filter, filterIndex) => {
+    const filterPath = `${sourcePath}.filters[${filterIndex}]`;
+    if (filterIds.has(filter.id)) {
+      issues.push({
+        path: `${filterPath}.id`,
+        message: `Duplicate source filter id "${filter.id}".`,
+      });
+    }
+    filterIds.add(filter.id);
+    if (!filter.id.trim()) {
+      issues.push({ path: `${filterPath}.id`, message: "Source filter id is required." });
+    }
+    if (!filter.name.trim()) {
+      issues.push({ path: `${filterPath}.name`, message: "Source filter name is required." });
+    }
+    validateFiniteNumber(filter.order, `${filterPath}.order`, issues);
   });
 }
 

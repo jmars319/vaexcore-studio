@@ -88,6 +88,7 @@ test("scene source defaults cover supported source kinds", async () => {
     assert.equal(source.visible, true);
     assert.equal(source.locked, false);
     assert.equal(source.opacity, 1);
+    assert.deepEqual(source.filters, []);
     assert.ok(source.config);
   }
 });
@@ -100,6 +101,24 @@ test("scene collection validation catches duplicate ids and invalid transforms",
   scene.sources[1].id = scene.sources[0].id;
   scene.sources[0].size.width = 0;
   scene.sources[0].opacity = 1.5;
+  scene.sources[0].filters = [
+    {
+      id: "filter-duplicate",
+      name: "Color",
+      kind: "color_correction",
+      enabled: true,
+      order: 0,
+      config: { brightness: 0.1 },
+    },
+    {
+      id: "filter-duplicate",
+      name: "Chroma",
+      kind: "chroma_key",
+      enabled: false,
+      order: 10,
+      config: { key_color: "#00ff00" },
+    },
+  ];
   collection.active_scene_id = "missing-scene";
   collection.active_transition_id = "missing-transition";
   collection.transitions[0].id = collection.transitions[1].id;
@@ -132,6 +151,10 @@ test("scene collection validation catches duplicate ids and invalid transforms",
     result.issues.map((issue) => issue.path).join("\n"),
     /opacity/,
   );
+  assert.match(
+    result.issues.map((issue) => issue.message).join("\n"),
+    /Duplicate source filter/,
+  );
 });
 
 test("compositor graph builder preserves source order and warnings", async () => {
@@ -162,6 +185,7 @@ test("compositor graph builder preserves source order and warnings", async () =>
   assert.equal(graph.scene_id, scene.id);
   assert.equal(graph.output.width, scene.canvas.width);
   assert.equal(graph.nodes.length, scene.sources.length);
+  assert.deepEqual(graph.nodes[0].filters, scene.sources[0].filters);
   assert.deepEqual(
     graph.nodes.map((node) => node.source_id),
     [

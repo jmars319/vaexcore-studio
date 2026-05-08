@@ -24,6 +24,10 @@ The shared contracts also define:
 - `MediaPipelineValidation`
 
 These contracts let the UI, local API, sidecar, and future external tools agree on source selection and pipeline readiness before any real capture backend is started.
+Scene sources also carry ordered filter chains for effects such as color
+correction, chroma key, crop/pad, blur, LUTs, noise gates, and compressors.
+The dry-run compositor preserves those chains in its graph, but no real filter
+execution is started yet.
 
 `CaptureFramePlan` maps visible capture-backed scene sources to the video or
 audio frame stream the compositor will eventually consume. Each binding records

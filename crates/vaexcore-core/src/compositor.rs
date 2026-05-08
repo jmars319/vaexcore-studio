@@ -2,7 +2,9 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Scene, SceneCrop, ScenePoint, SceneSize, SceneSource, SceneSourceKind};
+use crate::{
+    Scene, SceneCrop, ScenePoint, SceneSize, SceneSource, SceneSourceFilter, SceneSourceKind,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -70,6 +72,7 @@ pub struct CompositorNode {
     pub scale_mode: CompositorScaleMode,
     pub status: CompositorNodeStatus,
     pub status_detail: String,
+    pub filters: Vec<SceneSourceFilter>,
     pub config: serde_json::Value,
 }
 
@@ -759,6 +762,7 @@ fn build_compositor_node(source: &SceneSource) -> CompositorNode {
         scale_mode: CompositorScaleMode::Stretch,
         status,
         status_detail,
+        filters: source.filters.clone(),
         config: source.config.clone(),
     }
 }

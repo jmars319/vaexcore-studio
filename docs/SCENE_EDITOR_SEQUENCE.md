@@ -51,7 +51,10 @@ foundation to OBS-class scene editing and output.
 21. Crop, bounds modes, fit/fill/stretch/center controls: started with numeric
     crop fields, reset crop, fit-to-canvas, and center controls; source bounds
     modes and fit/fill/stretch policies are not started.
-22. Source filters and effects: not started.
+22. Source filters and effects: started with serializable per-source filter
+    chains, supported filter kinds, validation, and compositor graph
+    propagation. Real video/audio filter rendering and Designer filter editing
+    UX are not started.
 23. Scene transitions and transition preview: started with persisted transition
     contracts, validation, and Designer controls; live transition preview and
     renderer application are not started.
