@@ -39,10 +39,13 @@ foundation to OBS-class scene editing and output.
     rendering; backend text rasterization is not started.
 19. Groups, nesting, and parent transforms: started with group preview rendering;
     nested transform evaluation is not started.
-20. Full editor interactions: undo/redo started for scene collection edits;
-    multi-select, snapping, rotate handles, align/distribute, and copy/paste are
-    not started.
-21. Crop, bounds modes, fit/fill/stretch/center controls: not started.
+20. Full editor interactions: started with drag/resize, keyboard nudging,
+    undo/redo, transform command buttons, align-to-canvas controls, and
+    edge/center snapping guides; multi-select, rotate handles, distribute, and
+    copy/paste are not started.
+21. Crop, bounds modes, fit/fill/stretch/center controls: started with numeric
+    crop fields, reset crop, fit-to-canvas, and center controls; source bounds
+    modes and fit/fill/stretch policies are not started.
 22. Source filters and effects: not started.
 23. Scene transitions and transition preview: not started.
 24. Scene collection import/export/backup: not started.
