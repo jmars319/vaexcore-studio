@@ -99,3 +99,28 @@ test("scene collection validation catches duplicate ids and invalid transforms",
     /opacity/,
   );
 });
+
+test("compositor graph builder preserves source order and warnings", async () => {
+  const { buildCompositorGraph, createDefaultSceneCollection, validateCompositorGraph } =
+    await sharedTypes;
+  const scene = createDefaultSceneCollection("2026-05-08T12:00:00.000Z").scenes[0];
+  const graph = buildCompositorGraph(scene);
+  const validation = validateCompositorGraph(graph);
+
+  assert.equal(graph.version, 1);
+  assert.equal(graph.scene_id, scene.id);
+  assert.equal(graph.output.width, scene.canvas.width);
+  assert.equal(graph.nodes.length, scene.sources.length);
+  assert.deepEqual(
+    graph.nodes.map((node) => node.source_id),
+    [
+      "source-main-display",
+      "source-camera-placeholder",
+      "source-mic-meter",
+      "source-alert-overlay",
+      "source-title-text",
+    ],
+  );
+  assert.equal(validation.ready, true);
+  assert.ok(validation.warnings.length >= 1);
+});

@@ -1,4 +1,5 @@
 pub mod capture;
+pub mod compositor;
 pub mod events;
 pub mod pipeline;
 pub mod profiles;
@@ -11,6 +12,11 @@ pub mod status;
 pub use capture::{
     default_capture_sources, CaptureSourceCandidate, CaptureSourceInventory, CaptureSourceKind,
     CaptureSourceSelection,
+};
+pub use compositor::{
+    build_compositor_graph, validate_compositor_graph, CompositorBlendMode, CompositorGraph,
+    CompositorNode, CompositorNodeRole, CompositorNodeStatus, CompositorOutput,
+    CompositorScaleMode, CompositorTransform, CompositorValidation,
 };
 pub use events::{StudioEvent, StudioEventKind};
 pub use pipeline::{

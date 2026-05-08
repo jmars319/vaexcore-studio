@@ -400,7 +400,9 @@ nav {
 .designer-list-item strong,
 .designer-list-item span {
   display: block;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .designer-list-item span {
@@ -409,7 +411,8 @@ nav {
 }
 
 .source-stack-item {
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
 }
 
 .source-add-controls {
@@ -440,12 +443,16 @@ nav {
   color: var(--cyan);
 }
 
+.source-stack-main > div {
+  min-width: 0;
+}
+
 .source-stack-actions {
   display: flex;
   align-items: center;
   gap: 5px;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .source-stack-select-button {
@@ -487,6 +494,14 @@ nav {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
 }
 
+.designer-preview-render-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
 .designer-source-box {
   position: absolute;
   display: grid;
@@ -498,7 +513,7 @@ nav {
   overflow: hidden;
   border: 1px solid rgba(34, 216, 255, 0.56);
   border-radius: 8px;
-  background: rgba(18, 22, 42, 0.82);
+  background: rgba(10, 14, 28, 0.18);
   color: var(--text);
   text-align: left;
   transform-origin: center;
@@ -576,7 +591,7 @@ nav {
 
 .designer-preview-meta {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-top: 12px;
 }
@@ -584,6 +599,16 @@ nav {
 .designer-preview-meta .key-value,
 .designer-inspector .key-value {
   margin-bottom: 0;
+}
+
+.designer-preview-meta .key-value {
+  min-width: 0;
+}
+
+.designer-preview-meta .key-value strong {
+  overflow-wrap: anywhere;
+  font-size: 16px;
+  line-height: 1.25;
 }
 
 .settings-grid {

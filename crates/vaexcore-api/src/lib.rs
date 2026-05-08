@@ -1678,6 +1678,10 @@ mod tests {
             body["data"]["config"]["active_scene"]["id"],
             serde_json::json!("scene-main")
         );
+        assert_eq!(
+            body["data"]["config"]["compositor_graph"]["scene_id"],
+            serde_json::json!("scene-main")
+        );
     }
 
     #[tokio::test]
@@ -1742,6 +1746,10 @@ mod tests {
         assert_eq!(config_json["dry_run"], true);
         assert_eq!(config_json["pipeline"]["version"], 1);
         assert_eq!(config_json["pipeline"]["active_scene"]["id"], "scene-main");
+        assert_eq!(
+            config_json["pipeline"]["compositor_graph"]["scene_id"],
+            "scene-main"
+        );
         assert!(config_json["pipeline"]["capture_sources"]
             .as_array()
             .unwrap()

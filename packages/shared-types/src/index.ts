@@ -173,6 +173,64 @@ export interface SceneValidationResult {
   issues: SceneValidationIssue[];
 }
 
+export type CompositorNodeRole = "video" | "audio" | "overlay" | "text" | "group";
+
+export type CompositorNodeStatus =
+  | "ready"
+  | "placeholder"
+  | "permission_required"
+  | "unavailable"
+  | "hidden";
+
+export type CompositorBlendMode = "normal";
+
+export type CompositorScaleMode = "stretch" | "fit" | "fill" | "original_size";
+
+export interface CompositorOutput {
+  width: number;
+  height: number;
+  background_color: string;
+}
+
+export interface CompositorTransform {
+  position: ScenePoint;
+  size: SceneSize;
+  crop: SceneCrop;
+  rotation_degrees: number;
+  opacity: number;
+}
+
+export interface CompositorNode {
+  id: string;
+  source_id: string;
+  name: string;
+  source_kind: SceneSourceKind;
+  role: CompositorNodeRole;
+  transform: CompositorTransform;
+  visible: boolean;
+  locked: boolean;
+  z_index: number;
+  blend_mode: CompositorBlendMode;
+  scale_mode: CompositorScaleMode;
+  status: CompositorNodeStatus;
+  status_detail: string;
+  config: SceneSourceConfig;
+}
+
+export interface CompositorGraph {
+  version: number;
+  scene_id: string;
+  scene_name: string;
+  output: CompositorOutput;
+  nodes: CompositorNode[];
+}
+
+export interface CompositorValidation {
+  ready: boolean;
+  warnings: string[];
+  errors: string[];
+}
+
 export interface SceneSourceDefaults {
   id?: string;
   name?: string;
@@ -506,6 +564,7 @@ export interface MediaPipelineConfig {
   intent: PipelineIntent;
   capture_sources: CaptureSourceSelection[];
   active_scene?: Scene | null;
+  compositor_graph?: CompositorGraph | null;
   recording_profile: MediaProfile | null;
   stream_destinations: StreamDestination[];
 }
@@ -802,6 +861,196 @@ export function normalizeSceneCollection(
   };
 }
 
+export function buildCompositorGraph(scene: Scene): CompositorGraph {
+  const nodes = [...scene.sources]
+    .sort((left, right) => left.z_index - right.z_index || left.id.localeCompare(right.id))
+    .map((source) => {
+      const { status, detail } = compositorNodeStatus(source);
+      return {
+        id: `node-${source.id}`,
+        source_id: source.id,
+        name: source.name,
+        source_kind: source.kind,
+        role: compositorNodeRole(source.kind),
+        transform: {
+          position: { ...source.position },
+          size: { ...source.size },
+          crop: { ...source.crop },
+          rotation_degrees: source.rotation_degrees,
+          opacity: source.opacity,
+        },
+        visible: source.visible,
+        locked: source.locked,
+        z_index: source.z_index,
+        blend_mode: "normal",
+        scale_mode: "stretch",
+        status,
+        status_detail: detail,
+        config: source.config,
+      } satisfies CompositorNode;
+    });
+
+  return {
+    version: 1,
+    scene_id: scene.id,
+    scene_name: scene.name,
+    output: {
+      width: scene.canvas.width,
+      height: scene.canvas.height,
+      background_color: scene.canvas.background_color,
+    },
+    nodes,
+  };
+}
+
+function compositorNodeRole(kind: SceneSourceKind): CompositorNodeRole {
+  switch (kind) {
+    case "display":
+    case "window":
+    case "camera":
+      return "video";
+    case "audio_meter":
+      return "audio";
+    case "image_media":
+    case "browser_overlay":
+      return "overlay";
+    case "text":
+      return "text";
+    case "group":
+      return "group";
+  }
+}
+
+function compositorNodeStatus(source: SceneSource): {
+  status: CompositorNodeStatus;
+  detail: string;
+} {
+  if (!source.visible) {
+    return { status: "hidden", detail: "Source is hidden in the active scene." };
+  }
+
+  const availability =
+    "availability" in source.config ? source.config.availability : null;
+  if (availability) {
+    if (availability.state === "available") {
+      return { status: "ready", detail: availability.detail };
+    }
+    if (availability.state === "permission_required") {
+      return { status: "permission_required", detail: availability.detail };
+    }
+    if (availability.state === "unavailable") {
+      return { status: "unavailable", detail: availability.detail };
+    }
+    return { status: "placeholder", detail: availability.detail };
+  }
+
+  switch (source.kind) {
+    case "display":
+      return source.config.display_id
+        ? { status: "ready", detail: "Display capture target configured." }
+        : { status: "placeholder", detail: "No display capture target has been assigned." };
+    case "window":
+      return source.config.window_id
+        ? { status: "ready", detail: "Window capture target configured." }
+        : { status: "placeholder", detail: "No window capture target has been assigned." };
+    case "camera":
+      return source.config.device_id
+        ? { status: "ready", detail: "Camera capture target configured." }
+        : { status: "placeholder", detail: "No camera capture target has been assigned." };
+    case "audio_meter":
+      return source.config.device_id
+        ? { status: "ready", detail: "Audio device configured." }
+        : { status: "placeholder", detail: "No audio device has been assigned." };
+    case "image_media":
+      return source.config.asset_uri
+        ? { status: "ready", detail: "Media asset configured." }
+        : { status: "placeholder", detail: "No media asset has been selected." };
+    case "browser_overlay":
+      return source.config.url
+        ? { status: "ready", detail: "Browser overlay URL configured." }
+        : { status: "placeholder", detail: "No browser overlay URL has been configured." };
+    case "text":
+      return source.config.text.trim()
+        ? { status: "ready", detail: "Text content configured." }
+        : { status: "placeholder", detail: "Text source is empty." };
+    case "group":
+      return source.config.child_source_ids.length
+        ? {
+            status: "ready",
+            detail: `${source.config.child_source_ids.length} child source(s) grouped.`,
+          }
+        : { status: "placeholder", detail: "Group has no child sources." };
+  }
+}
+
+export function validateCompositorGraph(graph: CompositorGraph): CompositorValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const nodeIds = new Set<string>();
+  const visibleNodes = graph.nodes.filter((node) => node.visible);
+
+  if (!Number.isInteger(graph.version) || graph.version < 1) {
+    errors.push("Compositor graph version must be a positive integer.");
+  }
+  if (!graph.scene_id.trim()) {
+    errors.push("Compositor graph scene id is required.");
+  }
+  if (!graph.scene_name.trim()) {
+    errors.push("Compositor graph scene name is required.");
+  }
+  validateGraphPositiveNumber(graph.output.width, "output.width", errors);
+  validateGraphPositiveNumber(graph.output.height, "output.height", errors);
+  if (graph.nodes.length === 0) {
+    errors.push("Compositor graph must contain at least one node.");
+  }
+  if (visibleNodes.length === 0) {
+    errors.push("Compositor graph must contain at least one visible node.");
+  }
+
+  graph.nodes.forEach((node) => {
+    if (nodeIds.has(node.id)) {
+      errors.push(`Duplicate compositor node id "${node.id}".`);
+    }
+    nodeIds.add(node.id);
+    if (!node.source_id.trim()) {
+      errors.push(`Compositor node "${node.id}" has no source id.`);
+    }
+    if (!node.name.trim()) {
+      errors.push(`Compositor node "${node.id}" has no name.`);
+    }
+    validateGraphFiniteNumber(node.transform.position.x, `${node.id}.position.x`, errors);
+    validateGraphFiniteNumber(node.transform.position.y, `${node.id}.position.y`, errors);
+    validateGraphPositiveNumber(node.transform.size.width, `${node.id}.size.width`, errors);
+    validateGraphPositiveNumber(node.transform.size.height, `${node.id}.size.height`, errors);
+    validateGraphNonNegativeNumber(node.transform.crop.top, `${node.id}.crop.top`, errors);
+    validateGraphNonNegativeNumber(node.transform.crop.right, `${node.id}.crop.right`, errors);
+    validateGraphNonNegativeNumber(node.transform.crop.bottom, `${node.id}.crop.bottom`, errors);
+    validateGraphNonNegativeNumber(node.transform.crop.left, `${node.id}.crop.left`, errors);
+    validateGraphFiniteNumber(node.transform.rotation_degrees, `${node.id}.rotation`, errors);
+    if (
+      !Number.isFinite(node.transform.opacity) ||
+      node.transform.opacity < 0 ||
+      node.transform.opacity > 1
+    ) {
+      errors.push(`${node.id}.opacity must be between 0 and 1.`);
+    }
+
+    if (node.status === "placeholder") {
+      warnings.push(`${node.name} is using a placeholder: ${node.status_detail}`);
+    } else if (node.status === "permission_required") {
+      warnings.push(`${node.name} requires permission: ${node.status_detail}`);
+    } else if (node.status === "unavailable") {
+      warnings.push(`${node.name} is unavailable: ${node.status_detail}`);
+    }
+  });
+
+  return {
+    ready: errors.length === 0,
+    warnings,
+    errors,
+  };
+}
+
 export function validateSceneCollection(
   collection: SceneCollection,
 ): SceneValidationResult {
@@ -890,6 +1139,24 @@ function validateSceneSources(
       });
     }
   });
+}
+
+function validateGraphFiniteNumber(value: number, path: string, errors: string[]) {
+  if (!Number.isFinite(value)) {
+    errors.push(`${path} must be a finite number.`);
+  }
+}
+
+function validateGraphPositiveNumber(value: number, path: string, errors: string[]) {
+  if (!Number.isFinite(value) || value <= 0) {
+    errors.push(`${path} must be greater than 0.`);
+  }
+}
+
+function validateGraphNonNegativeNumber(value: number, path: string, errors: string[]) {
+  if (!Number.isFinite(value) || value < 0) {
+    errors.push(`${path} must be 0 or greater.`);
+  }
 }
 
 function validateFiniteNumber(

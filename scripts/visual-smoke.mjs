@@ -9,6 +9,7 @@ const baseUrl = "http://127.0.0.1:1420";
 const outputDir = join(root, ".local", "visual-smoke");
 const targets = [
   ["control-room", "/?section=dashboard"],
+  ["designer", "/?section=designer"],
   ["broadcast-setup", "/?section=controls"],
   ["suite", "/?section=apps"],
   ["settings", "/?window=settings"]

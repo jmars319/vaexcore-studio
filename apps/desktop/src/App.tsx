@@ -51,6 +51,8 @@ import type {
   CaptureSourceInventory,
   CaptureSourceKind,
   CaptureSourceSelection,
+  CompositorGraph,
+  CompositorNode,
   ConnectedClient,
   HealthResponse,
   Marker,
@@ -76,10 +78,12 @@ import type {
   StreamDestinationInput,
 } from "@vaexcore/shared-types";
 import {
+  buildCompositorGraph,
   createDefaultSceneCollection,
   createDefaultSceneSource,
   platformLabels,
   sceneSourceKindLabels,
+  validateCompositorGraph,
   validateSceneCollection,
 } from "@vaexcore/shared-types";
 import {
@@ -506,6 +510,10 @@ function App() {
     sceneCollection.scenes.find(
       (scene) => scene.id === sceneCollection.active_scene_id,
     ) ?? sceneCollection.scenes[0];
+  const activeCompositorGraph = useMemo(
+    () => buildCompositorGraph(activeDesignerScene),
+    [activeDesignerScene],
+  );
   const selectedDesignerSource =
     activeDesignerScene?.sources.find(
       (source) => source.id === selectedSceneSourceId,
@@ -1183,6 +1191,7 @@ function App() {
             onDuplicateSource={handleDuplicateDesignerSource}
             onRenameScene={handleRenameDesignerScene}
             scene={activeDesignerScene}
+            graph={activeCompositorGraph}
             saveStatus={sceneSaveStatus}
             selectedSource={selectedDesignerSource}
             selectedSourceId={selectedSceneSourceId}
@@ -1485,6 +1494,7 @@ function DesignerPage(props: {
   onDuplicateScene: (sceneId: string) => void;
   onDuplicateSource: (sceneId: string, sourceId: string) => void;
   onRenameScene: (sceneId: string, name: string) => void;
+  graph: CompositorGraph;
   scene: Scene;
   saveStatus: string | null;
   selectedSource: SceneSource | null;
@@ -1504,10 +1514,20 @@ function DesignerPage(props: {
   ) => void;
 }) {
   const validation = validateSceneCollection(props.collection);
+  const graphValidation = validateCompositorGraph(props.graph);
   const sourceStack = sortedSceneSources(props.scene);
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const renderCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [dragState, setDragState] = useState<DesignerDragState | null>(null);
   const [newSourceKind, setNewSourceKind] = useState<SceneSourceKind>("display");
+
+  useEffect(() => {
+    drawCompositorPreview(
+      renderCanvasRef.current,
+      props.graph,
+      props.selectedSourceId,
+    );
+  }, [props.graph, props.selectedSourceId]);
 
   function beginSourceDrag(
     event: ReactPointerEvent,
@@ -1768,6 +1788,11 @@ function DesignerPage(props: {
               <Pill tone={validation.ok ? "green" : "amber"}>
                 {validation.ok ? "Valid" : `${validation.issues.length} issues`}
               </Pill>
+              <Pill tone={graphValidation.ready ? "green" : "red"}>
+                {graphValidation.ready
+                  ? `${props.graph.nodes.length} graph nodes`
+                  : "Graph blocked"}
+              </Pill>
               {props.saveStatus && (
                 <Pill tone={props.dirty ? "amber" : "green"}>
                   {props.saveStatus}
@@ -1798,6 +1823,13 @@ function DesignerPage(props: {
               backgroundColor: props.scene.canvas.background_color,
             }}
           >
+            <canvas
+              aria-label="Compositor preview render"
+              className="designer-preview-render-canvas"
+              height={props.graph.output.height}
+              ref={renderCanvasRef}
+              width={props.graph.output.width}
+            />
             {sortedSceneSources(props.scene, "asc").map((source) => (
               <div
                 className={[
@@ -1871,6 +1903,20 @@ function DesignerPage(props: {
           />
           <KeyValue label="Collection" value={props.collection.name} />
           <KeyValue label="Updated" value={formatSuiteTimestamp(props.collection.updated_at)} />
+          <KeyValue
+            label="Graph"
+            value={`${props.graph.nodes.filter((node) => node.visible).length}/${props.graph.nodes.length} visible`}
+          />
+          <KeyValue
+            label="Graph Status"
+            value={
+              graphValidation.ready
+                ? graphValidation.warnings.length
+                  ? `${graphValidation.warnings.length} warnings`
+                  : "ready"
+                : `${graphValidation.errors.length} errors`
+            }
+          />
         </div>
       </section>
 
@@ -3196,6 +3242,123 @@ function sortedSceneSources(
   );
 }
 
+function drawCompositorPreview(
+  canvas: HTMLCanvasElement | null,
+  graph: CompositorGraph,
+  selectedSourceId: string,
+) {
+  if (!canvas) return;
+  const context = canvas.getContext("2d");
+  if (!context) return;
+
+  canvas.width = Math.max(1, graph.output.width);
+  canvas.height = Math.max(1, graph.output.height);
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = graph.output.background_color || "#050711";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  context.save();
+  context.strokeStyle = "rgba(255, 255, 255, 0.06)";
+  context.lineWidth = 1;
+  const gridSize = Math.max(80, Math.round(graph.output.width / 24));
+  for (let x = gridSize; x < graph.output.width; x += gridSize) {
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, graph.output.height);
+    context.stroke();
+  }
+  for (let y = gridSize; y < graph.output.height; y += gridSize) {
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(graph.output.width, y);
+    context.stroke();
+  }
+  context.restore();
+
+  graph.nodes
+    .filter((node) => node.visible)
+    .forEach((node) => drawCompositorNode(context, graph, node, selectedSourceId));
+}
+
+function drawCompositorNode(
+  context: CanvasRenderingContext2D,
+  graph: CompositorGraph,
+  node: CompositorNode,
+  selectedSourceId: string,
+) {
+  const width = Math.max(1, node.transform.size.width);
+  const height = Math.max(1, node.transform.size.height);
+  const x = node.transform.position.x;
+  const y = node.transform.position.y;
+  const selected = node.source_id === selectedSourceId;
+
+  context.save();
+  context.translate(x + width / 2, y + height / 2);
+  context.rotate((node.transform.rotation_degrees * Math.PI) / 180);
+  context.globalAlpha = clamp(node.transform.opacity, 0, 1);
+  context.fillStyle = compositorNodeFill(node);
+  context.strokeStyle = selected ? "#39d9ff" : compositorNodeStroke(node);
+  context.lineWidth = selected ? 6 : 3;
+  context.fillRect(-width / 2, -height / 2, width, height);
+  context.strokeRect(-width / 2, -height / 2, width, height);
+
+  if (node.status !== "ready") {
+    context.strokeStyle = "rgba(255, 255, 255, 0.16)";
+    context.lineWidth = 2;
+    const spacing = Math.max(28, Math.min(80, width / 8));
+    for (let offset = -height; offset < width; offset += spacing) {
+      context.beginPath();
+      context.moveTo(-width / 2 + offset, height / 2);
+      context.lineTo(-width / 2 + offset + height, -height / 2);
+      context.stroke();
+    }
+  }
+
+  const labelInset = Math.max(14, Math.min(28, width * 0.04));
+  const labelSize = Math.max(22, Math.min(46, height * 0.12));
+  context.globalAlpha = 1;
+  context.fillStyle = "#f4f8ff";
+  context.font = `700 ${labelSize}px Inter, system-ui, sans-serif`;
+  context.textBaseline = "top";
+  context.fillText(
+    node.name,
+    -width / 2 + labelInset,
+    -height / 2 + labelInset,
+    Math.max(48, width - labelInset * 2),
+  );
+  context.font = `500 ${Math.max(16, labelSize * 0.58)}px Inter, system-ui, sans-serif`;
+  context.fillStyle = "rgba(244, 248, 255, 0.72)";
+  context.fillText(
+    compositorNodeLabel(node, graph),
+    -width / 2 + labelInset,
+    -height / 2 + labelInset + labelSize + 8,
+    Math.max(48, width - labelInset * 2),
+  );
+  context.restore();
+}
+
+function compositorNodeFill(node: CompositorNode): string {
+  if (node.role === "video") return "rgba(36, 89, 204, 0.62)";
+  if (node.role === "audio") return "rgba(33, 180, 145, 0.58)";
+  if (node.role === "text") return "rgba(188, 78, 230, 0.55)";
+  if (node.role === "group") return "rgba(130, 145, 175, 0.42)";
+  return "rgba(207, 132, 42, 0.52)";
+}
+
+function compositorNodeStroke(node: CompositorNode): string {
+  if (node.status === "permission_required") return "rgba(255, 210, 122, 0.86)";
+  if (node.status === "unavailable") return "rgba(255, 105, 128, 0.82)";
+  if (node.status === "placeholder") return "rgba(170, 188, 214, 0.76)";
+  return "rgba(255, 255, 255, 0.28)";
+}
+
+function compositorNodeLabel(node: CompositorNode, graph: CompositorGraph): string {
+  if (node.status !== "ready") return node.status_detail;
+  return `${node.source_kind} - ${Math.round(node.transform.size.width)}x${Math.round(
+    node.transform.size.height,
+  )} on ${graph.output.width}x${graph.output.height}`;
+}
+
 function sceneSourcePreviewStyle(
   source: SceneSource,
   scene: Scene,
@@ -3214,6 +3377,10 @@ function sceneSourcePreviewStyle(
     transform: `rotate(${source.rotation_degrees}deg)`,
     zIndex: source.z_index,
   };
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function sourceConfigSummary(source: SceneSource): string {

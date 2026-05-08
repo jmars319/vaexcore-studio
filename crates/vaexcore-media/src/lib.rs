@@ -13,10 +13,11 @@ use std::{
 };
 use tokio::sync::Mutex;
 use vaexcore_core::{
-    new_id, CaptureSourceKind, CaptureSourceSelection, EngineMode, EngineStatus,
-    MediaPipelineConfig, MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep,
-    MediaProfile, PipelineIntent, PipelineStepStatus, PlatformKind, RecordingContainer,
-    RecordingSession, Scene, StreamDestination, StreamSession, StudioEvent, StudioEventKind,
+    build_compositor_graph, new_id, validate_compositor_graph, CaptureSourceKind,
+    CaptureSourceSelection, EngineMode, EngineStatus, MediaPipelineConfig, MediaPipelinePlan,
+    MediaPipelinePlanRequest, MediaPipelineStep, MediaProfile, PipelineIntent, PipelineStepStatus,
+    PlatformKind, RecordingContainer, RecordingSession, Scene, StreamDestination, StreamSession,
+    StudioEvent, StudioEventKind,
 };
 
 mod sidecar;
@@ -439,7 +440,11 @@ fn validate_scene_compositor(
     warnings: &mut Vec<String>,
     errors: &mut Vec<String>,
 ) {
-    let Some(scene) = &config.active_scene else {
+    let graph = config
+        .compositor_graph
+        .clone()
+        .or_else(|| config.active_scene.as_ref().map(build_compositor_graph));
+    let Some(graph) = graph else {
         warnings.push(
             "pipeline has no active scene; capture sources will be used directly".to_string(),
         );
@@ -452,38 +457,31 @@ fn validate_scene_compositor(
         return;
     };
 
-    let visible_sources = scene.sources.iter().filter(|source| source.visible).count();
-    let validation = vaexcore_core::validate_scene_collection(&vaexcore_core::SceneCollection {
-        id: "pipeline-validation".to_string(),
-        name: "Pipeline Validation".to_string(),
-        version: 1,
-        active_scene_id: scene.id.clone(),
-        scenes: vec![scene.clone()],
-        created_at: Utc::now(),
-        updated_at: Utc::now(),
-    });
+    let validation = validate_compositor_graph(&graph);
+    let visible_nodes = graph.nodes.iter().filter(|node| node.visible).count();
+    let total_nodes = graph.nodes.len();
 
-    if !validation.ok {
-        errors.extend(
-            validation
-                .issues
-                .iter()
-                .map(|issue| format!("{}: {}", issue.path, issue.message)),
-        );
-    }
+    warnings.extend(validation.warnings.iter().cloned());
+    errors.extend(validation.errors.iter().cloned());
 
     steps.push(MediaPipelineStep {
         id: "scene.compositor".to_string(),
         label: "Scene compositor".to_string(),
-        status: if validation.ok {
+        status: if !validation.ready {
+            PipelineStepStatus::Blocked
+        } else if validation.warnings.is_empty() {
             PipelineStepStatus::Ready
         } else {
-            PipelineStepStatus::Blocked
+            PipelineStepStatus::Warning
         },
-        detail: if validation.ok {
+        detail: if validation.ready {
             format!(
-                "{} at {}x{} with {} visible source(s).",
-                scene.name, scene.canvas.width, scene.canvas.height, visible_sources
+                "{} graph at {}x{} with {}/{} visible node(s).",
+                graph.scene_name,
+                graph.output.width,
+                graph.output.height,
+                visible_nodes,
+                total_nodes
             )
         } else {
             "Active scene has invalid compositor geometry.".to_string()

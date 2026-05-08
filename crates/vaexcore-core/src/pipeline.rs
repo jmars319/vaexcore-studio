@@ -1,4 +1,7 @@
-use crate::{CaptureSourceSelection, MediaProfile, Scene, StreamDestination};
+use crate::{
+    build_compositor_graph, CaptureSourceSelection, CompositorGraph, MediaProfile, Scene,
+    StreamDestination,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -17,6 +20,8 @@ pub struct MediaPipelineConfig {
     pub capture_sources: Vec<CaptureSourceSelection>,
     #[serde(default)]
     pub active_scene: Option<Scene>,
+    #[serde(default)]
+    pub compositor_graph: Option<CompositorGraph>,
     pub recording_profile: Option<MediaProfile>,
     pub stream_destinations: Vec<StreamDestination>,
 }
@@ -68,12 +73,15 @@ pub struct MediaPipelineValidation {
 
 impl MediaPipelinePlanRequest {
     pub fn into_config(self) -> MediaPipelineConfig {
+        let compositor_graph = self.active_scene.as_ref().map(build_compositor_graph);
+
         MediaPipelineConfig {
             version: 1,
             dry_run: self.dry_run,
             intent: self.intent,
             capture_sources: self.capture_sources,
             active_scene: self.active_scene,
+            compositor_graph,
             recording_profile: self.recording_profile,
             stream_destinations: self.stream_destinations,
         }
