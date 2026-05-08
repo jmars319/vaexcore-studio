@@ -4231,7 +4231,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "vaexcore-studio-desktop"
+name = "vaexcore-studio"
 version = "0.1.0"
 dependencies = [
  "chrono",

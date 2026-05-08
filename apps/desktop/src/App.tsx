@@ -203,6 +203,7 @@ function App() {
   const [settingsForm, setSettingsForm] =
     useState<AppSettings>(defaultAppSettings);
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
+  const [captureSourceSaving, setCaptureSourceSaving] = useState(false);
   const [mediaRunnerInfo, setMediaRunnerInfo] =
     useState<MediaRunnerInfo | null>(null);
   const [preflight, setPreflight] = useState<PreflightSnapshot | null>(null);
@@ -656,6 +657,32 @@ function App() {
     }
   }
 
+  async function handleCaptureSourceToggle(
+    candidate: CaptureSourceCandidate,
+    enabled: boolean,
+  ) {
+    const nextSettings = updateSettingsCaptureSource(
+      settingsSnapshot?.settings ?? settingsForm,
+      candidate,
+      enabled,
+    );
+    setSettingsForm(nextSettings);
+    setCaptureSourceSaving(true);
+    try {
+      const snapshot = await saveAppSettings(nextSettings);
+      applySettingsSnapshot(snapshot);
+      await refreshCaptureContext();
+      loadPreflightSnapshot().then(setPreflight).catch(() => undefined);
+      setError(null);
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Capture source save failed",
+      );
+    } finally {
+      setCaptureSourceSaving(false);
+    }
+  }
+
   async function handleRegenerateApiToken() {
     try {
       const snapshot = await regenerateApiToken();
@@ -845,8 +872,11 @@ function App() {
       case "controls":
         return (
           <ControlsPage
+            captureInventory={captureInventory}
+            captureSourceSaving={captureSourceSaving}
             markerLabel={markerLabel}
             onMarkerLabelChange={setMarkerLabel}
+            onCaptureSourceToggle={handleCaptureSourceToggle}
             onStartRecording={() =>
               config &&
               runCommand(() => StudioApi.startRecording(config, selectedProfileId))
@@ -879,7 +909,7 @@ function App() {
             selectedDestinationId={selectedDestinationId}
             selectedDestination={selectedDestination}
             selectedProfileId={selectedProfileId}
-            settings={settingsSnapshot?.settings ?? null}
+            settings={settingsSnapshot?.settings ?? settingsForm}
             onOpenSettings={handleOpenSettingsWindow}
             setSelectedDestinationId={setSelectedDestinationId}
             setSelectedProfileId={setSelectedProfileId}
@@ -1513,7 +1543,13 @@ function RecordingProfilesPage(props: {
 }
 
 function ControlsPage(props: {
+  captureInventory: CaptureSourceInventory | null;
+  captureSourceSaving: boolean;
   markerLabel: string;
+  onCaptureSourceToggle: (
+    candidate: CaptureSourceCandidate,
+    enabled: boolean,
+  ) => void;
   onCreateMarker: () => void;
   onMarkerLabelChange: (value: string) => void;
   onStartRecording: () => void;
@@ -1547,9 +1583,60 @@ function ControlsPage(props: {
   const enabledSources =
     props.settings?.capture_sources.filter((source) => source.enabled) ?? [];
   const defaultProfile = props.settings?.default_recording_profile;
+  const sourceCandidates =
+    props.captureInventory?.candidates ??
+    props.settings?.capture_sources.map((source) => ({
+      id: source.id,
+      kind: source.kind,
+      name: source.name,
+      available: true,
+      notes: null,
+    })) ??
+    [];
+  const recordingButtonLabel =
+    props.engineMode === "dry_run" || props.mediaRunnerInfo?.fallbackDryRun
+      ? "Start Dry-Run Recording"
+      : "Start Recording";
 
   return (
     <div className="control-grid">
+      <section className="panel">
+        <PanelTitle title="Capture Sources" />
+        {sourceCandidates.length === 0 ? (
+          <div className="empty">No capture sources found</div>
+        ) : (
+          <div className="source-grid">
+            {sourceCandidates.map((candidate) => {
+              const selected = props.settings?.capture_sources.find(
+                (source) => source.id === candidate.id,
+              );
+              const checked = selected?.enabled ?? false;
+              return (
+                <label className="source-option" key={candidate.id}>
+                  <input
+                    checked={checked}
+                    disabled={!candidate.available || props.captureSourceSaving}
+                    onChange={(event) =>
+                      props.onCaptureSourceToggle(
+                        candidate,
+                        event.target.checked,
+                      )
+                    }
+                    type="checkbox"
+                  />
+                  <div>
+                    <strong>{candidate.name}</strong>
+                    <span>{captureSourceKindLabel(candidate.kind)}</span>
+                    {candidate.notes && <small>{candidate.notes}</small>}
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+        )}
+        {props.captureSourceSaving && <Pill tone="amber">Saving</Pill>}
+      </section>
+
       <section className="panel">
         <PanelTitle title="Recording" />
         <label>
@@ -1577,12 +1664,12 @@ function ControlsPage(props: {
         <div className="button-row">
           <button
             className="primary-button danger"
-            disabled={props.recordingActive}
+            disabled={props.recordingActive || enabledSources.length === 0}
             onClick={props.onStartRecording}
             type="button"
           >
             <Play size={16} />
-            Start Recording
+            {recordingButtonLabel}
           </button>
           <button
             className="secondary-button"
@@ -2299,22 +2386,9 @@ function SettingsPage(props: {
     candidate: CaptureSourceCandidate,
     enabled: boolean,
   ) {
-    const existing = props.settings.capture_sources.find(
-      (source) => source.id === candidate.id,
+    props.onSettingsChange(
+      updateSettingsCaptureSource(props.settings, candidate, enabled),
     );
-    const nextSource: CaptureSourceSelection = {
-      id: candidate.id,
-      kind: candidate.kind,
-      name: candidate.name,
-      enabled,
-    };
-    const nextSources = existing
-      ? props.settings.capture_sources.map((source) =>
-          source.id === candidate.id ? { ...source, enabled } : source,
-        )
-      : [...props.settings.capture_sources, nextSource];
-
-    updateSettings({ capture_sources: nextSources });
   }
 
   const sourceCandidates =
@@ -2939,6 +3013,29 @@ function permissionTone(
 
 function permissionLabel(status: PermissionStatus["status"]): string {
   return status.replace("_", " ");
+}
+
+function updateSettingsCaptureSource(
+  settings: AppSettings,
+  candidate: CaptureSourceCandidate,
+  enabled: boolean,
+): AppSettings {
+  const existing = settings.capture_sources.find(
+    (source) => source.id === candidate.id,
+  );
+  const nextSource: CaptureSourceSelection = {
+    id: candidate.id,
+    kind: candidate.kind,
+    name: candidate.name,
+    enabled,
+  };
+  const capture_sources = existing
+    ? settings.capture_sources.map((source) =>
+        source.id === candidate.id ? { ...source, enabled } : source,
+      )
+    : [...settings.capture_sources, nextSource];
+
+  return { ...settings, capture_sources };
 }
 
 function captureSourceKindLabel(kind: CaptureSourceKind): string {

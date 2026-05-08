@@ -4,5 +4,5 @@
 )]
 
 fn main() {
-    vaexcore_studio_desktop::run();
+    vaexcore_studio::run();
 }
