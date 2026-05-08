@@ -42,8 +42,10 @@ foundation to OBS-class scene editing and output.
     rendering; real browser capture is not started.
 18. Text render engine with font controls: started with canvas preview text
     rendering; backend text rasterization is not started.
-19. Groups, nesting, and parent transforms: started with group preview rendering;
-    nested transform evaluation is not started.
+19. Groups, nesting, and parent transforms: started with group preview
+    rendering, group child validation, compositor parent/depth metadata, and
+    first-pass nested position/rotation/opacity evaluation. Full group
+    clipping, scaling inheritance, and group editor actions are not started.
 20. Full editor interactions: started with drag/resize, keyboard nudging,
     undo/redo, transform command buttons, align-to-canvas controls, and
     edge/center snapping guides; multi-select, rotate handles, distribute, and

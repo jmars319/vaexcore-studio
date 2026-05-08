@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -735,6 +735,119 @@ fn validate_scene_sources(scene: &Scene, scene_path: &str, issues: &mut Vec<Scen
         }
         validate_source_filters(&source.filters, &source_path, issues);
     }
+
+    validate_group_source_children(scene, scene_path, &source_ids, issues);
+}
+
+fn validate_group_source_children(
+    scene: &Scene,
+    scene_path: &str,
+    source_ids: &HashSet<&str>,
+    issues: &mut Vec<SceneValidationIssue>,
+) {
+    let group_ids = scene
+        .sources
+        .iter()
+        .filter(|source| source.kind == SceneSourceKind::Group)
+        .map(|source| source.id.as_str())
+        .collect::<HashSet<_>>();
+    let mut parent_by_child = HashMap::<String, String>::new();
+    let mut children_by_group = HashMap::<String, Vec<String>>::new();
+
+    for (source_index, source) in scene.sources.iter().enumerate() {
+        if source.kind != SceneSourceKind::Group {
+            continue;
+        }
+
+        let source_path = format!("{scene_path}.sources[{source_index}]");
+        let Some(children) = source
+            .config
+            .get("child_source_ids")
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        let mut child_ids = HashSet::new();
+
+        for (child_index, child) in children.iter().enumerate() {
+            let child_path = format!("{source_path}.config.child_source_ids[{child_index}]");
+            let Some(child_id) = child.as_str().map(str::trim).filter(|id| !id.is_empty()) else {
+                issue(issues, child_path, "Group child source id is required.");
+                continue;
+            };
+
+            if !child_ids.insert(child_id.to_string()) {
+                issue(
+                    issues,
+                    child_path.clone(),
+                    format!("Duplicate group child source id \"{child_id}\"."),
+                );
+            }
+            if child_id == source.id {
+                issue(issues, child_path.clone(), "Group cannot contain itself.");
+            }
+            if !source_ids.contains(child_id) {
+                issue(
+                    issues,
+                    child_path.clone(),
+                    format!("Group child source id \"{child_id}\" does not exist."),
+                );
+            }
+            if let Some(existing_parent) =
+                parent_by_child.insert(child_id.to_string(), source.id.clone())
+            {
+                issue(
+                    issues,
+                    child_path.clone(),
+                    format!("Source \"{child_id}\" is already grouped by \"{existing_parent}\"."),
+                );
+            }
+            if group_ids.contains(child_id) {
+                children_by_group
+                    .entry(source.id.clone())
+                    .or_default()
+                    .push(child_id.to_string());
+            }
+        }
+    }
+
+    let mut visited = HashSet::new();
+    for group_id in group_ids {
+        let mut visiting = HashSet::new();
+        if group_has_cycle(group_id, &children_by_group, &mut visiting, &mut visited) {
+            issue(
+                issues,
+                format!("{scene_path}.sources"),
+                format!("Group source \"{group_id}\" creates a cycle."),
+            );
+        }
+    }
+}
+
+fn group_has_cycle(
+    group_id: &str,
+    children_by_group: &HashMap<String, Vec<String>>,
+    visiting: &mut HashSet<String>,
+    visited: &mut HashSet<String>,
+) -> bool {
+    if visited.contains(group_id) {
+        return false;
+    }
+    if !visiting.insert(group_id.to_string()) {
+        return true;
+    }
+
+    if let Some(children) = children_by_group.get(group_id) {
+        for child_id in children {
+            if group_has_cycle(child_id, children_by_group, visiting, visited) {
+                return true;
+            }
+        }
+    }
+
+    visiting.remove(group_id);
+    visited.insert(group_id.to_string());
+    false
 }
 
 fn validate_source_filters(
@@ -976,6 +1089,59 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.message.contains("Cut transitions")));
+    }
+
+    #[test]
+    fn scene_validation_rejects_invalid_group_children() {
+        let mut collection = SceneCollection::default_collection(crate::now_utc());
+        let scene = collection.scenes.first_mut().unwrap();
+        scene.sources.push(SceneSource::new(
+            "source-group-a",
+            "Group A",
+            SceneSourceKind::Group,
+            ScenePoint { x: 100.0, y: 100.0 },
+            SceneSize {
+                width: 400.0,
+                height: 300.0,
+            },
+            50,
+            json!({
+                "child_source_ids": [
+                    "source-camera-placeholder",
+                    "source-camera-placeholder",
+                    "missing-source",
+                    "source-group-b"
+                ]
+            }),
+        ));
+        scene.sources.push(SceneSource::new(
+            "source-group-b",
+            "Group B",
+            SceneSourceKind::Group,
+            ScenePoint { x: 24.0, y: 24.0 },
+            SceneSize {
+                width: 200.0,
+                height: 120.0,
+            },
+            60,
+            json!({
+                "child_source_ids": ["source-group-a", "source-group-b"]
+            }),
+        ));
+
+        let validation = collection.validation();
+        let messages = validation
+            .issues
+            .iter()
+            .map(|issue| issue.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!validation.ok);
+        assert!(messages.contains("Duplicate group child"));
+        assert!(messages.contains("does not exist"));
+        assert!(messages.contains("Group cannot contain itself"));
+        assert!(messages.contains("creates a cycle"));
     }
 
     #[test]

@@ -293,6 +293,8 @@ export interface CompositorNode {
   name: string;
   source_kind: SceneSourceKind;
   role: CompositorNodeRole;
+  parent_source_id?: string | null;
+  group_depth: number;
   transform: CompositorTransform;
   visible: boolean;
   locked: boolean;
@@ -1767,16 +1769,20 @@ function validateGain(value: number, label: string, errors: string[]) {
 }
 
 export function buildCompositorGraph(scene: Scene): CompositorGraph {
+  const parentBySourceId = buildGroupParentMap(scene.sources);
   const nodes = [...scene.sources]
     .sort((left, right) => left.z_index - right.z_index || left.id.localeCompare(right.id))
     .map((source) => {
       const { status, detail } = compositorNodeStatus(source);
+      const parentSourceId = parentBySourceId.get(source.id) ?? null;
       return {
         id: `node-${source.id}`,
         source_id: source.id,
         name: source.name,
         source_kind: source.kind,
         role: compositorNodeRole(source.kind),
+        parent_source_id: parentSourceId,
+        group_depth: groupDepth(source.id, parentBySourceId),
         transform: {
           position: { ...source.position },
           size: { ...source.size },
@@ -1807,6 +1813,39 @@ export function buildCompositorGraph(scene: Scene): CompositorGraph {
     },
     nodes,
   };
+}
+
+function buildGroupParentMap(sources: SceneSource[]): Map<string, string> {
+  const parentBySourceId = new Map<string, string>();
+  sources
+    .filter((source) => source.kind === "group")
+    .forEach((source) => {
+      source.config.child_source_ids
+        .map((childSourceId) => childSourceId.trim())
+        .filter(Boolean)
+        .forEach((childSourceId) => {
+          if (!parentBySourceId.has(childSourceId)) {
+            parentBySourceId.set(childSourceId, source.id);
+          }
+        });
+    });
+  return parentBySourceId;
+}
+
+function groupDepth(sourceId: string, parentBySourceId: Map<string, string>): number {
+  let depth = 0;
+  let cursor = sourceId;
+  const visited = new Set<string>();
+
+  while (parentBySourceId.has(cursor)) {
+    const parentSourceId = parentBySourceId.get(cursor);
+    if (!parentSourceId || visited.has(parentSourceId)) break;
+    visited.add(parentSourceId);
+    depth += 1;
+    cursor = parentSourceId;
+  }
+
+  return depth;
 }
 
 function compositorNodeRole(kind: SceneSourceKind): CompositorNodeRole {
@@ -1923,6 +1962,16 @@ export function validateCompositorGraph(graph: CompositorGraph): CompositorValid
     }
     if (!node.name.trim()) {
       errors.push(`Compositor node "${node.id}" has no name.`);
+    }
+    if (node.parent_source_id) {
+      if (node.parent_source_id === node.source_id) {
+        errors.push(`Compositor node "${node.id}" cannot parent itself.`);
+      }
+      if (!graph.nodes.some((candidate) => candidate.source_id === node.parent_source_id)) {
+        errors.push(
+          `Compositor node "${node.id}" references missing parent source "${node.parent_source_id}".`,
+        );
+      }
     }
     validateGraphFiniteNumber(node.transform.position.x, `${node.id}.position.x`, errors);
     validateGraphFiniteNumber(node.transform.position.y, `${node.id}.position.y`, errors);
@@ -2201,7 +2250,7 @@ export function evaluateCompositorFrame(
       frame_format: target.frame_format,
       nodes: plan.graph.nodes
         .filter((node) => node.visible)
-        .map((node) => evaluateNodeForTarget(node, plan.graph.output, target)),
+        .map((node) => evaluateNodeForTarget(node, plan.graph, target)),
     }));
 
   return {
@@ -2255,10 +2304,11 @@ function validatePercent(value: number, label: string, errors: string[]) {
 
 function evaluateNodeForTarget(
   node: CompositorNode,
-  output: CompositorOutput,
+  graph: CompositorGraph,
   target: CompositorRenderTarget,
 ): CompositorEvaluatedNode {
-  const { scaleX, scaleY, offsetX, offsetY } = targetMapping(output, target);
+  const transform = effectiveNodeTransform(node, graph);
+  const { scaleX, scaleY, offsetX, offsetY } = targetMapping(graph.output, target);
   return {
     node_id: node.id,
     source_id: node.source_id,
@@ -2266,21 +2316,50 @@ function evaluateNodeForTarget(
     role: node.role,
     status: node.status,
     rect: {
-      x: offsetX + node.transform.position.x * scaleX,
-      y: offsetY + node.transform.position.y * scaleY,
-      width: node.transform.size.width * scaleX,
-      height: node.transform.size.height * scaleY,
+      x: offsetX + transform.position.x * scaleX,
+      y: offsetY + transform.position.y * scaleY,
+      width: transform.size.width * scaleX,
+      height: transform.size.height * scaleY,
     },
     crop: {
-      top: node.transform.crop.top * scaleY,
-      right: node.transform.crop.right * scaleX,
-      bottom: node.transform.crop.bottom * scaleY,
-      left: node.transform.crop.left * scaleX,
+      top: transform.crop.top * scaleY,
+      right: transform.crop.right * scaleX,
+      bottom: transform.crop.bottom * scaleY,
+      left: transform.crop.left * scaleX,
     },
-    rotation_degrees: node.transform.rotation_degrees,
-    opacity: node.transform.opacity,
+    rotation_degrees: transform.rotation_degrees,
+    opacity: transform.opacity,
     z_index: node.z_index,
   };
+}
+
+function effectiveNodeTransform(
+  node: CompositorNode,
+  graph: CompositorGraph,
+): CompositorTransform {
+  const transform: CompositorTransform = {
+    position: { ...node.transform.position },
+    size: { ...node.transform.size },
+    crop: { ...node.transform.crop },
+    rotation_degrees: node.transform.rotation_degrees,
+    opacity: node.transform.opacity,
+  };
+  let parentSourceId = node.parent_source_id ?? null;
+  const visited = new Set<string>();
+
+  while (parentSourceId) {
+    if (visited.has(parentSourceId)) break;
+    visited.add(parentSourceId);
+    const parent = graph.nodes.find((candidate) => candidate.source_id === parentSourceId);
+    if (!parent) break;
+    transform.position.x += parent.transform.position.x;
+    transform.position.y += parent.transform.position.y;
+    transform.rotation_degrees += parent.transform.rotation_degrees;
+    transform.opacity = Math.min(1, Math.max(0, transform.opacity * parent.transform.opacity));
+    parentSourceId = parent.parent_source_id ?? null;
+  }
+
+  return transform;
 }
 
 function targetMapping(
@@ -2492,6 +2571,96 @@ function validateSceneSources(
     }
     validateSceneSourceFilters(source.filters ?? [], sourcePath, issues);
   });
+
+  validateGroupSourceChildren(sources, scenePath, sourceIds, issues);
+}
+
+function validateGroupSourceChildren(
+  sources: SceneSource[],
+  scenePath: string,
+  sourceIds: Set<string>,
+  issues: SceneValidationIssue[],
+) {
+  const groupIds = new Set(
+    sources.filter((source) => source.kind === "group").map((source) => source.id),
+  );
+  const parentByChild = new Map<string, string>();
+  const childrenByGroup = new Map<string, string[]>();
+
+  sources.forEach((source, sourceIndex) => {
+    if (source.kind !== "group") return;
+
+    const childIds = new Set<string>();
+    source.config.child_source_ids.forEach((rawChildId, childIndex) => {
+      const childPath = `${scenePath}.sources[${sourceIndex}].config.child_source_ids[${childIndex}]`;
+      const childId = rawChildId.trim();
+      if (!childId) {
+        issues.push({ path: childPath, message: "Group child source id is required." });
+        return;
+      }
+      if (childIds.has(childId)) {
+        issues.push({
+          path: childPath,
+          message: `Duplicate group child source id "${childId}".`,
+        });
+      }
+      childIds.add(childId);
+      if (childId === source.id) {
+        issues.push({ path: childPath, message: "Group cannot contain itself." });
+      }
+      if (!sourceIds.has(childId)) {
+        issues.push({
+          path: childPath,
+          message: `Group child source id "${childId}" does not exist.`,
+        });
+      }
+      const existingParent = parentByChild.get(childId);
+      if (existingParent) {
+        issues.push({
+          path: childPath,
+          message: `Source "${childId}" is already grouped by "${existingParent}".`,
+        });
+      }
+      parentByChild.set(childId, source.id);
+      if (groupIds.has(childId)) {
+        const nestedChildren = childrenByGroup.get(source.id) ?? [];
+        nestedChildren.push(childId);
+        childrenByGroup.set(source.id, nestedChildren);
+      }
+    });
+  });
+
+  const visited = new Set<string>();
+  groupIds.forEach((groupId) => {
+    const visiting = new Set<string>();
+    if (groupHasCycle(groupId, childrenByGroup, visiting, visited)) {
+      issues.push({
+        path: `${scenePath}.sources`,
+        message: `Group source "${groupId}" creates a cycle.`,
+      });
+    }
+  });
+}
+
+function groupHasCycle(
+  groupId: string,
+  childrenByGroup: Map<string, string[]>,
+  visiting: Set<string>,
+  visited: Set<string>,
+): boolean {
+  if (visited.has(groupId)) return false;
+  if (visiting.has(groupId)) return true;
+  visiting.add(groupId);
+
+  for (const childId of childrenByGroup.get(groupId) ?? []) {
+    if (groupHasCycle(childId, childrenByGroup, visiting, visited)) {
+      return true;
+    }
+  }
+
+  visiting.delete(groupId);
+  visited.add(groupId);
+  return false;
 }
 
 function validateSceneSourceFilters(

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +64,10 @@ pub struct CompositorNode {
     pub name: String,
     pub source_kind: SceneSourceKind,
     pub role: CompositorNodeRole,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_source_id: Option<String>,
+    #[serde(default)]
+    pub group_depth: u32,
     pub transform: CompositorTransform,
     pub visible: bool,
     pub locked: bool,
@@ -208,6 +212,7 @@ pub struct CompositorValidation {
 
 pub fn build_compositor_graph(scene: &Scene) -> CompositorGraph {
     let mut sources = scene.sources.iter().collect::<Vec<_>>();
+    let parent_by_source_id = group_parent_map(&scene.sources);
     sources.sort_by(|left, right| {
         left.z_index
             .cmp(&right.z_index)
@@ -223,7 +228,14 @@ pub fn build_compositor_graph(scene: &Scene) -> CompositorGraph {
             height: scene.canvas.height,
             background_color: scene.canvas.background_color.clone(),
         },
-        nodes: sources.into_iter().map(build_compositor_node).collect(),
+        nodes: sources
+            .into_iter()
+            .map(|source| {
+                let parent_source_id = parent_by_source_id.get(&source.id).cloned();
+                let group_depth = group_depth(&source.id, &parent_by_source_id);
+                build_compositor_node(source, parent_source_id, group_depth)
+            })
+            .collect(),
     }
 }
 
@@ -261,6 +273,24 @@ pub fn validate_compositor_graph(graph: &CompositorGraph) -> CompositorValidatio
         }
         if node.name.trim().is_empty() {
             errors.push(format!("compositor node \"{}\" has no name", node.id));
+        }
+        if let Some(parent_source_id) = &node.parent_source_id {
+            if parent_source_id == &node.source_id {
+                errors.push(format!(
+                    "compositor node \"{}\" cannot parent itself",
+                    node.id
+                ));
+            }
+            if !graph
+                .nodes
+                .iter()
+                .any(|candidate| candidate.source_id == *parent_source_id)
+            {
+                errors.push(format!(
+                    "compositor node \"{}\" references missing parent source \"{}\"",
+                    node.id, parent_source_id
+                ));
+            }
         }
         validate_finite(
             node.transform.position.x,
@@ -471,7 +501,7 @@ pub fn evaluate_compositor_frame(
                 .nodes
                 .iter()
                 .filter(|node| node.visible)
-                .map(|node| evaluate_node_for_target(node, &plan.graph.output, target))
+                .map(|node| evaluate_node_for_target(node, &plan.graph, target))
                 .collect(),
         })
         .collect();
@@ -507,10 +537,11 @@ pub fn render_software_compositor_frame(
 
 fn evaluate_node_for_target(
     node: &CompositorNode,
-    output: &CompositorOutput,
+    graph: &CompositorGraph,
     target: &CompositorRenderTarget,
 ) -> CompositorEvaluatedNode {
-    let (scale_x, scale_y, offset_x, offset_y) = target_mapping(output, target);
+    let transform = effective_node_transform(node, graph);
+    let (scale_x, scale_y, offset_x, offset_y) = target_mapping(&graph.output, target);
     CompositorEvaluatedNode {
         node_id: node.id.clone(),
         source_id: node.source_id.clone(),
@@ -518,21 +549,47 @@ fn evaluate_node_for_target(
         role: node.role.clone(),
         status: node.status.clone(),
         rect: CompositorRect {
-            x: offset_x + node.transform.position.x * scale_x,
-            y: offset_y + node.transform.position.y * scale_y,
-            width: node.transform.size.width * scale_x,
-            height: node.transform.size.height * scale_y,
+            x: offset_x + transform.position.x * scale_x,
+            y: offset_y + transform.position.y * scale_y,
+            width: transform.size.width * scale_x,
+            height: transform.size.height * scale_y,
         },
         crop: SceneCrop {
-            top: node.transform.crop.top * scale_y,
-            right: node.transform.crop.right * scale_x,
-            bottom: node.transform.crop.bottom * scale_y,
-            left: node.transform.crop.left * scale_x,
+            top: transform.crop.top * scale_y,
+            right: transform.crop.right * scale_x,
+            bottom: transform.crop.bottom * scale_y,
+            left: transform.crop.left * scale_x,
         },
-        rotation_degrees: node.transform.rotation_degrees,
-        opacity: node.transform.opacity,
+        rotation_degrees: transform.rotation_degrees,
+        opacity: transform.opacity,
         z_index: node.z_index,
     }
+}
+
+fn effective_node_transform(node: &CompositorNode, graph: &CompositorGraph) -> CompositorTransform {
+    let mut transform = node.transform.clone();
+    let mut parent_source_id = node.parent_source_id.as_deref();
+    let mut visited = HashSet::new();
+
+    while let Some(source_id) = parent_source_id {
+        if !visited.insert(source_id.to_string()) {
+            break;
+        }
+        let Some(parent) = graph
+            .nodes
+            .iter()
+            .find(|candidate| candidate.source_id == source_id)
+        else {
+            break;
+        };
+        transform.position.x += parent.transform.position.x;
+        transform.position.y += parent.transform.position.y;
+        transform.rotation_degrees += parent.transform.rotation_degrees;
+        transform.opacity = (transform.opacity * parent.transform.opacity).clamp(0.0, 1.0);
+        parent_source_id = parent.parent_source_id.as_deref();
+    }
+
+    transform
 }
 
 fn target_mapping(
@@ -740,7 +797,11 @@ fn checksum_pixels(pixels: &[u8]) -> u64 {
     hash
 }
 
-fn build_compositor_node(source: &SceneSource) -> CompositorNode {
+fn build_compositor_node(
+    source: &SceneSource,
+    parent_source_id: Option<String>,
+    group_depth: u32,
+) -> CompositorNode {
     let (status, status_detail) = node_status(source);
     CompositorNode {
         id: format!("node-{}", source.id),
@@ -748,6 +809,8 @@ fn build_compositor_node(source: &SceneSource) -> CompositorNode {
         name: source.name.clone(),
         source_kind: source.kind.clone(),
         role: node_role(&source.kind),
+        parent_source_id,
+        group_depth,
         transform: CompositorTransform {
             position: source.position.clone(),
             size: source.size.clone(),
@@ -765,6 +828,54 @@ fn build_compositor_node(source: &SceneSource) -> CompositorNode {
         filters: source.filters.clone(),
         config: source.config.clone(),
     }
+}
+
+fn group_parent_map(sources: &[SceneSource]) -> HashMap<String, String> {
+    let mut parent_by_source_id = HashMap::new();
+    for source in sources {
+        if source.kind != SceneSourceKind::Group {
+            continue;
+        }
+        for child_source_id in group_child_ids(source) {
+            parent_by_source_id
+                .entry(child_source_id)
+                .or_insert_with(|| source.id.clone());
+        }
+    }
+    parent_by_source_id
+}
+
+fn group_depth(source_id: &str, parent_by_source_id: &HashMap<String, String>) -> u32 {
+    let mut depth = 0_u32;
+    let mut visited = HashSet::new();
+    let mut cursor = source_id;
+
+    while let Some(parent_source_id) = parent_by_source_id.get(cursor) {
+        if !visited.insert(parent_source_id.as_str()) {
+            break;
+        }
+        depth = depth.saturating_add(1);
+        cursor = parent_source_id;
+    }
+
+    depth
+}
+
+fn group_child_ids(source: &SceneSource) -> Vec<String> {
+    source
+        .config
+        .get("child_source_ids")
+        .and_then(serde_json::Value::as_array)
+        .map(|children| {
+            children
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|child_source_id| !child_source_id.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn node_role(kind: &SceneSourceKind) -> CompositorNodeRole {
@@ -1026,6 +1137,80 @@ mod tests {
         assert_eq!(frame.targets[0].nodes.len(), graph.nodes.len());
         assert_eq!(frame.targets[0].nodes[0].rect.width, 1280.0);
         assert_eq!(frame.targets[0].nodes[0].rect.height, 720.0);
+    }
+
+    #[test]
+    fn compositor_frame_evaluation_applies_group_parent_transforms() {
+        let mut collection = crate::SceneCollection::default_collection(crate::now_utc());
+        let scene = collection.scenes.first_mut().unwrap();
+        let camera = scene
+            .sources
+            .iter_mut()
+            .find(|source| source.id == "source-camera-placeholder")
+            .unwrap();
+        camera.position = ScenePoint { x: 20.0, y: 30.0 };
+        camera.opacity = 0.5;
+        camera.rotation_degrees = 5.0;
+        scene.sources.push(SceneSource {
+            id: "source-group".to_string(),
+            name: "Camera Group".to_string(),
+            kind: SceneSourceKind::Group,
+            position: ScenePoint { x: 100.0, y: 50.0 },
+            size: SceneSize {
+                width: 640.0,
+                height: 360.0,
+            },
+            crop: SceneCrop {
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+                left: 0.0,
+            },
+            rotation_degrees: 10.0,
+            opacity: 0.8,
+            visible: true,
+            locked: false,
+            z_index: 5,
+            filters: Vec::new(),
+            config: serde_json::json!({
+                "child_source_ids": ["source-camera-placeholder"]
+            }),
+        });
+
+        let graph = build_compositor_graph(scene);
+        let camera_node = graph
+            .nodes
+            .iter()
+            .find(|node| node.source_id == "source-camera-placeholder")
+            .unwrap();
+        assert_eq!(
+            camera_node.parent_source_id.as_deref(),
+            Some("source-group")
+        );
+        assert_eq!(camera_node.group_depth, 1);
+
+        let plan = build_compositor_render_plan(
+            &graph,
+            vec![compositor_render_target(
+                "program",
+                "Program",
+                CompositorRenderTargetKind::Program,
+                1920,
+                1080,
+                60,
+            )],
+        );
+        let frame = evaluate_compositor_frame(&plan, 0);
+        let camera_frame_node = frame.targets[0]
+            .nodes
+            .iter()
+            .find(|node| node.source_id == "source-camera-placeholder")
+            .unwrap();
+
+        assert_eq!(camera_frame_node.rect.x, 120.0);
+        assert_eq!(camera_frame_node.rect.y, 80.0);
+        assert_eq!(camera_frame_node.rotation_degrees, 15.0);
+        assert!((camera_frame_node.opacity - 0.4).abs() < f64::EPSILON);
     }
 
     #[test]

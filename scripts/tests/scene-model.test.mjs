@@ -169,6 +169,69 @@ test("scene collection validation catches duplicate ids and invalid transforms",
   );
 });
 
+test("scene groups validate children and apply parent transforms", async () => {
+  const {
+    buildCompositorGraph,
+    buildCompositorRenderPlan,
+    createDefaultSceneCollection,
+    createDefaultSceneSource,
+    evaluateCompositorFrame,
+    validateSceneCollection,
+  } = await sharedTypes;
+  const collection = createDefaultSceneCollection("2026-05-08T12:00:00.000Z");
+  const scene = collection.scenes[0];
+  const camera = scene.sources.find((source) => source.id === "source-camera-placeholder");
+  assert.ok(camera);
+  camera.position = { x: 20, y: 30 };
+  camera.opacity = 0.5;
+  camera.rotation_degrees = 5;
+  const group = createDefaultSceneSource("group", {
+    id: "source-group",
+    name: "Camera Group",
+    position: { x: 100, y: 50 },
+    size: { width: 640, height: 360 },
+    rotation_degrees: 10,
+    opacity: 0.8,
+    z_index: 5,
+    config: { child_source_ids: [camera.id] },
+  });
+  scene.sources.push(group);
+
+  const graph = buildCompositorGraph(scene);
+  const cameraNode = graph.nodes.find((node) => node.source_id === camera.id);
+  const plan = buildCompositorRenderPlan(graph, [
+    {
+      id: "program",
+      name: "Program",
+      kind: "program",
+      width: 1920,
+      height: 1080,
+      framerate: 60,
+      enabled: true,
+      frame_format: "bgra8",
+      scale_mode: "fit",
+    },
+  ]);
+  const frame = evaluateCompositorFrame(plan, 0);
+  const cameraFrameNode = frame.targets[0].nodes.find((node) => node.source_id === camera.id);
+
+  assert.equal(validateSceneCollection(collection).ok, true);
+  assert.equal(cameraNode.parent_source_id, "source-group");
+  assert.equal(cameraNode.group_depth, 1);
+  assert.equal(cameraFrameNode.rect.x, 120);
+  assert.equal(cameraFrameNode.rect.y, 80);
+  assert.equal(cameraFrameNode.rotation_degrees, 15);
+  assert.equal(cameraFrameNode.opacity, 0.4);
+
+  group.config.child_source_ids = [camera.id, camera.id, "missing-source", group.id];
+  const invalid = validateSceneCollection(collection);
+  assert.equal(invalid.ok, false);
+  assert.match(
+    invalid.issues.map((issue) => issue.message).join("\n"),
+    /Duplicate group child|does not exist|Group cannot contain itself/,
+  );
+});
+
 test("compositor graph builder preserves source order and warnings", async () => {
   const {
     buildCompositorGraph,
