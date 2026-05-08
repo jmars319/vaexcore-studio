@@ -589,6 +589,28 @@ nav {
   background: #0b0c13;
 }
 
+.designer-transform-tools,
+.designer-align-tools {
+  display: grid;
+  gap: 8px;
+}
+
+.designer-transform-tools {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.designer-transform-tools .secondary-button {
+  min-width: 0;
+}
+
+.designer-align-tools {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.designer-align-tools .icon-button {
+  width: 100%;
+}
+
 .designer-preview-meta {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

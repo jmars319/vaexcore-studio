@@ -1,10 +1,14 @@
 import {
   Activity,
+  AlignCenterHorizontal,
+  AlignCenterVertical,
   ArrowDown,
   ArrowUp,
   Cable,
   CheckCircle2,
   Copy,
+  Crosshair,
+  Crop,
   Eye,
   EyeOff,
   FileVideo,
@@ -17,11 +21,17 @@ import {
   MapPin,
   Mic,
   Monitor,
+  Maximize2,
   Pencil,
+  PanelBottom,
+  PanelLeft,
+  PanelRight,
+  PanelTop,
   Play,
   Plus,
   Radio,
   RefreshCw,
+  RotateCcw,
   ScrollText,
   Settings as SettingsIcon,
   SlidersHorizontal,
@@ -174,6 +184,10 @@ type SceneHistory = {
   future: SceneCollection[];
 };
 
+type SceneUpdateOptions = {
+  historyGroup?: string;
+};
+
 const designerHistoryLimit = 50;
 
 const sectionIds: readonly Section[] = [
@@ -309,6 +323,7 @@ function App() {
     past: [],
     future: [],
   });
+  const designerHistoryGroupRef = useRef<string | null>(null);
 
   useEffect(() => {
     loadRuntimeConfig().then(setConfig).catch((error: Error) => {
@@ -460,6 +475,7 @@ function App() {
         setSceneDirty(false);
         setSceneSaveStatus(null);
         setSceneHistory({ past: [], future: [] });
+        designerHistoryGroupRef.current = null;
       })
       .catch((error: Error) => {
         if (!cancelled) {
@@ -961,24 +977,36 @@ function App() {
 
   function updateDesignerCollection(
     updater: (current: SceneCollection) => SceneCollection,
+    options: SceneUpdateOptions = {},
   ) {
     setSceneCollection((current) => {
       const next = {
         ...updater(current),
         updated_at: new Date().toISOString(),
       };
-      setSceneHistory((history) => ({
-        past: [...history.past, current].slice(-designerHistoryLimit),
-        future: [],
-      }));
+      const shouldRecordHistory =
+        !options.historyGroup ||
+        designerHistoryGroupRef.current !== options.historyGroup;
+      if (shouldRecordHistory) {
+        setSceneHistory((history) => ({
+          past: [...history.past, current].slice(-designerHistoryLimit),
+          future: [],
+        }));
+      }
+      designerHistoryGroupRef.current = options.historyGroup ?? null;
       return next;
     });
     setSceneDirty(true);
     setSceneSaveStatus("Unsaved scene changes");
   }
 
+  function handleFinishDesignerContinuousEdit() {
+    designerHistoryGroupRef.current = null;
+  }
+
   function handleUndoDesignerChange() {
     if (sceneHistory.past.length === 0) return;
+    designerHistoryGroupRef.current = null;
     const previous = sceneHistory.past[sceneHistory.past.length - 1];
     setSceneCollection((current) => {
       setSceneHistory({
@@ -998,6 +1026,7 @@ function App() {
 
   function handleRedoDesignerChange() {
     if (sceneHistory.future.length === 0) return;
+    designerHistoryGroupRef.current = null;
     const next = sceneHistory.future[0];
     setSceneCollection((current) => {
       setSceneHistory({
@@ -1017,22 +1046,26 @@ function App() {
     sceneId: string,
     sourceId: string,
     patch: SceneSourcePatch,
+    options?: SceneUpdateOptions,
   ) {
-    updateDesignerCollection((current) => ({
-      ...current,
-      scenes: current.scenes.map((scene) =>
-        scene.id === sceneId
-          ? {
-              ...scene,
-              sources: scene.sources.map((source) =>
-                source.id === sourceId
-                  ? mergeSceneSourcePatch(source, patch)
-                  : source,
-              ),
-            }
-          : scene,
-      ),
-    }));
+    updateDesignerCollection(
+      (current) => ({
+        ...current,
+        scenes: current.scenes.map((scene) =>
+          scene.id === sceneId
+            ? {
+                ...scene,
+                sources: scene.sources.map((source) =>
+                  source.id === sourceId
+                    ? mergeSceneSourcePatch(source, patch)
+                    : source,
+                ),
+              }
+            : scene,
+        ),
+      }),
+      options,
+    );
   }
 
   function handleReorderDesignerSource(
@@ -1251,6 +1284,7 @@ function App() {
             onDeleteSource={handleDeleteDesignerSource}
             onDuplicateScene={handleDuplicateDesignerScene}
             onDuplicateSource={handleDuplicateDesignerSource}
+            onFinishContinuousEdit={handleFinishDesignerContinuousEdit}
             onRenameScene={handleRenameDesignerScene}
             canRedo={sceneHistory.future.length > 0}
             canUndo={sceneHistory.past.length > 0}
@@ -1563,6 +1597,7 @@ function DesignerPage(props: {
   onDeleteSource: (sceneId: string, sourceId: string) => void;
   onDuplicateScene: (sceneId: string) => void;
   onDuplicateSource: (sceneId: string, sourceId: string) => void;
+  onFinishContinuousEdit: () => void;
   onRenameScene: (sceneId: string, name: string) => void;
   graph: CompositorGraph;
   scene: Scene;
@@ -1583,6 +1618,7 @@ function DesignerPage(props: {
     sceneId: string,
     sourceId: string,
     patch: SceneSourcePatch,
+    options?: SceneUpdateOptions,
   ) => void;
 }) {
   const validation = validateSceneCollection(props.collection);
@@ -1626,31 +1662,52 @@ function DesignerPage(props: {
     if (!dragState || dragState.pointerId !== event.pointerId) return;
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const deltaX = ((event.clientX - dragState.startClientX) / rect.width) * props.scene.canvas.width;
-    const deltaY = ((event.clientY - dragState.startClientY) / rect.height) * props.scene.canvas.height;
+    const deltaX =
+      ((event.clientX - dragState.startClientX) / rect.width) *
+      props.scene.canvas.width;
+    const deltaY =
+      ((event.clientY - dragState.startClientY) / rect.height) *
+      props.scene.canvas.height;
+    const options = { historyGroup: `drag:${dragState.sourceId}` };
 
     if (dragState.mode === "move") {
-      props.onUpdateSource(props.scene.id, dragState.sourceId, {
-        position: {
-          x: Math.round(dragState.startPosition.x + deltaX),
-          y: Math.round(dragState.startPosition.y + deltaY),
+      props.onUpdateSource(
+        props.scene.id,
+        dragState.sourceId,
+        {
+          position: {
+            x: Math.round(dragState.startPosition.x + deltaX),
+            y: Math.round(dragState.startPosition.y + deltaY),
+          },
         },
-      });
+        options,
+      );
       return;
     }
 
-    props.onUpdateSource(props.scene.id, dragState.sourceId, {
-      size: {
-        width: Math.max(16, Math.round(dragState.startSize.width + deltaX)),
-        height: Math.max(16, Math.round(dragState.startSize.height + deltaY)),
+    props.onUpdateSource(
+      props.scene.id,
+      dragState.sourceId,
+      {
+        size: {
+          width: Math.max(16, Math.round(dragState.startSize.width + deltaX)),
+          height: Math.max(16, Math.round(dragState.startSize.height + deltaY)),
+        },
       },
-    });
+      options,
+    );
   }
 
   function endDrag(event: ReactPointerEvent) {
     if (dragState?.pointerId === event.pointerId) {
       setDragState(null);
+      props.onFinishContinuousEdit();
     }
+  }
+
+  function updateSelectedSource(patch: SceneSourcePatch) {
+    if (!props.selectedSource) return;
+    props.onUpdateSource(props.scene.id, props.selectedSource.id, patch);
   }
 
   return (
@@ -2030,6 +2087,136 @@ function DesignerPage(props: {
               }
               value={props.selectedSource.name}
             />
+            <div className="designer-transform-tools">
+              <button
+                className="secondary-button compact"
+                onClick={() => updateSelectedSource(fitSourceToCanvas(props.scene))}
+                title="Fit source to canvas"
+                type="button"
+              >
+                <Maximize2 size={14} />
+                Fit
+              </button>
+              <button
+                className="secondary-button compact"
+                onClick={() =>
+                  updateSelectedSource(
+                    centerSourceOnCanvas(props.scene, props.selectedSource!),
+                  )
+                }
+                title="Center source on canvas"
+                type="button"
+              >
+                <Crosshair size={14} />
+                Center
+              </button>
+              <button
+                className="secondary-button compact"
+                onClick={() => updateSelectedSource(resetSourceCrop())}
+                title="Reset crop"
+                type="button"
+              >
+                <Crop size={14} />
+                Crop
+              </button>
+              <button
+                className="secondary-button compact"
+                onClick={() => updateSelectedSource(resetSourceTransform())}
+                title="Reset transform"
+                type="button"
+              >
+                <RotateCcw size={14} />
+                Reset
+              </button>
+            </div>
+            <div className="designer-align-tools">
+              <button
+                aria-label="Align source left"
+                className="icon-button compact"
+                onClick={() =>
+                  updateSelectedSource(
+                    alignSourceToCanvas(props.scene, props.selectedSource!, "left"),
+                  )
+                }
+                title="Align source left"
+                type="button"
+              >
+                <PanelLeft size={14} />
+              </button>
+              <button
+                aria-label="Align source horizontal center"
+                className="icon-button compact"
+                onClick={() =>
+                  updateSelectedSource(
+                    alignSourceToCanvas(
+                      props.scene,
+                      props.selectedSource!,
+                      "horizontal-center",
+                    ),
+                  )
+                }
+                title="Align source horizontal center"
+                type="button"
+              >
+                <AlignCenterHorizontal size={14} />
+              </button>
+              <button
+                aria-label="Align source right"
+                className="icon-button compact"
+                onClick={() =>
+                  updateSelectedSource(
+                    alignSourceToCanvas(props.scene, props.selectedSource!, "right"),
+                  )
+                }
+                title="Align source right"
+                type="button"
+              >
+                <PanelRight size={14} />
+              </button>
+              <button
+                aria-label="Align source top"
+                className="icon-button compact"
+                onClick={() =>
+                  updateSelectedSource(
+                    alignSourceToCanvas(props.scene, props.selectedSource!, "top"),
+                  )
+                }
+                title="Align source top"
+                type="button"
+              >
+                <PanelTop size={14} />
+              </button>
+              <button
+                aria-label="Align source vertical center"
+                className="icon-button compact"
+                onClick={() =>
+                  updateSelectedSource(
+                    alignSourceToCanvas(
+                      props.scene,
+                      props.selectedSource!,
+                      "vertical-center",
+                    ),
+                  )
+                }
+                title="Align source vertical center"
+                type="button"
+              >
+                <AlignCenterVertical size={14} />
+              </button>
+              <button
+                aria-label="Align source bottom"
+                className="icon-button compact"
+                onClick={() =>
+                  updateSelectedSource(
+                    alignSourceToCanvas(props.scene, props.selectedSource!, "bottom"),
+                  )
+                }
+                title="Align source bottom"
+                type="button"
+              >
+                <PanelBottom size={14} />
+              </button>
+            </div>
             <div className="form-grid">
               <SceneNumberInput
                 label="X"
@@ -3607,6 +3794,94 @@ function sceneSourcePreviewStyle(
     opacity: source.visible ? source.opacity : 0.26,
     transform: `rotate(${source.rotation_degrees}deg)`,
     zIndex: source.z_index,
+  };
+}
+
+type SourceCanvasAlignment =
+  | "left"
+  | "horizontal-center"
+  | "right"
+  | "top"
+  | "vertical-center"
+  | "bottom";
+
+function fitSourceToCanvas(scene: Scene): SceneSourcePatch {
+  return {
+    position: { x: 0, y: 0 },
+    size: {
+      width: scene.canvas.width,
+      height: scene.canvas.height,
+    },
+    crop: resetSourceCrop().crop,
+    rotation_degrees: 0,
+  };
+}
+
+function centerSourceOnCanvas(
+  scene: Scene,
+  source: SceneSource,
+): SceneSourcePatch {
+  return {
+    position: {
+      x: Math.round((scene.canvas.width - source.size.width) / 2),
+      y: Math.round((scene.canvas.height - source.size.height) / 2),
+    },
+  };
+}
+
+function alignSourceToCanvas(
+  scene: Scene,
+  source: SceneSource,
+  alignment: SourceCanvasAlignment,
+): SceneSourcePatch {
+  switch (alignment) {
+    case "left":
+      return { position: { x: 0 } };
+    case "horizontal-center":
+      return {
+        position: {
+          x: Math.round((scene.canvas.width - source.size.width) / 2),
+        },
+      };
+    case "right":
+      return {
+        position: {
+          x: Math.round(scene.canvas.width - source.size.width),
+        },
+      };
+    case "top":
+      return { position: { y: 0 } };
+    case "vertical-center":
+      return {
+        position: {
+          y: Math.round((scene.canvas.height - source.size.height) / 2),
+        },
+      };
+    case "bottom":
+      return {
+        position: {
+          y: Math.round(scene.canvas.height - source.size.height),
+        },
+      };
+  }
+}
+
+function resetSourceCrop(): SceneSourcePatch {
+  return {
+    crop: {
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+    },
+  };
+}
+
+function resetSourceTransform(): SceneSourcePatch {
+  return {
+    crop: resetSourceCrop().crop,
+    rotation_degrees: 0,
+    opacity: 1,
   };
 }
 
