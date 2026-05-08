@@ -376,6 +376,10 @@ nav {
   gap: 9px;
 }
 
+.designer-list.compact-list {
+  gap: 8px;
+}
+
 .designer-list-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -609,6 +613,12 @@ nav {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: #0b0c13;
+}
+
+.transition-editor {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
 }
 
 .designer-transform-tools,

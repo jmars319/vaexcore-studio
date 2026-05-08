@@ -69,12 +69,44 @@ pub struct Scene {
     pub sources: Vec<SceneSource>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneTransitionKind {
+    Cut,
+    Fade,
+    Swipe,
+    Stinger,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneTransitionEasing {
+    Linear,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SceneTransition {
+    pub id: String,
+    pub name: String,
+    pub kind: SceneTransitionKind,
+    pub duration_ms: u32,
+    pub easing: SceneTransitionEasing,
+    pub config: serde_json::Value,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SceneCollection {
     pub id: String,
     pub name: String,
     pub version: u32,
     pub active_scene_id: String,
+    #[serde(default = "default_active_transition_id")]
+    pub active_transition_id: String,
+    #[serde(default = "default_scene_transitions")]
+    pub transitions: Vec<SceneTransition>,
     pub scenes: Vec<Scene>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -213,6 +245,8 @@ impl SceneCollection {
             name: "Default Studio Scenes".to_string(),
             version: 1,
             active_scene_id: scene.id.clone(),
+            active_transition_id: default_active_transition_id(),
+            transitions: default_scene_transitions(),
             scenes: vec![scene],
             created_at: now,
             updated_at: now,
@@ -224,6 +258,13 @@ impl SceneCollection {
             .iter()
             .find(|scene| scene.id == self.active_scene_id)
             .or_else(|| self.scenes.first())
+    }
+
+    pub fn active_transition(&self) -> Option<&SceneTransition> {
+        self.transitions
+            .iter()
+            .find(|transition| transition.id == self.active_transition_id)
+            .or_else(|| self.transitions.first())
     }
 
     pub fn validation(&self) -> SceneValidationResult {
@@ -239,6 +280,31 @@ impl SceneCanvas {
             background_color: "#050711".to_string(),
         }
     }
+}
+
+fn default_active_transition_id() -> String {
+    "transition-fade".to_string()
+}
+
+fn default_scene_transitions() -> Vec<SceneTransition> {
+    vec![
+        SceneTransition {
+            id: "transition-cut".to_string(),
+            name: "Cut".to_string(),
+            kind: SceneTransitionKind::Cut,
+            duration_ms: 0,
+            easing: SceneTransitionEasing::Linear,
+            config: json!({}),
+        },
+        SceneTransition {
+            id: "transition-fade".to_string(),
+            name: "Fade".to_string(),
+            kind: SceneTransitionKind::Fade,
+            duration_ms: 300,
+            easing: SceneTransitionEasing::EaseInOut,
+            config: json!({ "color": "#000000" }),
+        },
+    ]
 }
 
 impl SceneSource {
@@ -347,6 +413,8 @@ pub fn validate_scene_collection(collection: &SceneCollection) -> SceneValidatio
         validate_scene_sources(scene, &scene_path, &mut issues);
     }
 
+    validate_scene_transitions(collection, &mut issues);
+
     if !collection.scenes.is_empty()
         && !collection
             .scenes
@@ -440,6 +508,72 @@ fn validate_scene_sources(scene: &Scene, scene_path: &str, issues: &mut Vec<Scen
     }
 }
 
+fn validate_scene_transitions(
+    collection: &SceneCollection,
+    issues: &mut Vec<SceneValidationIssue>,
+) {
+    let mut transition_ids = HashSet::new();
+    if collection.transitions.is_empty() {
+        issue(
+            issues,
+            "transitions",
+            "At least one scene transition is required.",
+        );
+    }
+
+    for (transition_index, transition) in collection.transitions.iter().enumerate() {
+        let transition_path = format!("transitions[{transition_index}]");
+        if !transition_ids.insert(transition.id.as_str()) {
+            issue(
+                issues,
+                format!("{transition_path}.id"),
+                format!("Duplicate transition id \"{}\".", transition.id),
+            );
+        }
+        if transition.id.trim().is_empty() {
+            issue(
+                issues,
+                format!("{transition_path}.id"),
+                "Transition id is required.",
+            );
+        }
+        if transition.name.trim().is_empty() {
+            issue(
+                issues,
+                format!("{transition_path}.name"),
+                "Transition name is required.",
+            );
+        }
+        if transition.duration_ms > 60_000 {
+            issue(
+                issues,
+                format!("{transition_path}.duration_ms"),
+                "Transition duration must be 60 seconds or less.",
+            );
+        }
+        if transition.kind == SceneTransitionKind::Cut && transition.duration_ms != 0 {
+            issue(
+                issues,
+                format!("{transition_path}.duration_ms"),
+                "Cut transitions must use a zero millisecond duration.",
+            );
+        }
+    }
+
+    if !collection.transitions.is_empty()
+        && !collection
+            .transitions
+            .iter()
+            .any(|transition| transition.id == collection.active_transition_id)
+    {
+        issue(
+            issues,
+            "active_transition_id",
+            "Active transition id must match a transition in the collection.",
+        );
+    }
+}
+
 fn finite(value: f64, path: String, issues: &mut Vec<SceneValidationIssue>) {
     if !value.is_finite() {
         issue(issues, path, "Value must be a finite number.");
@@ -511,6 +645,10 @@ mod tests {
 
         assert!(validation.ok, "{:?}", validation.issues);
         assert_eq!(collection.active_scene().unwrap().sources.len(), 5);
+        assert_eq!(
+            collection.active_transition().unwrap().id,
+            "transition-fade"
+        );
     }
 
     #[test]
@@ -531,5 +669,29 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.path.ends_with("opacity")));
+    }
+
+    #[test]
+    fn scene_validation_rejects_invalid_transitions() {
+        let mut collection = SceneCollection::default_collection(crate::now_utc());
+        collection.active_transition_id = "missing-transition".to_string();
+        collection.transitions[0].id = collection.transitions[1].id.clone();
+        collection.transitions[0].duration_ms = 120;
+
+        let validation = collection.validation();
+
+        assert!(!validation.ok);
+        assert!(validation
+            .issues
+            .iter()
+            .any(|issue| issue.path == "active_transition_id"));
+        assert!(validation
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("Duplicate transition")));
+        assert!(validation
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("Cut transitions")));
     }
 }

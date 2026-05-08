@@ -52,7 +52,9 @@ foundation to OBS-class scene editing and output.
     crop fields, reset crop, fit-to-canvas, and center controls; source bounds
     modes and fit/fill/stretch policies are not started.
 22. Source filters and effects: not started.
-23. Scene transitions and transition preview: not started.
+23. Scene transitions and transition preview: started with persisted transition
+    contracts, validation, and Designer controls; live transition preview and
+    renderer application are not started.
 24. Scene collection import/export/backup: not started.
 25. Hotkeys and workflow shortcuts: not started.
 26. Active-scene recording and streaming integration: not started.

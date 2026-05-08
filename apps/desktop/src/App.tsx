@@ -84,6 +84,7 @@ import type {
   SceneSize,
   SceneSource,
   SceneSourceKind,
+  SceneTransition,
   StudioEvent,
   StudioStatus,
   StreamDestination,
@@ -168,6 +169,10 @@ type SceneSourcePatch = Partial<
   crop?: Partial<SceneCrop>;
   config?: Record<string, unknown>;
 };
+
+type SceneTransitionPatch = Partial<
+  Pick<SceneTransition, "name" | "kind" | "duration_ms" | "easing" | "config">
+>;
 
 type DesignerDragState = {
   mode: "move" | "resize";
@@ -1178,6 +1183,37 @@ function App() {
     }));
   }
 
+  function handleSelectDesignerTransition(transitionId: string) {
+    if (!sceneCollection.transitions.some((transition) => transition.id === transitionId)) {
+      return;
+    }
+    updateDesignerCollection((current) => ({
+      ...current,
+      active_transition_id: transitionId,
+    }));
+  }
+
+  function handleUpdateDesignerTransition(
+    transitionId: string,
+    patch: SceneTransitionPatch,
+  ) {
+    updateDesignerCollection((current) => ({
+      ...current,
+      transitions: current.transitions.map((transition) =>
+        transition.id === transitionId
+          ? {
+              ...transition,
+              ...patch,
+              duration_ms:
+                patch.kind === "cut"
+                  ? 0
+                  : (patch.duration_ms ?? transition.duration_ms),
+            }
+          : transition,
+      ),
+    }));
+  }
+
   function handleCreateDesignerSource(sceneId: string, kind: SceneSourceKind) {
     const source = createDefaultSceneSource(kind, {
       id: designerId(`source-${kind}`),
@@ -1304,8 +1340,10 @@ function App() {
             onSave={handleSaveDesignerScenes}
             onSelectScene={handleSelectDesignerScene}
             onSelectSource={setSelectedSceneSourceId}
+            onSelectTransition={handleSelectDesignerTransition}
             onUndo={handleUndoDesignerChange}
             onUpdateSource={handleUpdateDesignerSource}
+            onUpdateTransition={handleUpdateDesignerTransition}
           />
         );
       case "destinations":
@@ -1620,16 +1658,25 @@ function DesignerPage(props: {
   onSelectSource: (sourceId: string) => void;
   onSave: () => void;
   onUndo: () => void;
+  onSelectTransition: (transitionId: string) => void;
   onUpdateSource: (
     sceneId: string,
     sourceId: string,
     patch: SceneSourcePatch,
     options?: SceneUpdateOptions,
   ) => void;
+  onUpdateTransition: (
+    transitionId: string,
+    patch: SceneTransitionPatch,
+  ) => void;
 }) {
   const validation = validateSceneCollection(props.collection);
   const graphValidation = validateCompositorGraph(props.graph);
   const sourceStack = sortedSceneSources(props.scene);
+  const activeTransition =
+    props.collection.transitions.find(
+      (transition) => transition.id === props.collection.active_transition_id,
+    ) ?? props.collection.transitions[0];
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const renderCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [dragState, setDragState] = useState<DesignerDragState | null>(null);
@@ -1797,6 +1844,103 @@ function DesignerPage(props: {
               </div>
             ))}
           </div>
+        </section>
+
+        <section className="panel">
+          <PanelTitle title="Transitions" />
+          <div className="designer-list compact-list">
+            {props.collection.transitions.map((transition) => (
+              <div
+                className={
+                  transition.id === props.collection.active_transition_id
+                    ? "designer-list-item selected"
+                    : "designer-list-item"
+                }
+                key={transition.id}
+              >
+                <button
+                  className="source-stack-select-button"
+                  onClick={() => props.onSelectTransition(transition.id)}
+                  type="button"
+                >
+                  <div>
+                    <strong>{transition.name}</strong>
+                    <span>
+                      {transition.kind} - {transition.duration_ms} ms
+                    </span>
+                  </div>
+                </button>
+                <Pill
+                  tone={
+                    transition.id === props.collection.active_transition_id
+                      ? "green"
+                      : "muted"
+                  }
+                >
+                  {transition.id === props.collection.active_transition_id
+                    ? "Active"
+                    : "Ready"}
+                </Pill>
+              </div>
+            ))}
+          </div>
+          {activeTransition && (
+            <div className="transition-editor">
+              <TextInput
+                label="Name"
+                onChange={(name) =>
+                  props.onUpdateTransition(activeTransition.id, { name })
+                }
+                value={activeTransition.name}
+              />
+              <div className="form-grid">
+                <label>
+                  Kind
+                  <select
+                    value={activeTransition.kind}
+                    onChange={(event) =>
+                      props.onUpdateTransition(activeTransition.id, {
+                        kind: event.target.value as SceneTransition["kind"],
+                      })
+                    }
+                  >
+                    <option value="cut">Cut</option>
+                    <option value="fade">Fade</option>
+                    <option value="swipe">Swipe</option>
+                    <option value="stinger">Stinger</option>
+                  </select>
+                </label>
+                <SceneNumberInput
+                  label="Duration ms"
+                  max={60000}
+                  min={0}
+                  onChange={(duration_ms) =>
+                    props.onUpdateTransition(activeTransition.id, {
+                      duration_ms: Math.round(duration_ms),
+                    })
+                  }
+                  step={50}
+                  value={activeTransition.duration_ms}
+                />
+              </div>
+              <label>
+                Easing
+                <select
+                  value={activeTransition.easing}
+                  onChange={(event) =>
+                    props.onUpdateTransition(activeTransition.id, {
+                      easing: event.target.value as SceneTransition["easing"],
+                    })
+                  }
+                >
+                  <option value="linear">Linear</option>
+                  <option value="ease_in">Ease In</option>
+                  <option value="ease_out">Ease Out</option>
+                  <option value="ease_in_out">Ease In Out</option>
+                </select>
+              </label>
+            </div>
+          )}
         </section>
 
         <section className="panel">

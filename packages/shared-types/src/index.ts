@@ -158,11 +158,26 @@ export interface Scene {
   sources: SceneSource[];
 }
 
+export type SceneTransitionKind = "cut" | "fade" | "swipe" | "stinger";
+
+export type SceneTransitionEasing = "linear" | "ease_in" | "ease_out" | "ease_in_out";
+
+export interface SceneTransition {
+  id: string;
+  name: string;
+  kind: SceneTransitionKind;
+  duration_ms: number;
+  easing: SceneTransitionEasing;
+  config: Record<string, unknown>;
+}
+
 export interface SceneCollection {
   id: string;
   name: string;
   version: number;
   active_scene_id: string;
+  active_transition_id: string;
+  transitions: SceneTransition[];
   scenes: Scene[];
   created_at: string;
   updated_at: string;
@@ -810,6 +825,25 @@ export const defaultSceneCanvas: SceneCanvas = {
   background_color: "#050711",
 };
 
+const defaultSceneTransitions: SceneTransition[] = [
+  {
+    id: "transition-cut",
+    name: "Cut",
+    kind: "cut",
+    duration_ms: 0,
+    easing: "linear",
+    config: {},
+  },
+  {
+    id: "transition-fade",
+    name: "Fade",
+    kind: "fade",
+    duration_ms: 300,
+    easing: "ease_in_out",
+    config: { color: "#000000" },
+  },
+];
+
 const emptyCrop: SceneCrop = {
   top: 0,
   right: 0,
@@ -995,6 +1029,8 @@ export function createDefaultSceneCollection(now = new Date().toISOString()): Sc
     name: "Default Studio Scenes",
     version: 1,
     active_scene_id: scene.id,
+    active_transition_id: "transition-fade",
+    transitions: cloneJson(defaultSceneTransitions),
     scenes: [scene],
     created_at: now,
     updated_at: now,
@@ -1032,12 +1068,30 @@ export function normalizeSceneCollection(
     collection.active_scene_id && scenes.some((scene) => scene.id === collection.active_scene_id)
       ? collection.active_scene_id
       : scenes[0].id;
+  const transitions = (collection.transitions?.length
+    ? collection.transitions
+    : fallback.transitions
+  ).map((transition, transitionIndex) => ({
+    id: transition.id || `transition-${transitionIndex + 1}`,
+    name: transition.name || `Transition ${transitionIndex + 1}`,
+    kind: transition.kind || "fade",
+    duration_ms: transition.duration_ms ?? 300,
+    easing: transition.easing || "ease_in_out",
+    config: transition.config ?? {},
+  })) satisfies SceneTransition[];
+  const activeTransitionId =
+    collection.active_transition_id &&
+    transitions.some((transition) => transition.id === collection.active_transition_id)
+      ? collection.active_transition_id
+      : transitions[0].id;
 
   return {
     id: collection.id || fallback.id,
     name: collection.name || fallback.name,
     version: collection.version || fallback.version,
     active_scene_id: activeSceneId,
+    active_transition_id: activeTransitionId,
+    transitions,
     scenes,
     created_at: collection.created_at || fallback.created_at,
     updated_at: collection.updated_at || fallback.updated_at,
@@ -1930,6 +1984,7 @@ export function validateSceneCollection(
     validatePositiveNumber(scene.canvas.height, `${scenePath}.canvas.height`, issues);
     validateSceneSources(scene.sources, scenePath, issues);
   });
+  validateSceneTransitions(collection, issues);
 
   if (collection.scenes.length > 0 && !sceneIds.has(collection.active_scene_id)) {
     issues.push({
@@ -1942,6 +1997,60 @@ export function validateSceneCollection(
     ok: issues.length === 0,
     issues,
   };
+}
+
+function validateSceneTransitions(
+  collection: SceneCollection,
+  issues: SceneValidationIssue[],
+) {
+  const transitionIds = new Set<string>();
+  if (collection.transitions.length === 0) {
+    issues.push({ path: "transitions", message: "At least one scene transition is required." });
+  }
+
+  collection.transitions.forEach((transition, transitionIndex) => {
+    const transitionPath = `transitions[${transitionIndex}]`;
+    if (transitionIds.has(transition.id)) {
+      issues.push({
+        path: `${transitionPath}.id`,
+        message: `Duplicate transition id "${transition.id}".`,
+      });
+    }
+    transitionIds.add(transition.id);
+    if (!transition.id.trim()) {
+      issues.push({ path: `${transitionPath}.id`, message: "Transition id is required." });
+    }
+    if (!transition.name.trim()) {
+      issues.push({ path: `${transitionPath}.name`, message: "Transition name is required." });
+    }
+    if (!Number.isInteger(transition.duration_ms) || transition.duration_ms < 0) {
+      issues.push({
+        path: `${transitionPath}.duration_ms`,
+        message: "Transition duration must be 0 or greater.",
+      });
+    } else if (transition.duration_ms > 60_000) {
+      issues.push({
+        path: `${transitionPath}.duration_ms`,
+        message: "Transition duration must be 60 seconds or less.",
+      });
+    }
+    if (transition.kind === "cut" && transition.duration_ms !== 0) {
+      issues.push({
+        path: `${transitionPath}.duration_ms`,
+        message: "Cut transitions must use a zero millisecond duration.",
+      });
+    }
+  });
+
+  if (
+    collection.transitions.length > 0 &&
+    !transitionIds.has(collection.active_transition_id)
+  ) {
+    issues.push({
+      path: "active_transition_id",
+      message: "Active transition id must match a transition in the collection.",
+    });
+  }
 }
 
 function validateSceneSources(

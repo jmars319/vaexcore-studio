@@ -30,6 +30,11 @@ test("default scene collection is serializable and valid", async () => {
 
   assert.equal(collection.version, 1);
   assert.equal(collection.active_scene_id, scene.id);
+  assert.equal(collection.active_transition_id, "transition-fade");
+  assert.deepEqual(
+    collection.transitions.map((transition) => transition.kind),
+    ["cut", "fade"],
+  );
   assert.equal(scene.canvas.width, 1920);
   assert.equal(scene.canvas.height, 1080);
   assert.deepEqual(
@@ -78,6 +83,9 @@ test("scene collection validation catches duplicate ids and invalid transforms",
   scene.sources[0].size.width = 0;
   scene.sources[0].opacity = 1.5;
   collection.active_scene_id = "missing-scene";
+  collection.active_transition_id = "missing-transition";
+  collection.transitions[0].id = collection.transitions[1].id;
+  collection.transitions[0].duration_ms = 120;
 
   const result = validateSceneCollection(collection);
 
@@ -89,6 +97,14 @@ test("scene collection validation catches duplicate ids and invalid transforms",
   assert.match(
     result.issues.map((issue) => issue.path).join("\n"),
     /active_scene_id/,
+  );
+  assert.match(
+    result.issues.map((issue) => issue.path).join("\n"),
+    /active_transition_id/,
+  );
+  assert.match(
+    result.issues.map((issue) => issue.message).join("\n"),
+    /Duplicate transition id|Cut transitions/,
   );
   assert.match(
     result.issues.map((issue) => issue.path).join("\n"),
