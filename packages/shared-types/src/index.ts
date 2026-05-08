@@ -2794,7 +2794,168 @@ function validateSceneSourceFilters(
       issues.push({ path: `${filterPath}.name`, message: "Source filter name is required." });
     }
     validateFiniteNumber(filter.order, `${filterPath}.order`, issues);
+    validateSceneSourceFilterConfig(filter, filterPath, issues);
   });
+}
+
+function validateSceneSourceFilterConfig(
+  filter: SceneSourceFilter,
+  filterPath: string,
+  issues: SceneValidationIssue[],
+) {
+  switch (filter.kind) {
+    case "color_correction":
+      validateFilterNumberRange(filter, filterPath, "brightness", -1, 1, issues);
+      validateFilterNumberRange(filter, filterPath, "contrast", 0, 4, issues);
+      validateFilterNumberRange(filter, filterPath, "saturation", 0, 4, issues);
+      validateFilterNumberRange(filter, filterPath, "gamma", 0.01, 4, issues);
+      break;
+    case "chroma_key":
+      validateFilterRequiredString(filter, filterPath, "key_color", issues);
+      validateFilterNumberRange(filter, filterPath, "similarity", 0, 1, issues);
+      validateFilterNumberRange(filter, filterPath, "smoothness", 0, 1, issues);
+      break;
+    case "crop_pad":
+      ["top", "right", "bottom", "left"].forEach((key) =>
+        validateFilterNumberRange(filter, filterPath, key, 0, 100_000, issues),
+      );
+      break;
+    case "mask_blend":
+      validateFilterOptionalUri(filter, filterPath, "mask_uri", issues);
+      validateFilterStringEnum(
+        filter,
+        filterPath,
+        "blend_mode",
+        ["normal", "multiply", "screen", "overlay"],
+        issues,
+      );
+      break;
+    case "blur":
+      validateFilterNumberRange(filter, filterPath, "radius", 0, 100, issues);
+      break;
+    case "sharpen":
+      validateFilterNumberRange(filter, filterPath, "amount", 0, 5, issues);
+      break;
+    case "lut":
+      validateFilterOptionalUri(filter, filterPath, "lut_uri", issues);
+      validateFilterNumberRange(filter, filterPath, "strength", 0, 1, issues);
+      break;
+    case "audio_gain":
+      validateFilterNumberRange(filter, filterPath, "gain_db", -60, 24, issues);
+      break;
+    case "noise_gate": {
+      const close = validateFilterNumberRange(
+        filter,
+        filterPath,
+        "close_threshold_db",
+        -100,
+        0,
+        issues,
+      );
+      const open = validateFilterNumberRange(
+        filter,
+        filterPath,
+        "open_threshold_db",
+        -100,
+        0,
+        issues,
+      );
+      if (close !== null && open !== null && close >= open) {
+        issues.push({
+          path: `${filterPath}.config.open_threshold_db`,
+          message: "Noise gate open threshold must be greater than close threshold.",
+        });
+      }
+      validateFilterNumberRange(filter, filterPath, "attack_ms", 0, 5_000, issues);
+      validateFilterNumberRange(filter, filterPath, "release_ms", 0, 5_000, issues);
+      break;
+    }
+    case "compressor":
+      validateFilterNumberRange(filter, filterPath, "threshold_db", -100, 0, issues);
+      validateFilterNumberRange(filter, filterPath, "ratio", 1, 20, issues);
+      validateFilterNumberRange(filter, filterPath, "attack_ms", 0, 5_000, issues);
+      validateFilterNumberRange(filter, filterPath, "release_ms", 0, 5_000, issues);
+      validateFilterNumberRange(filter, filterPath, "makeup_gain_db", -24, 24, issues);
+      break;
+  }
+}
+
+function validateFilterNumberRange(
+  filter: SceneSourceFilter,
+  filterPath: string,
+  key: string,
+  min: number,
+  max: number,
+  issues: SceneValidationIssue[],
+): number | null {
+  const path = `${filterPath}.config.${key}`;
+  const value = filter.config?.[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    issues.push({ path, message: `Filter config ${key} must be a number.` });
+    return null;
+  }
+  if (value < min || value > max) {
+    issues.push({
+      path,
+      message: `Filter config ${key} must be between ${min} and ${max}.`,
+    });
+    return null;
+  }
+  return value;
+}
+
+function validateFilterRequiredString(
+  filter: SceneSourceFilter,
+  filterPath: string,
+  key: string,
+  issues: SceneValidationIssue[],
+) {
+  const value = filter.config?.[key];
+  if (typeof value !== "string" || !value.trim()) {
+    issues.push({
+      path: `${filterPath}.config.${key}`,
+      message: `Filter config ${key} is required.`,
+    });
+  }
+}
+
+function validateFilterOptionalUri(
+  filter: SceneSourceFilter,
+  filterPath: string,
+  key: string,
+  issues: SceneValidationIssue[],
+) {
+  const value = filter.config?.[key];
+  if (value === undefined || value === null) return;
+  if (typeof value !== "string" || !value.trim()) {
+    issues.push({
+      path: `${filterPath}.config.${key}`,
+      message: `Filter config ${key} must be null or a non-empty string.`,
+    });
+  }
+}
+
+function validateFilterStringEnum(
+  filter: SceneSourceFilter,
+  filterPath: string,
+  key: string,
+  allowed: string[],
+  issues: SceneValidationIssue[],
+) {
+  const value = filter.config?.[key];
+  if (typeof value !== "string" || !value.trim()) {
+    issues.push({
+      path: `${filterPath}.config.${key}`,
+      message: `Filter config ${key} is required.`,
+    });
+    return;
+  }
+  if (!allowed.includes(value)) {
+    issues.push({
+      path: `${filterPath}.config.${key}`,
+      message: `Filter config ${key} must be one of: ${allowed.join(", ")}.`,
+    });
+  }
 }
 
 function validateGraphFiniteNumber(value: number, path: string, errors: string[]) {

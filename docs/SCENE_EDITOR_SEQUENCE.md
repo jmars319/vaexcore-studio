@@ -56,9 +56,10 @@ foundation to OBS-class scene editing and output.
     fit/fill/stretch/center/original-size evaluation. Real source clipping and
     full renderer policy parity are not started.
 22. Source filters and effects: started with serializable per-source filter
-    chains, supported filter kinds, validation, and compositor graph
-    propagation plus first-pass Designer filter chain editing. Real video/audio
-    filter rendering and detailed per-filter controls are not started.
+    chains, supported filter kinds, duplicate/order/config validation, and
+    compositor graph propagation plus first-pass Designer filter chain editing.
+    Real video/audio filter rendering and detailed per-filter controls are not
+    started.
 23. Scene transitions and transition preview: started with persisted transition
     contracts, validation, Designer controls, and frame/easing preview plans;
     live pixel transition playback and renderer application are not started.

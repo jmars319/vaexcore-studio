@@ -121,7 +121,7 @@ test("scene collection validation catches duplicate ids and invalid transforms",
       kind: "color_correction",
       enabled: true,
       order: 0,
-      config: { brightness: 0.1 },
+      config: { brightness: 0.1, contrast: 1, saturation: 1, gamma: 1 },
     },
     {
       id: "filter-duplicate",
@@ -129,7 +129,15 @@ test("scene collection validation catches duplicate ids and invalid transforms",
       kind: "chroma_key",
       enabled: false,
       order: 10,
-      config: { key_color: "#00ff00" },
+      config: { key_color: "#00ff00", similarity: 0.25, smoothness: 0.08 },
+    },
+    {
+      id: "filter-invalid-config",
+      name: "Hot Gain",
+      kind: "audio_gain",
+      enabled: true,
+      order: 20,
+      config: { gain_db: 99 },
     },
   ];
   collection.active_scene_id = "missing-scene";
@@ -167,6 +175,10 @@ test("scene collection validation catches duplicate ids and invalid transforms",
   assert.match(
     result.issues.map((issue) => issue.message).join("\n"),
     /Duplicate source filter/,
+  );
+  assert.match(
+    result.issues.map((issue) => issue.message).join("\n"),
+    /gain_db/,
   );
 });
 

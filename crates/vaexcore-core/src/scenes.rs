@@ -896,6 +896,193 @@ fn validate_source_filters(
                 "Source filter name is required.",
             );
         }
+        validate_source_filter_config(filter, &filter_path, issues);
+    }
+}
+
+fn validate_source_filter_config(
+    filter: &SceneSourceFilter,
+    filter_path: &str,
+    issues: &mut Vec<SceneValidationIssue>,
+) {
+    match filter.kind {
+        SceneSourceFilterKind::ColorCorrection => {
+            config_number_range(filter, filter_path, "brightness", -1.0, 1.0, issues);
+            config_number_range(filter, filter_path, "contrast", 0.0, 4.0, issues);
+            config_number_range(filter, filter_path, "saturation", 0.0, 4.0, issues);
+            config_number_range(filter, filter_path, "gamma", 0.01, 4.0, issues);
+        }
+        SceneSourceFilterKind::ChromaKey => {
+            config_required_string(filter, filter_path, "key_color", issues);
+            config_number_range(filter, filter_path, "similarity", 0.0, 1.0, issues);
+            config_number_range(filter, filter_path, "smoothness", 0.0, 1.0, issues);
+        }
+        SceneSourceFilterKind::CropPad => {
+            for key in ["top", "right", "bottom", "left"] {
+                config_number_range(filter, filter_path, key, 0.0, 100_000.0, issues);
+            }
+        }
+        SceneSourceFilterKind::MaskBlend => {
+            config_optional_uri(filter, filter_path, "mask_uri", issues);
+            config_string_enum(
+                filter,
+                filter_path,
+                "blend_mode",
+                &["normal", "multiply", "screen", "overlay"],
+                issues,
+            );
+        }
+        SceneSourceFilterKind::Blur => {
+            config_number_range(filter, filter_path, "radius", 0.0, 100.0, issues);
+        }
+        SceneSourceFilterKind::Sharpen => {
+            config_number_range(filter, filter_path, "amount", 0.0, 5.0, issues);
+        }
+        SceneSourceFilterKind::Lut => {
+            config_optional_uri(filter, filter_path, "lut_uri", issues);
+            config_number_range(filter, filter_path, "strength", 0.0, 1.0, issues);
+        }
+        SceneSourceFilterKind::AudioGain => {
+            config_number_range(filter, filter_path, "gain_db", -60.0, 24.0, issues);
+        }
+        SceneSourceFilterKind::NoiseGate => {
+            let close = config_number_range(
+                filter,
+                filter_path,
+                "close_threshold_db",
+                -100.0,
+                0.0,
+                issues,
+            );
+            let open = config_number_range(
+                filter,
+                filter_path,
+                "open_threshold_db",
+                -100.0,
+                0.0,
+                issues,
+            );
+            if let (Some(close), Some(open)) = (close, open) {
+                if close >= open {
+                    issue(
+                        issues,
+                        format!("{filter_path}.config.open_threshold_db"),
+                        "Noise gate open threshold must be greater than close threshold.",
+                    );
+                }
+            }
+            config_number_range(filter, filter_path, "attack_ms", 0.0, 5_000.0, issues);
+            config_number_range(filter, filter_path, "release_ms", 0.0, 5_000.0, issues);
+        }
+        SceneSourceFilterKind::Compressor => {
+            config_number_range(filter, filter_path, "threshold_db", -100.0, 0.0, issues);
+            config_number_range(filter, filter_path, "ratio", 1.0, 20.0, issues);
+            config_number_range(filter, filter_path, "attack_ms", 0.0, 5_000.0, issues);
+            config_number_range(filter, filter_path, "release_ms", 0.0, 5_000.0, issues);
+            config_number_range(filter, filter_path, "makeup_gain_db", -24.0, 24.0, issues);
+        }
+    }
+}
+
+fn config_number_range(
+    filter: &SceneSourceFilter,
+    filter_path: &str,
+    key: &str,
+    min: f64,
+    max: f64,
+    issues: &mut Vec<SceneValidationIssue>,
+) -> Option<f64> {
+    let path = format!("{filter_path}.config.{key}");
+    let Some(value) = filter.config.get(key).and_then(serde_json::Value::as_f64) else {
+        issue(
+            issues,
+            path,
+            format!("Filter config {key} must be a number."),
+        );
+        return None;
+    };
+    if !value.is_finite() || value < min || value > max {
+        issue(
+            issues,
+            path,
+            format!("Filter config {key} must be between {min} and {max}."),
+        );
+        return None;
+    }
+    Some(value)
+}
+
+fn config_required_string(
+    filter: &SceneSourceFilter,
+    filter_path: &str,
+    key: &str,
+    issues: &mut Vec<SceneValidationIssue>,
+) {
+    let path = format!("{filter_path}.config.{key}");
+    if filter
+        .config
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_none()
+    {
+        issue(issues, path, format!("Filter config {key} is required."));
+    }
+}
+
+fn config_optional_uri(
+    filter: &SceneSourceFilter,
+    filter_path: &str,
+    key: &str,
+    issues: &mut Vec<SceneValidationIssue>,
+) {
+    let Some(value) = filter.config.get(key) else {
+        return;
+    };
+    if value.is_null() {
+        return;
+    }
+    if value
+        .as_str()
+        .map(str::trim)
+        .filter(|uri| !uri.is_empty())
+        .is_none()
+    {
+        issue(
+            issues,
+            format!("{filter_path}.config.{key}"),
+            format!("Filter config {key} must be null or a non-empty string."),
+        );
+    }
+}
+
+fn config_string_enum(
+    filter: &SceneSourceFilter,
+    filter_path: &str,
+    key: &str,
+    allowed: &[&str],
+    issues: &mut Vec<SceneValidationIssue>,
+) {
+    let path = format!("{filter_path}.config.{key}");
+    let Some(value) = filter
+        .config
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+    else {
+        issue(issues, path, format!("Filter config {key} is required."));
+        return;
+    };
+    if !allowed.contains(&value) {
+        issue(
+            issues,
+            path,
+            format!(
+                "Filter config {key} must be one of: {}.",
+                allowed.join(", ")
+            ),
+        );
     }
 }
 
@@ -1055,7 +1242,12 @@ mod tests {
                 kind: SceneSourceFilterKind::ColorCorrection,
                 enabled: true,
                 order: 0,
-                config: json!({ "brightness": 0.1 }),
+                config: json!({
+                    "brightness": 0.1,
+                    "contrast": 1.0,
+                    "saturation": 1.0,
+                    "gamma": 1.0
+                }),
             },
             SceneSourceFilter {
                 id: "filter-duplicate".to_string(),
@@ -1063,7 +1255,19 @@ mod tests {
                 kind: SceneSourceFilterKind::ChromaKey,
                 enabled: false,
                 order: 10,
-                config: json!({ "key_color": "#00ff00" }),
+                config: json!({
+                    "key_color": "#00ff00",
+                    "similarity": 0.25,
+                    "smoothness": 0.08
+                }),
+            },
+            SceneSourceFilter {
+                id: "filter-invalid-config".to_string(),
+                name: "Hot Gain".to_string(),
+                kind: SceneSourceFilterKind::AudioGain,
+                enabled: true,
+                order: 20,
+                config: json!({ "gain_db": 99.0 }),
             },
         ];
 
@@ -1082,6 +1286,10 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.message.contains("Duplicate source filter")));
+        assert!(validation
+            .issues
+            .iter()
+            .any(|issue| issue.message.contains("gain_db")));
     }
 
     #[test]
