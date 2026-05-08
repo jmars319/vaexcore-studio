@@ -1,7 +1,8 @@
 use crate::{
-    build_compositor_graph, build_compositor_render_plan, compositor_render_target,
-    CaptureSourceSelection, CompositorGraph, CompositorRenderPlan, CompositorRenderTarget,
-    CompositorRenderTargetKind, MediaProfile, Scene, StreamDestination,
+    build_capture_frame_plan, build_compositor_graph, build_compositor_render_plan,
+    compositor_render_target, CaptureFramePlan, CaptureSourceSelection, CompositorGraph,
+    CompositorRenderPlan, CompositorRenderTarget, CompositorRenderTargetKind, MediaProfile, Scene,
+    StreamDestination,
 };
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +22,8 @@ pub struct MediaPipelineConfig {
     pub capture_sources: Vec<CaptureSourceSelection>,
     #[serde(default)]
     pub active_scene: Option<Scene>,
+    #[serde(default)]
+    pub capture_frame_plan: Option<CaptureFramePlan>,
     #[serde(default)]
     pub compositor_graph: Option<CompositorGraph>,
     #[serde(default)]
@@ -76,6 +79,7 @@ pub struct MediaPipelineValidation {
 
 impl MediaPipelinePlanRequest {
     pub fn into_config(self) -> MediaPipelineConfig {
+        let capture_frame_plan = self.active_scene.as_ref().map(build_capture_frame_plan);
         let compositor_graph = self.active_scene.as_ref().map(build_compositor_graph);
         let compositor_render_plan = compositor_graph.as_ref().map(|graph| {
             build_compositor_render_plan(
@@ -95,6 +99,7 @@ impl MediaPipelinePlanRequest {
             intent: self.intent,
             capture_sources: self.capture_sources,
             active_scene: self.active_scene,
+            capture_frame_plan,
             compositor_graph,
             compositor_render_plan,
             recording_profile: self.recording_profile,

@@ -146,6 +146,41 @@ test("compositor graph builder preserves source order and warnings", async () =>
   assert.equal(frame.targets[0].nodes[0].rect.width, 1920);
 });
 
+test("capture frame plan maps scene sources to video and audio bindings", async () => {
+  const {
+    buildCaptureFramePlan,
+    createDefaultSceneCollection,
+    validateCaptureFramePlan,
+  } = await sharedTypes;
+  const scene = createDefaultSceneCollection("2026-05-08T12:00:00.000Z").scenes[0];
+  const plan = buildCaptureFramePlan(scene);
+  const validation = validateCaptureFramePlan(plan);
+
+  assert.equal(plan.version, 1);
+  assert.equal(plan.scene_id, scene.id);
+  assert.equal(plan.bindings.length, 3);
+  assert.equal(validation.ready, true);
+  assert.ok(validation.warnings.some((warning) => warning.includes("capture permission")));
+
+  const display = plan.bindings.find(
+    (binding) => binding.scene_source_id === "source-main-display",
+  );
+  const audio = plan.bindings.find(
+    (binding) => binding.scene_source_id === "source-mic-meter",
+  );
+
+  assert.equal(display.capture_kind, "display");
+  assert.equal(display.media_kind, "video");
+  assert.equal(display.width, 1920);
+  assert.equal(display.height, 1080);
+  assert.equal(display.format, "bgra8");
+  assert.equal(display.transport, "unavailable");
+  assert.equal(audio.capture_kind, "microphone");
+  assert.equal(audio.media_kind, "audio");
+  assert.equal(audio.sample_rate, 48000);
+  assert.equal(audio.channels, 2);
+});
+
 test("capture inventory binding updates scene source availability", async () => {
   const {
     bindSceneCollectionCaptureInventory,

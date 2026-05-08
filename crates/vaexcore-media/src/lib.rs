@@ -14,11 +14,12 @@ use std::{
 use tokio::sync::Mutex;
 use vaexcore_core::{
     build_compositor_graph, evaluate_compositor_frame, new_id, render_software_compositor_frame,
-    validate_compositor_graph, validate_compositor_render_plan, CaptureSourceKind,
-    CaptureSourceSelection, CompositorFrameFormat, CompositorRenderPlan, EngineMode, EngineStatus,
-    MediaPipelineConfig, MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep,
-    MediaProfile, PipelineIntent, PipelineStepStatus, PlatformKind, RecordingContainer,
-    RecordingSession, Scene, StreamDestination, StreamSession, StudioEvent, StudioEventKind,
+    validate_capture_frame_plan, validate_compositor_graph, validate_compositor_render_plan,
+    CaptureFrameBindingStatus, CaptureFrameMediaKind, CaptureSourceKind, CaptureSourceSelection,
+    CompositorFrameFormat, CompositorRenderPlan, EngineMode, EngineStatus, MediaPipelineConfig,
+    MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep, MediaProfile, PipelineIntent,
+    PipelineStepStatus, PlatformKind, RecordingContainer, RecordingSession, Scene,
+    StreamDestination, StreamSession, StudioEvent, StudioEventKind,
 };
 
 mod sidecar;
@@ -133,6 +134,7 @@ pub fn build_dry_run_pipeline_plan(request: MediaPipelinePlanRequest) -> MediaPi
     let mut errors = Vec::new();
 
     validate_capture_sources(&config, &mut steps, &mut warnings, &mut errors);
+    validate_capture_frame_bindings(&config, &mut steps, &mut warnings, &mut errors);
     validate_scene_compositor(&config, &mut steps, &mut warnings, &mut errors);
     validate_recording(&config, &mut steps, &mut errors);
     validate_streaming(&config, &mut steps, &mut warnings, &mut errors);
@@ -432,6 +434,60 @@ fn validate_capture_sources(
             PipelineStepStatus::Warning
         },
         detail: format!("{} enabled source(s).", enabled_sources.len()),
+    });
+}
+
+fn validate_capture_frame_bindings(
+    config: &MediaPipelineConfig,
+    steps: &mut Vec<MediaPipelineStep>,
+    warnings: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    let Some(plan) = &config.capture_frame_plan else {
+        warnings.push("pipeline has no capture frame plan".to_string());
+        steps.push(MediaPipelineStep {
+            id: "capture.frames".to_string(),
+            label: "Capture frame bindings".to_string(),
+            status: PipelineStepStatus::Warning,
+            detail: "No active scene capture frame bindings were generated.".to_string(),
+        });
+        return;
+    };
+
+    let validation = validate_capture_frame_plan(plan);
+    warnings.extend(validation.warnings.iter().cloned());
+    errors.extend(validation.errors.iter().cloned());
+
+    let video_bindings = plan
+        .bindings
+        .iter()
+        .filter(|binding| binding.media_kind == CaptureFrameMediaKind::Video)
+        .count();
+    let audio_bindings = plan
+        .bindings
+        .iter()
+        .filter(|binding| binding.media_kind == CaptureFrameMediaKind::Audio)
+        .count();
+    let ready_bindings = plan
+        .bindings
+        .iter()
+        .filter(|binding| binding.status == CaptureFrameBindingStatus::Ready)
+        .count();
+
+    steps.push(MediaPipelineStep {
+        id: "capture.frames".to_string(),
+        label: "Capture frame bindings".to_string(),
+        status: if !validation.ready {
+            PipelineStepStatus::Blocked
+        } else if validation.warnings.is_empty() {
+            PipelineStepStatus::Ready
+        } else {
+            PipelineStepStatus::Warning
+        },
+        detail: format!(
+            "{ready_bindings}/{} capture binding(s) ready; {video_bindings} video, {audio_bindings} audio.",
+            plan.bindings.len()
+        ),
     });
 }
 
@@ -1453,8 +1509,16 @@ mod tests {
             .iter()
             .find(|step| step.id == "scene.software_renderer")
             .expect("software renderer probe step");
+        let capture_frame_step = plan
+            .steps
+            .iter()
+            .find(|step| step.id == "capture.frames")
+            .expect("capture frame binding step");
 
         assert!(plan.ready, "{:?}", plan.errors);
+        assert_eq!(capture_frame_step.status, PipelineStepStatus::Warning);
+        assert!(capture_frame_step.detail.contains("video"));
+        assert!(plan.config.capture_frame_plan.is_some());
         assert_eq!(software_step.status, PipelineStepStatus::Ready);
         assert!(software_step.detail.contains("RGBA probe"));
         assert!(software_step.detail.contains("checksum"));

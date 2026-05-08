@@ -16,11 +16,18 @@ The shared contracts also define:
 
 - `CaptureSourceSelection`
 - `CaptureSourceInventory`
+- `CaptureFramePlan`
 - `MediaPipelinePlanRequest`
 - `MediaPipelinePlan`
 - `MediaPipelineValidation`
 
 These contracts let the UI, local API, sidecar, and future external tools agree on source selection and pipeline readiness before any real capture backend is started.
+
+`CaptureFramePlan` maps visible capture-backed scene sources to the video or
+audio frame stream the compositor will eventually consume. Each binding records
+the scene source id, capture source id, media kind, expected format, dimensions
+or audio shape, planned transport, and permission/availability status. This is a
+contract and validation layer only; it does not start platform capture.
 
 ## macOS Source Inventory
 
@@ -92,6 +99,9 @@ The desktop process writes two files in the app data directory:
 - `pipeline-config.json`: runner config shape consumed by `media-runner --config`
 
 The config file includes the dry-run flag, sidecar status address when known, pipeline name, and resolved `MediaPipelineConfig`. It contains stream secret references only, not raw stream keys.
+When an active scene is present, `MediaPipelineConfig` includes
+`active_scene`, `capture_frame_plan`, `compositor_graph`, and
+`compositor_render_plan`.
 
 Example:
 

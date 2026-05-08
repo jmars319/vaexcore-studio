@@ -10,8 +10,10 @@ pub mod settings;
 pub mod status;
 
 pub use capture::{
-    default_capture_sources, CaptureSourceCandidate, CaptureSourceInventory, CaptureSourceKind,
-    CaptureSourceSelection,
+    build_capture_frame_plan, default_capture_sources, validate_capture_frame_plan,
+    CaptureFrameBinding, CaptureFrameBindingStatus, CaptureFrameFormat, CaptureFrameMediaKind,
+    CaptureFramePlan, CaptureFrameTransport, CaptureFrameValidation, CaptureSourceCandidate,
+    CaptureSourceInventory, CaptureSourceKind, CaptureSourceSelection,
 };
 pub use compositor::{
     build_compositor_graph, build_compositor_render_plan, compositor_render_target,

@@ -48,11 +48,12 @@ npm run app:build:windows
 
 Scene Designer state is stored in the local Studio SQLite database through the
 `/scenes` API and is included in the generated `pipeline-config.json` as
-`active_scene`, `compositor_graph`, and `compositor_render_plan`. On Windows,
-verify that creating/editing a scene in Studio, saving it, quitting, and
-reopening Studio preserves the scene collection before running a full suite
-recording/streaming pass. Also confirm that the default media plan reports
-`scene.compositor` and `scene.render_targets` steps, writes a
+`active_scene`, `capture_frame_plan`, `compositor_graph`, and
+`compositor_render_plan`. On Windows, verify that creating/editing a scene in
+Studio, saving it, quitting, and reopening Studio preserves the scene collection
+before running a full suite recording/streaming pass. Also confirm that the
+default media plan reports `capture.frames`, `scene.compositor`, and
+`scene.render_targets` steps, writes `capture_frame_plan.scene_id` and
 `compositor_graph.scene_id` matching the active scene, and includes preview,
 program, and requested recording/stream render targets.
 

@@ -23,6 +23,9 @@ The same app data directory also contains media planning files:
 - `pipeline-config.json`
 
 External tools may read these files for diagnostics, but should use the HTTP API as the source of truth while Studio is running.
+When a scene is active, the generated pipeline config includes
+`active_scene`, `capture_frame_plan`, `compositor_graph`, and
+`compositor_render_plan`.
 
 ## Auth
 

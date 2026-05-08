@@ -588,6 +588,53 @@ export interface CaptureSourceInventory {
   selected: CaptureSourceSelection[];
 }
 
+export type CaptureFrameMediaKind = "video" | "audio";
+
+export type CaptureFrameFormat = "rgba8" | "bgra8" | "nv12" | "pcm_f32" | "pcm_s16";
+
+export type CaptureFrameTransport =
+  | "unavailable"
+  | "shared_memory"
+  | "texture_handle"
+  | "external_process";
+
+export type CaptureFrameBindingStatus =
+  | "ready"
+  | "placeholder"
+  | "permission_required"
+  | "unavailable";
+
+export interface CaptureFrameBinding {
+  scene_source_id: string;
+  scene_source_name: string;
+  capture_source_id: string | null;
+  capture_kind: CaptureSourceKind;
+  media_kind: CaptureFrameMediaKind;
+  width: number | null;
+  height: number | null;
+  framerate: number | null;
+  sample_rate: number | null;
+  channels: number | null;
+  format: CaptureFrameFormat;
+  transport: CaptureFrameTransport;
+  status: CaptureFrameBindingStatus;
+  status_detail: string;
+}
+
+export interface CaptureFramePlan {
+  version: number;
+  scene_id: string;
+  scene_name: string;
+  bindings: CaptureFrameBinding[];
+  validation: CaptureFrameValidation;
+}
+
+export interface CaptureFrameValidation {
+  ready: boolean;
+  warnings: string[];
+  errors: string[];
+}
+
 export type PreflightStatus =
   | "ready"
   | "warning"
@@ -638,6 +685,7 @@ export interface MediaPipelineConfig {
   intent: PipelineIntent;
   capture_sources: CaptureSourceSelection[];
   active_scene?: Scene | null;
+  capture_frame_plan?: CaptureFramePlan | null;
   compositor_graph?: CompositorGraph | null;
   compositor_render_plan?: CompositorRenderPlan | null;
   recording_profile: MediaProfile | null;
@@ -1013,6 +1061,209 @@ function bindCaptureCandidate<Source extends SceneSource>(
       availability,
     },
   } as Source;
+}
+
+export function buildCaptureFramePlan(scene: Scene): CaptureFramePlan {
+  const bindings = scene.sources
+    .filter((source) => source.visible)
+    .map(captureFrameBinding)
+    .filter((binding): binding is CaptureFrameBinding => Boolean(binding));
+  const plan: CaptureFramePlan = {
+    version: 1,
+    scene_id: scene.id,
+    scene_name: scene.name,
+    bindings,
+    validation: {
+      ready: true,
+      warnings: [],
+      errors: [],
+    },
+  };
+  plan.validation = validateCaptureFramePlan(plan);
+  return plan;
+}
+
+export function validateCaptureFramePlan(
+  plan: CaptureFramePlan,
+): CaptureFrameValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+
+  if (!Number.isInteger(plan.version) || plan.version < 1) {
+    errors.push("Capture frame plan version must be a positive integer.");
+  }
+  if (!plan.scene_id.trim()) {
+    errors.push("Capture frame plan scene id is required.");
+  }
+  if (!plan.scene_name.trim()) {
+    errors.push("Capture frame plan scene name is required.");
+  }
+  if (plan.bindings.length === 0) {
+    warnings.push("Capture frame plan has no capture-backed scene sources.");
+  }
+
+  plan.bindings.forEach((binding) => {
+    if (!binding.scene_source_id.trim()) {
+      errors.push("Capture frame binding scene source id is required.");
+    }
+    if (!binding.scene_source_name.trim()) {
+      errors.push(`Capture frame binding "${binding.scene_source_id}" name is required.`);
+    }
+    if (!binding.capture_source_id) {
+      warnings.push(`${binding.scene_source_name} has no assigned capture source.`);
+    }
+    if (binding.media_kind === "video") {
+      validateNullablePositiveNumber(binding.width, `${binding.scene_source_id}.width`, errors);
+      validateNullablePositiveNumber(binding.height, `${binding.scene_source_id}.height`, errors);
+      validateNullablePositiveNumber(
+        binding.framerate,
+        `${binding.scene_source_id}.framerate`,
+        errors,
+      );
+    } else {
+      validateNullablePositiveNumber(
+        binding.sample_rate,
+        `${binding.scene_source_id}.sample_rate`,
+        errors,
+      );
+      validateNullablePositiveNumber(binding.channels, `${binding.scene_source_id}.channels`, errors);
+    }
+
+    if (binding.status === "placeholder") {
+      warnings.push(
+        `${binding.scene_source_name} is waiting for capture assignment: ${binding.status_detail}`,
+      );
+    } else if (binding.status === "permission_required") {
+      warnings.push(
+        `${binding.scene_source_name} requires capture permission: ${binding.status_detail}`,
+      );
+    } else if (binding.status === "unavailable") {
+      warnings.push(
+        `${binding.scene_source_name} capture is unavailable: ${binding.status_detail}`,
+      );
+    }
+  });
+
+  return {
+    ready: errors.length === 0,
+    warnings,
+    errors,
+  };
+}
+
+function captureFrameBinding(source: SceneSource): CaptureFrameBinding | null {
+  const captureKind = sceneCaptureKind(source);
+  if (!captureKind) return null;
+
+  const mediaKind: CaptureFrameMediaKind =
+    captureKind === "display" || captureKind === "window" || captureKind === "camera"
+      ? "video"
+      : "audio";
+  const captureSourceId = sceneSourceCaptureIdentity(source);
+  const { status, detail } = captureBindingStatus(source, captureSourceId);
+  const videoShape = sourceVideoShape(source);
+  const audioShape = sourceAudioShape(source);
+
+  return {
+    scene_source_id: source.id,
+    scene_source_name: source.name,
+    capture_source_id: captureSourceId,
+    capture_kind: captureKind,
+    media_kind: mediaKind,
+    width: mediaKind === "video" ? videoShape.width : null,
+    height: mediaKind === "video" ? videoShape.height : null,
+    framerate: mediaKind === "video" ? videoShape.framerate : null,
+    sample_rate: mediaKind === "audio" ? audioShape.sampleRate : null,
+    channels: mediaKind === "audio" ? audioShape.channels : null,
+    format: mediaKind === "video" ? "bgra8" : "pcm_f32",
+    transport: status === "ready" ? "shared_memory" : "unavailable",
+    status,
+    status_detail: detail,
+  };
+}
+
+function sceneCaptureKind(source: SceneSource): CaptureSourceKind | null {
+  switch (source.kind) {
+    case "display":
+      return "display";
+    case "window":
+      return "window";
+    case "camera":
+      return "camera";
+    case "audio_meter":
+      return source.config.channel === "system" ? "system_audio" : "microphone";
+    default:
+      return null;
+  }
+}
+
+function sceneSourceCaptureIdentity(source: SceneSource): string | null {
+  switch (source.kind) {
+    case "display":
+      return source.config.display_id;
+    case "window":
+      return source.config.window_id;
+    case "camera":
+    case "audio_meter":
+      return source.config.device_id;
+    default:
+      return null;
+  }
+}
+
+function captureBindingStatus(
+  source: SceneSource,
+  captureSourceId: string | null,
+): { status: CaptureFrameBindingStatus; detail: string } {
+  if (!captureSourceId) {
+    return { status: "placeholder", detail: "No capture source has been assigned." };
+  }
+
+  const availability =
+    "availability" in source.config ? source.config.availability : null;
+  if (!availability) {
+    return { status: "ready", detail: "Capture source is configured." };
+  }
+  if (availability.state === "available") {
+    return { status: "ready", detail: availability.detail };
+  }
+  if (availability.state === "permission_required") {
+    return { status: "permission_required", detail: availability.detail };
+  }
+  if (availability.state === "unavailable") {
+    return { status: "unavailable", detail: availability.detail };
+  }
+  return { status: "placeholder", detail: availability.detail };
+}
+
+function sourceVideoShape(source: SceneSource): {
+  width: number;
+  height: number;
+  framerate: number;
+} {
+  const config = source.config as
+    | DisplaySceneSourceConfig
+    | WindowSceneSourceConfig
+    | CameraSceneSourceConfig;
+  return {
+    width: config.resolution?.width ?? Math.max(1, Math.round(source.size.width)),
+    height: config.resolution?.height ?? Math.max(1, Math.round(source.size.height)),
+    framerate: "framerate" in config && config.framerate ? config.framerate : 60,
+  };
+}
+
+function sourceAudioShape(source: SceneSource): {
+  sampleRate: number;
+  channels: number;
+} {
+  const config = source.config as AudioMeterSceneSourceConfig & {
+    sample_rate?: number;
+    channels?: number;
+  };
+  return {
+    sampleRate: config.sample_rate ?? 48_000,
+    channels: config.channels ?? 2,
+  };
 }
 
 export function buildCompositorGraph(scene: Scene): CompositorGraph {
@@ -1564,6 +1815,16 @@ function validateGraphPositiveNumber(value: number, path: string, errors: string
 function validateGraphNonNegativeNumber(value: number, path: string, errors: string[]) {
   if (!Number.isFinite(value) || value < 0) {
     errors.push(`${path} must be 0 or greater.`);
+  }
+}
+
+function validateNullablePositiveNumber(
+  value: number | null,
+  path: string,
+  errors: string[],
+) {
+  if (value !== null && (!Number.isFinite(value) || value <= 0)) {
+    errors.push(`${path} must be greater than 0.`);
   }
 }
 
