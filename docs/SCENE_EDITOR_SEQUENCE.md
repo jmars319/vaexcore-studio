@@ -31,9 +31,11 @@ foundation to OBS-class scene editing and output.
 13. Camera source engine: started with inventory-backed source availability plus
     capture-frame plan bindings; real capture is not started.
 14. Microphone and system audio capture: started with inventory-backed source
-    availability plus capture-frame plan bindings; real audio capture is not
-    started.
-15. Audio mixer model, meters, and routing: not started.
+    availability, capture-frame plan bindings, and audio source routing fields;
+    real audio capture is not started.
+15. Audio mixer model, meters, and routing: started with serializable mixer
+    buses, gain/mute/monitor/sync controls, and pipeline validation; real audio
+    mixing and live meters are not started.
 16. Image and media source engine: started with source-specific preview
     rendering; real media decode/playback is not started.
 17. Browser/web overlay source engine: started with source-specific preview
@@ -85,5 +87,5 @@ npm run app:build:windows
 ```
 
 The generated `pipeline-config.json` must include `active_scene`,
-`capture_frame_plan`, `compositor_graph`, and `compositor_render_plan` before
-Phase 1 is considered wired.
+`capture_frame_plan`, `audio_mixer_plan`, `compositor_graph`, and
+`compositor_render_plan` before Phase 1 is considered wired.

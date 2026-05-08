@@ -2612,6 +2612,52 @@ function SourceConfigEditor(props: {
               </select>
             </label>
           </div>
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Gain dB"
+              max={24}
+              min={-60}
+              onChange={(gain_db) => props.onChange({ gain_db })}
+              step={0.5}
+              value={source.config.gain_db ?? 0}
+            />
+            <SceneNumberInput
+              label="Sync ms"
+              onChange={(sync_offset_ms) => props.onChange({ sync_offset_ms })}
+              step={1}
+              value={source.config.sync_offset_ms ?? 0}
+            />
+          </div>
+          <div className="form-grid">
+            <label className="check-row">
+              <input
+                checked={source.config.muted ?? false}
+                onChange={(event) => props.onChange({ muted: event.target.checked })}
+                type="checkbox"
+              />
+              Muted
+            </label>
+            <label className="check-row">
+              <input
+                checked={source.config.monitor_enabled ?? false}
+                onChange={(event) =>
+                  props.onChange({ monitor_enabled: event.target.checked })
+                }
+                type="checkbox"
+              />
+              Monitor
+            </label>
+          </div>
+          <label className="check-row">
+            <input
+              checked={source.config.meter_enabled ?? true}
+              onChange={(event) =>
+                props.onChange({ meter_enabled: event.target.checked })
+              }
+              type="checkbox"
+            />
+            Meter enabled
+          </label>
         </div>
       );
     case "image_media":

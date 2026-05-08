@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod capture;
 pub mod compositor;
 pub mod events;
@@ -9,6 +10,10 @@ pub mod security;
 pub mod settings;
 pub mod status;
 
+pub use audio::{
+    build_audio_mixer_plan, validate_audio_mixer_plan, AudioMixBus, AudioMixBusKind,
+    AudioMixSource, AudioMixSourceStatus, AudioMixerPlan, AudioMixerValidation,
+};
 pub use capture::{
     build_capture_frame_plan, default_capture_sources, validate_capture_frame_plan,
     CaptureFrameBinding, CaptureFrameBindingStatus, CaptureFrameFormat, CaptureFrameMediaKind,

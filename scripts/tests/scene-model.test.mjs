@@ -181,6 +181,35 @@ test("capture frame plan maps scene sources to video and audio bindings", async 
   assert.equal(audio.channels, 2);
 });
 
+test("audio mixer plan maps audio meter sources to buses", async () => {
+  const {
+    buildAudioMixerPlan,
+    createDefaultSceneCollection,
+    validateAudioMixerPlan,
+  } = await sharedTypes;
+  const scene = createDefaultSceneCollection("2026-05-08T12:00:00.000Z").scenes[0];
+  const plan = buildAudioMixerPlan(scene);
+  const validation = validateAudioMixerPlan(plan);
+
+  assert.equal(plan.version, 1);
+  assert.equal(plan.scene_id, scene.id);
+  assert.equal(plan.sample_rate, 48000);
+  assert.equal(plan.channels, 2);
+  assert.equal(plan.sources.length, 1);
+  assert.deepEqual(
+    plan.buses.map((bus) => bus.kind),
+    ["master", "monitor", "recording", "stream"],
+  );
+  assert.equal(validation.ready, true);
+  assert.ok(validation.warnings.some((warning) => warning.includes("audio input")));
+
+  const source = plan.sources[0];
+  assert.equal(source.scene_source_id, "source-mic-meter");
+  assert.equal(source.capture_kind, "microphone");
+  assert.equal(source.gain_db, 0);
+  assert.equal(source.meter_enabled, true);
+});
+
 test("capture inventory binding updates scene source availability", async () => {
   const {
     bindSceneCollectionCaptureInventory,

@@ -14,12 +14,13 @@ use std::{
 use tokio::sync::Mutex;
 use vaexcore_core::{
     build_compositor_graph, evaluate_compositor_frame, new_id, render_software_compositor_frame,
-    validate_capture_frame_plan, validate_compositor_graph, validate_compositor_render_plan,
-    CaptureFrameBindingStatus, CaptureFrameMediaKind, CaptureSourceKind, CaptureSourceSelection,
-    CompositorFrameFormat, CompositorRenderPlan, EngineMode, EngineStatus, MediaPipelineConfig,
-    MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep, MediaProfile, PipelineIntent,
-    PipelineStepStatus, PlatformKind, RecordingContainer, RecordingSession, Scene,
-    StreamDestination, StreamSession, StudioEvent, StudioEventKind,
+    validate_audio_mixer_plan, validate_capture_frame_plan, validate_compositor_graph,
+    validate_compositor_render_plan, AudioMixSourceStatus, CaptureFrameBindingStatus,
+    CaptureFrameMediaKind, CaptureSourceKind, CaptureSourceSelection, CompositorFrameFormat,
+    CompositorRenderPlan, EngineMode, EngineStatus, MediaPipelineConfig, MediaPipelinePlan,
+    MediaPipelinePlanRequest, MediaPipelineStep, MediaProfile, PipelineIntent, PipelineStepStatus,
+    PlatformKind, RecordingContainer, RecordingSession, Scene, StreamDestination, StreamSession,
+    StudioEvent, StudioEventKind,
 };
 
 mod sidecar;
@@ -135,6 +136,7 @@ pub fn build_dry_run_pipeline_plan(request: MediaPipelinePlanRequest) -> MediaPi
 
     validate_capture_sources(&config, &mut steps, &mut warnings, &mut errors);
     validate_capture_frame_bindings(&config, &mut steps, &mut warnings, &mut errors);
+    validate_audio_mixer(&config, &mut steps, &mut warnings, &mut errors);
     validate_scene_compositor(&config, &mut steps, &mut warnings, &mut errors);
     validate_recording(&config, &mut steps, &mut errors);
     validate_streaming(&config, &mut steps, &mut warnings, &mut errors);
@@ -487,6 +489,53 @@ fn validate_capture_frame_bindings(
         detail: format!(
             "{ready_bindings}/{} capture binding(s) ready; {video_bindings} video, {audio_bindings} audio.",
             plan.bindings.len()
+        ),
+    });
+}
+
+fn validate_audio_mixer(
+    config: &MediaPipelineConfig,
+    steps: &mut Vec<MediaPipelineStep>,
+    warnings: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    let Some(plan) = &config.audio_mixer_plan else {
+        warnings.push("pipeline has no audio mixer plan".to_string());
+        steps.push(MediaPipelineStep {
+            id: "audio.mixer".to_string(),
+            label: "Audio mixer".to_string(),
+            status: PipelineStepStatus::Warning,
+            detail: "No active scene audio mixer plan was generated.".to_string(),
+        });
+        return;
+    };
+
+    let validation = validate_audio_mixer_plan(plan);
+    warnings.extend(validation.warnings.iter().cloned());
+    errors.extend(validation.errors.iter().cloned());
+
+    let ready_sources = plan
+        .sources
+        .iter()
+        .filter(|source| source.status == AudioMixSourceStatus::Ready)
+        .count();
+
+    steps.push(MediaPipelineStep {
+        id: "audio.mixer".to_string(),
+        label: "Audio mixer".to_string(),
+        status: if !validation.ready {
+            PipelineStepStatus::Blocked
+        } else if validation.warnings.is_empty() {
+            PipelineStepStatus::Ready
+        } else {
+            PipelineStepStatus::Warning
+        },
+        detail: format!(
+            "{ready_sources}/{} audio source(s), {} bus(es), {} Hz / {} channel(s).",
+            plan.sources.len(),
+            plan.buses.len(),
+            plan.sample_rate,
+            plan.channels
         ),
     });
 }
@@ -1514,11 +1563,19 @@ mod tests {
             .iter()
             .find(|step| step.id == "capture.frames")
             .expect("capture frame binding step");
+        let audio_step = plan
+            .steps
+            .iter()
+            .find(|step| step.id == "audio.mixer")
+            .expect("audio mixer step");
 
         assert!(plan.ready, "{:?}", plan.errors);
         assert_eq!(capture_frame_step.status, PipelineStepStatus::Warning);
         assert!(capture_frame_step.detail.contains("video"));
         assert!(plan.config.capture_frame_plan.is_some());
+        assert_eq!(audio_step.status, PipelineStepStatus::Warning);
+        assert!(audio_step.detail.contains("audio source"));
+        assert!(plan.config.audio_mixer_plan.is_some());
         assert_eq!(software_step.status, PipelineStepStatus::Ready);
         assert!(software_step.detail.contains("RGBA probe"));
         assert!(software_step.detail.contains("checksum"));

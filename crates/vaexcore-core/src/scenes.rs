@@ -156,6 +156,11 @@ impl SceneCollection {
                         "device_id": null,
                         "channel": "microphone",
                         "meter_style": "bar",
+                        "gain_db": 0.0,
+                        "muted": false,
+                        "monitor_enabled": false,
+                        "meter_enabled": true,
+                        "sync_offset_ms": 0,
                         "availability": {
                             "state": "permission_required",
                             "detail": "Microphone permission has not been verified."

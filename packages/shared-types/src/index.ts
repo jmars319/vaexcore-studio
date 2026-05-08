@@ -73,6 +73,11 @@ export interface AudioMeterSceneSourceConfig {
   device_id: string | null;
   channel: "microphone" | "system" | "mixed";
   meter_style: "bar" | "waveform";
+  gain_db: number;
+  muted: boolean;
+  monitor_enabled: boolean;
+  meter_enabled: boolean;
+  sync_offset_ms: number;
   availability: SceneSourceAvailability;
 }
 
@@ -635,6 +640,55 @@ export interface CaptureFrameValidation {
   errors: string[];
 }
 
+export type AudioMixBusKind = "master" | "monitor" | "recording" | "stream";
+
+export type AudioMixSourceStatus =
+  | "ready"
+  | "placeholder"
+  | "permission_required"
+  | "unavailable";
+
+export interface AudioMixBus {
+  id: string;
+  name: string;
+  kind: AudioMixBusKind;
+  sample_rate: number;
+  channels: number;
+  gain_db: number;
+  muted: boolean;
+}
+
+export interface AudioMixSource {
+  scene_source_id: string;
+  name: string;
+  capture_source_id: string | null;
+  capture_kind: CaptureSourceKind;
+  gain_db: number;
+  muted: boolean;
+  monitor_enabled: boolean;
+  meter_enabled: boolean;
+  sync_offset_ms: number;
+  status: AudioMixSourceStatus;
+  status_detail: string;
+}
+
+export interface AudioMixerPlan {
+  version: number;
+  scene_id: string;
+  scene_name: string;
+  sample_rate: number;
+  channels: number;
+  sources: AudioMixSource[];
+  buses: AudioMixBus[];
+  validation: AudioMixerValidation;
+}
+
+export interface AudioMixerValidation {
+  ready: boolean;
+  warnings: string[];
+  errors: string[];
+}
+
 export type PreflightStatus =
   | "ready"
   | "warning"
@@ -686,6 +740,7 @@ export interface MediaPipelineConfig {
   capture_sources: CaptureSourceSelection[];
   active_scene?: Scene | null;
   capture_frame_plan?: CaptureFramePlan | null;
+  audio_mixer_plan?: AudioMixerPlan | null;
   compositor_graph?: CompositorGraph | null;
   compositor_render_plan?: CompositorRenderPlan | null;
   recording_profile: MediaProfile | null;
@@ -813,6 +868,11 @@ export function defaultSceneSourceConfig(
         device_id: null,
         channel: "microphone",
         meter_style: "bar",
+        gain_db: 0,
+        muted: false,
+        monitor_enabled: false,
+        meter_enabled: true,
+        sync_offset_ms: 0,
         availability: defaultAvailability(
           "permission_required",
           "Microphone permission has not been verified.",
@@ -1264,6 +1324,134 @@ function sourceAudioShape(source: SceneSource): {
     sampleRate: config.sample_rate ?? 48_000,
     channels: config.channels ?? 2,
   };
+}
+
+export function buildAudioMixerPlan(scene: Scene): AudioMixerPlan {
+  const sources = scene.sources
+    .filter(
+      (source): source is Extract<SceneSource, { kind: "audio_meter" }> =>
+        source.visible && source.kind === "audio_meter",
+    )
+    .map(audioMixSource);
+  const plan: AudioMixerPlan = {
+    version: 1,
+    scene_id: scene.id,
+    scene_name: scene.name,
+    sample_rate: 48_000,
+    channels: 2,
+    sources,
+    buses: defaultAudioBuses(),
+    validation: {
+      ready: true,
+      warnings: [],
+      errors: [],
+    },
+  };
+  plan.validation = validateAudioMixerPlan(plan);
+  return plan;
+}
+
+export function validateAudioMixerPlan(plan: AudioMixerPlan): AudioMixerValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+
+  if (!Number.isInteger(plan.version) || plan.version < 1) {
+    errors.push("Audio mixer plan version must be a positive integer.");
+  }
+  if (!plan.scene_id.trim()) {
+    errors.push("Audio mixer plan scene id is required.");
+  }
+  if (!plan.scene_name.trim()) {
+    errors.push("Audio mixer plan scene name is required.");
+  }
+  validateNullablePositiveNumber(plan.sample_rate, "audio.sample_rate", errors);
+  validateNullablePositiveNumber(plan.channels, "audio.channels", errors);
+  if (plan.sources.length === 0) {
+    warnings.push("Audio mixer has no audio scene sources.");
+  }
+  if (!plan.buses.some((bus) => bus.kind === "master")) {
+    errors.push("Audio mixer requires a master bus.");
+  }
+
+  plan.sources.forEach((source) => {
+    if (!source.scene_source_id.trim()) {
+      errors.push("Audio mix source scene source id is required.");
+    }
+    if (!source.name.trim()) {
+      errors.push(`Audio mix source "${source.scene_source_id}" name is required.`);
+    }
+    validateGain(source.gain_db, source.name, errors);
+    if (source.status === "placeholder") {
+      warnings.push(`${source.name} is waiting for an audio input: ${source.status_detail}`);
+    } else if (source.status === "permission_required") {
+      warnings.push(`${source.name} requires audio permission: ${source.status_detail}`);
+    } else if (source.status === "unavailable") {
+      warnings.push(`${source.name} audio is unavailable: ${source.status_detail}`);
+    }
+  });
+
+  plan.buses.forEach((bus) => {
+    if (!bus.id.trim()) {
+      errors.push("Audio mix bus id is required.");
+    }
+    if (!bus.name.trim()) {
+      errors.push(`Audio mix bus "${bus.id}" name is required.`);
+    }
+    validateNullablePositiveNumber(bus.sample_rate, `${bus.id}.sample_rate`, errors);
+    validateNullablePositiveNumber(bus.channels, `${bus.id}.channels`, errors);
+    validateGain(bus.gain_db, bus.name, errors);
+  });
+
+  return {
+    ready: errors.length === 0,
+    warnings,
+    errors,
+  };
+}
+
+function audioMixSource(source: Extract<SceneSource, { kind: "audio_meter" }>): AudioMixSource {
+  const captureSourceId = source.config.device_id;
+  const { status, detail } = captureBindingStatus(source, captureSourceId);
+  return {
+    scene_source_id: source.id,
+    name: source.name,
+    capture_source_id: captureSourceId,
+    capture_kind: source.config.channel === "system" ? "system_audio" : "microphone",
+    gain_db: source.config.gain_db ?? 0,
+    muted: source.config.muted ?? false,
+    monitor_enabled: source.config.monitor_enabled ?? false,
+    meter_enabled: source.config.meter_enabled ?? true,
+    sync_offset_ms: Math.round(source.config.sync_offset_ms ?? 0),
+    status,
+    status_detail: detail,
+  };
+}
+
+function defaultAudioBuses(): AudioMixBus[] {
+  return [
+    audioBus("bus-master", "Master", "master"),
+    audioBus("bus-monitor", "Monitor", "monitor"),
+    audioBus("bus-recording", "Recording", "recording"),
+    audioBus("bus-stream", "Stream", "stream"),
+  ];
+}
+
+function audioBus(id: string, name: string, kind: AudioMixBusKind): AudioMixBus {
+  return {
+    id,
+    name,
+    kind,
+    sample_rate: 48_000,
+    channels: 2,
+    gain_db: 0,
+    muted: false,
+  };
+}
+
+function validateGain(value: number, label: string, errors: string[]) {
+  if (!Number.isFinite(value) || value < -60 || value > 24) {
+    errors.push(`${label} gain must be between -60 dB and 24 dB.`);
+  }
 }
 
 export function buildCompositorGraph(scene: Scene): CompositorGraph {

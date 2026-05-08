@@ -17,6 +17,7 @@ The shared contracts also define:
 - `CaptureSourceSelection`
 - `CaptureSourceInventory`
 - `CaptureFramePlan`
+- `AudioMixerPlan`
 - `MediaPipelinePlanRequest`
 - `MediaPipelinePlan`
 - `MediaPipelineValidation`
@@ -28,6 +29,11 @@ audio frame stream the compositor will eventually consume. Each binding records
 the scene source id, capture source id, media kind, expected format, dimensions
 or audio shape, planned transport, and permission/availability status. This is a
 contract and validation layer only; it does not start platform capture.
+
+`AudioMixerPlan` maps visible audio meter sources to the master, monitor,
+recording, and stream buses. It carries gain, mute, monitoring, meter, and sync
+offset fields so the UI and future mixer engine agree on routing before real
+audio mixing is implemented.
 
 ## macOS Source Inventory
 
@@ -100,8 +106,8 @@ The desktop process writes two files in the app data directory:
 
 The config file includes the dry-run flag, sidecar status address when known, pipeline name, and resolved `MediaPipelineConfig`. It contains stream secret references only, not raw stream keys.
 When an active scene is present, `MediaPipelineConfig` includes
-`active_scene`, `capture_frame_plan`, `compositor_graph`, and
-`compositor_render_plan`.
+`active_scene`, `capture_frame_plan`, `audio_mixer_plan`, `compositor_graph`,
+and `compositor_render_plan`.
 
 Example:
 

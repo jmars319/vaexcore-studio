@@ -1683,6 +1683,11 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
+            .any(|step| step["id"] == serde_json::json!("audio.mixer")));
+        assert!(body["data"]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
             .any(|step| step["id"] == serde_json::json!("scene.render_runtime")));
         assert!(body["data"]["steps"]
             .as_array()
@@ -1699,6 +1704,10 @@ mod tests {
         );
         assert_eq!(
             body["data"]["config"]["capture_frame_plan"]["scene_id"],
+            serde_json::json!("scene-main")
+        );
+        assert_eq!(
+            body["data"]["config"]["audio_mixer_plan"]["scene_id"],
             serde_json::json!("scene-main")
         );
         assert_eq!(
@@ -1775,6 +1784,10 @@ mod tests {
         );
         assert_eq!(
             config_json["pipeline"]["capture_frame_plan"]["scene_id"],
+            "scene-main"
+        );
+        assert_eq!(
+            config_json["pipeline"]["audio_mixer_plan"]["scene_id"],
             "scene-main"
         );
         assert_eq!(
