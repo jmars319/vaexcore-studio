@@ -57,6 +57,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 const DETACHED_PROCESS: u32 = 0x00000008;
 const SUITE_DISCOVERY_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const SUITE_DISCOVERY_STALE_AFTER: Duration = Duration::from_secs(45);
+const SCENE_COLLECTION_BACKUP_LIMIT: usize = 10;
 
 #[cfg(target_os = "windows")]
 fn suppress_windows_console(command: &mut std::process::Command) {
@@ -188,6 +189,7 @@ struct FrontendProfileBundleResult {
 #[serde(rename_all = "camelCase")]
 struct FrontendSceneCollectionBundleResult {
     path: String,
+    backup_path: Option<String>,
     scenes: usize,
     transitions: usize,
 }
@@ -1693,6 +1695,7 @@ fn export_scene_collection_bundle(
     let path = scene_collection_bundle_path(&state);
     let result = FrontendSceneCollectionBundleResult {
         path: path.display().to_string(),
+        backup_path: None,
         scenes: bundle.collection.scenes.len(),
         transitions: bundle.collection.transitions.len(),
     };
@@ -1715,6 +1718,7 @@ fn import_scene_collection_bundle(
     state: tauri::State<'_, AppRuntimeState>,
 ) -> Result<FrontendSceneCollectionBundleResult, String> {
     let path = scene_collection_bundle_path(&state);
+    let backup_path = write_scene_collection_backup(&state)?;
     let contents = std::fs::read(&path).map_err(|error| error.to_string())?;
     let bundle: SceneCollectionBundle =
         serde_json::from_slice(&contents).map_err(|error| error.to_string())?;
@@ -1725,6 +1729,7 @@ fn import_scene_collection_bundle(
 
     Ok(FrontendSceneCollectionBundleResult {
         path: path.display().to_string(),
+        backup_path: Some(backup_path.display().to_string()),
         scenes: result.imported_scenes,
         transitions: result.imported_transitions,
     })
@@ -1736,6 +1741,7 @@ fn import_scene_collection_bundle(
                 "scenes": result.scenes,
                 "transitions": result.transitions,
                 "path": &result.path,
+                "backup_path": &result.backup_path,
             }),
         );
     })
@@ -3164,6 +3170,61 @@ fn scene_collection_bundle_path(state: &AppRuntimeState) -> PathBuf {
     state.data_dir.join("scene-collection-bundle.json")
 }
 
+fn scene_collection_backup_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("scene-backups")
+}
+
+fn scene_collection_backup_path(data_dir: &Path, now: chrono::DateTime<chrono::Utc>) -> PathBuf {
+    scene_collection_backup_dir(data_dir).join(format!(
+        "scene-collection-{}.json",
+        now.format("%Y%m%dT%H%M%SZ")
+    ))
+}
+
+fn write_scene_collection_backup(state: &AppRuntimeState) -> Result<PathBuf, String> {
+    let bundle = state
+        .settings_store
+        .export_scene_collection()
+        .map_err(|error| error.to_string())?;
+    let path = scene_collection_backup_path(&state.data_dir, chrono::Utc::now());
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let serialized = serde_json::to_vec_pretty(&bundle).map_err(|error| error.to_string())?;
+    std::fs::write(&path, serialized).map_err(|error| error.to_string())?;
+    prune_scene_collection_backups(
+        &scene_collection_backup_dir(&state.data_dir),
+        SCENE_COLLECTION_BACKUP_LIMIT,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(path)
+}
+
+fn prune_scene_collection_backups(dir: &Path, keep: usize) -> std::io::Result<usize> {
+    let mut backups = match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| {
+                        name.starts_with("scene-collection-") && name.ends_with(".json")
+                    })
+            })
+            .collect::<Vec<_>>(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+    };
+
+    backups.sort();
+    let remove_count = backups.len().saturating_sub(keep);
+    for path in backups.into_iter().take(remove_count) {
+        std::fs::remove_file(path)?;
+    }
+    Ok(remove_count)
+}
+
 fn write_seed_pipeline_config(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -3376,6 +3437,46 @@ mod suite_contract_tests {
         assert!(read_suite_discovery_document(&path).is_none());
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn scene_collection_backup_pruning_keeps_newest_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "vaexcore-studio-scene-backups-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        for index in 0..12 {
+            fs::write(
+                dir.join(format!("scene-collection-20260508T12{index:02}00Z.json")),
+                "{}",
+            )
+            .unwrap();
+        }
+        fs::write(dir.join("notes.txt"), "ignore").unwrap();
+
+        let removed = prune_scene_collection_backups(&dir, 3).unwrap();
+        let mut remaining = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .filter(|name| name.starts_with("scene-collection-"))
+            .collect::<Vec<_>>();
+        remaining.sort();
+
+        assert_eq!(removed, 9);
+        assert_eq!(
+            remaining,
+            vec![
+                "scene-collection-20260508T120900Z.json".to_string(),
+                "scene-collection-20260508T121000Z.json".to_string(),
+                "scene-collection-20260508T121100Z.json".to_string(),
+            ]
+        );
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

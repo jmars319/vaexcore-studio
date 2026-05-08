@@ -70,6 +70,7 @@ export interface ProfileBundleFileResult {
 
 export interface SceneCollectionBundleFileResult {
   path: string;
+  backupPath: string | null;
   scenes: number;
   transitions: number;
 }

@@ -61,8 +61,9 @@ foundation to OBS-class scene editing and output.
 24. Scene collection import/export/backup: started with versioned bundle
     contracts, local API export/import routes, SDK helpers, desktop bridge
     commands, store validation, and Designer import/export actions against the
-    app data bundle path. Designer-facing file picker UX and automatic backup
-    rotation are not started.
+    app data bundle path. Desktop imports write a timestamped backup of the
+    current scene collection and retain the newest 10 backups. Designer-facing
+    file picker UX is not started.
 25. Hotkeys and workflow shortcuts: not started.
 26. Active-scene recording and streaming integration: not started.
 27. Performance tuning: frame pacing, latency, dropped frames, GPU/CPU load:

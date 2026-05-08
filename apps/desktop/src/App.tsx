@@ -1036,7 +1036,9 @@ function App() {
       setSceneHistory({ past: [], future: [] });
       designerHistoryGroupRef.current = null;
       setSceneSaveStatus(
-        `Imported ${result.scenes} scene(s) and ${result.transitions} transition(s).`,
+        result.backupPath
+          ? `Imported ${result.scenes} scene(s), backup created.`
+          : `Imported ${result.scenes} scene(s) and ${result.transitions} transition(s).`,
       );
       setError(null);
     } catch (error) {
