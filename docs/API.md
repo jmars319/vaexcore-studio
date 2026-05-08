@@ -364,9 +364,11 @@ Supported event types:
 
 - `app.ready`
 - `media.engine.ready`
-- `recording.started`
+- `recording.started` with `session_id`, `output_path`, `profile_id`, and the
+  active `scene_id`/`scene_name` when a scene collection is available
 - `recording.stopped`
-- `stream.started`
+- `stream.started` with `session_id`, destination identity, platform, and the
+  active `scene_id`/`scene_name` when a scene collection is available
 - `stream.stopped`
 - `marker.created`
 - `error`

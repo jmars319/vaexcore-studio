@@ -67,7 +67,10 @@ foundation to OBS-class scene editing and output.
 25. Hotkeys and workflow shortcuts: started with Designer-level save,
     undo/redo, and selected-source delete shortcuts. Full configurable hotkeys
     and app-wide shortcut routing are not started.
-26. Active-scene recording and streaming integration: not started.
+26. Active-scene recording and streaming integration: started with API launch
+    requests carrying the active scene into recording/streaming engines and
+    start events reporting active scene identity. Real capture-backed
+    program/output frames remain Phase 2+.
 27. Performance tuning: frame pacing, latency, dropped frames, GPU/CPU load:
     started with per-target frame budget, latency, dropped-frame tolerance, and
     estimated throughput contracts. Live profiler sampling, GPU counters, and

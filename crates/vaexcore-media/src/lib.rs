@@ -303,7 +303,11 @@ impl MediaEngine for DryRunMediaEngine {
         &self,
         request: StreamLaunchRequest,
     ) -> Result<MediaTransition<StreamSession>, MediaError> {
-        let destination = request.destination;
+        let StreamLaunchRequest {
+            destination,
+            active_scene,
+            ..
+        } = request;
         if destination.ingest_url.trim().is_empty() {
             return Err(MediaError::InvalidCommand(
                 "stream destination requires an ingest URL".to_string(),
@@ -337,6 +341,8 @@ impl MediaEngine for DryRunMediaEngine {
                 "destination_id": session.destination.id,
                 "destination_name": session.destination.name,
                 "platform": session.destination.platform,
+                "scene_id": active_scene.as_ref().map(|scene| scene.id.as_str()),
+                "scene_name": active_scene.as_ref().map(|scene| scene.name.as_str()),
             }),
         ));
 
@@ -984,6 +990,7 @@ impl MediaEngine for FfmpegRtmpEngine {
         &self,
         request: StreamLaunchRequest,
     ) -> Result<MediaTransition<StreamSession>, MediaError> {
+        let active_scene = request.active_scene.clone();
         if request.destination.ingest_url.trim().is_empty() {
             return Err(MediaError::InvalidCommand(
                 "stream destination requires an ingest URL".to_string(),
@@ -1077,6 +1084,8 @@ impl MediaEngine for FfmpegRtmpEngine {
                 "destination_id": session.destination.id,
                 "destination_name": session.destination.name,
                 "platform": session.destination.platform,
+                "scene_id": active_scene.as_ref().map(|scene| scene.id.as_str()),
+                "scene_name": active_scene.as_ref().map(|scene| scene.name.as_str()),
             }),
         ));
 
@@ -1561,6 +1570,53 @@ mod tests {
         let stopped_again = engine.stop_stream().await.unwrap();
         assert!(!stopped_again.changed);
         assert!(stopped_again.session.is_none());
+    }
+
+    #[tokio::test]
+    async fn stream_started_event_includes_active_scene_identity() {
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<StudioEvent>::new()));
+        let sink: MediaEventSink = {
+            let events = std::sync::Arc::clone(&events);
+            std::sync::Arc::new(move |event| {
+                events
+                    .lock()
+                    .expect("event sink mutex poisoned")
+                    .push(event);
+            })
+        };
+        let engine = DryRunMediaEngine::new(Some(sink));
+        let destination = StreamDestination::from_input(
+            StreamDestinationInput {
+                name: "Dry Run".to_string(),
+                platform: PlatformKind::CustomRtmp,
+                ingest_url: Some("rtmp://localhost/live".to_string()),
+                stream_key: None,
+                enabled: Some(true),
+            },
+            None,
+        );
+        let collection =
+            vaexcore_core::SceneCollection::default_collection(vaexcore_core::now_utc());
+        let active_scene = collection.active_scene().cloned().unwrap();
+        let mut request = StreamLaunchRequest::new(destination);
+        request.active_scene = Some(active_scene.clone());
+
+        let transition = engine.start_stream(request).await.unwrap();
+        assert!(transition.changed);
+
+        let events = events.lock().expect("event sink mutex poisoned");
+        let stream_event = events
+            .iter()
+            .find(|event| event.kind == StudioEventKind::StreamStarted)
+            .expect("stream started event");
+        assert_eq!(
+            stream_event.payload["scene_id"],
+            serde_json::json!(&active_scene.id)
+        );
+        assert_eq!(
+            stream_event.payload["scene_name"],
+            serde_json::json!(&active_scene.name)
+        );
     }
 
     #[test]
