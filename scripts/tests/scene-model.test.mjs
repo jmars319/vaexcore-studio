@@ -101,11 +101,22 @@ test("scene collection validation catches duplicate ids and invalid transforms",
 });
 
 test("compositor graph builder preserves source order and warnings", async () => {
-  const { buildCompositorGraph, createDefaultSceneCollection, validateCompositorGraph } =
-    await sharedTypes;
+  const {
+    buildCompositorGraph,
+    buildCompositorRenderPlan,
+    buildDefaultCompositorRenderTargets,
+    createDefaultSceneCollection,
+    validateCompositorGraph,
+    validateCompositorRenderPlan,
+  } = await sharedTypes;
   const scene = createDefaultSceneCollection("2026-05-08T12:00:00.000Z").scenes[0];
   const graph = buildCompositorGraph(scene);
+  const renderPlan = buildCompositorRenderPlan(
+    graph,
+    buildDefaultCompositorRenderTargets("recording", graph, null),
+  );
   const validation = validateCompositorGraph(graph);
+  const renderValidation = validateCompositorRenderPlan(renderPlan);
 
   assert.equal(graph.version, 1);
   assert.equal(graph.scene_id, scene.id);
@@ -123,4 +134,9 @@ test("compositor graph builder preserves source order and warnings", async () =>
   );
   assert.equal(validation.ready, true);
   assert.ok(validation.warnings.length >= 1);
+  assert.equal(renderValidation.ready, true);
+  assert.deepEqual(
+    renderPlan.targets.map((target) => target.kind),
+    ["preview", "program", "recording"],
+  );
 });

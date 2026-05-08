@@ -8,10 +8,11 @@ foundation to OBS-class scene editing and output.
 1. Scene contracts, defaults, and validation: done.
 2. Scene persistence, API, SDK, and desktop bridge: done.
 3. Designer shell with scene/source panels, preview, and inspector: done.
-4. Compositor render-graph contract: in progress, graph contract added.
-5. Preview renderer using the compositor graph: in progress, placeholder graph
-   canvas added.
-6. Program/output renderer for recording and streaming: not started.
+4. Compositor render-graph contract: done for the serializable graph contract.
+5. Preview renderer using the compositor graph: done for the placeholder graph
+   canvas.
+6. Program/output renderer for recording and streaming: done for the
+   serializable render-plan contract; real pixel output remains Phase 2.
 7. Display capture binding on macOS and Windows: not started.
 8. Window capture binding on macOS and Windows: not started.
 9. Camera source engine: not started.
@@ -59,5 +60,6 @@ Windows packaging validation must be run on a Windows machine:
 npm run app:build:windows
 ```
 
-The generated `pipeline-config.json` must include both `active_scene` and
-`compositor_graph` before the program/output renderer is considered wired.
+The generated `pipeline-config.json` must include `active_scene`,
+`compositor_graph`, and `compositor_render_plan` before Phase 1 is considered
+wired.

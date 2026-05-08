@@ -225,6 +225,35 @@ export interface CompositorGraph {
   nodes: CompositorNode[];
 }
 
+export type CompositorRendererKind = "contract" | "software" | "gpu";
+
+export type CompositorRenderTargetKind =
+  | "preview"
+  | "program"
+  | "recording"
+  | "stream";
+
+export type CompositorFrameFormat = "rgba8" | "bgra8" | "nv12";
+
+export interface CompositorRenderTarget {
+  id: string;
+  name: string;
+  kind: CompositorRenderTargetKind;
+  width: number;
+  height: number;
+  framerate: number;
+  frame_format: CompositorFrameFormat;
+  scale_mode: CompositorScaleMode;
+  enabled: boolean;
+}
+
+export interface CompositorRenderPlan {
+  version: number;
+  renderer: CompositorRendererKind;
+  graph: CompositorGraph;
+  targets: CompositorRenderTarget[];
+}
+
 export interface CompositorValidation {
   ready: boolean;
   warnings: string[];
@@ -565,6 +594,7 @@ export interface MediaPipelineConfig {
   capture_sources: CaptureSourceSelection[];
   active_scene?: Scene | null;
   compositor_graph?: CompositorGraph | null;
+  compositor_render_plan?: CompositorRenderPlan | null;
   recording_profile: MediaProfile | null;
   stream_destinations: StreamDestination[];
 }
@@ -1048,6 +1078,151 @@ export function validateCompositorGraph(graph: CompositorGraph): CompositorValid
     ready: errors.length === 0,
     warnings,
     errors,
+  };
+}
+
+export function buildCompositorRenderPlan(
+  graph: CompositorGraph,
+  targets: CompositorRenderTarget[],
+): CompositorRenderPlan {
+  return {
+    version: 1,
+    renderer: "contract",
+    graph,
+    targets,
+  };
+}
+
+export function buildDefaultCompositorRenderTargets(
+  intent: PipelineIntent,
+  graph: CompositorGraph,
+  recordingProfile: MediaProfile | null | undefined,
+  streamDestinations: StreamDestination[] = [],
+): CompositorRenderTarget[] {
+  const framerate = recordingProfile?.framerate ?? 60;
+  const targets: CompositorRenderTarget[] = [
+    compositorRenderTarget(
+      "target-preview",
+      "Preview",
+      "preview",
+      graph.output.width,
+      graph.output.height,
+      framerate,
+    ),
+    compositorRenderTarget(
+      "target-program",
+      "Program",
+      "program",
+      graph.output.width,
+      graph.output.height,
+      framerate,
+    ),
+  ];
+
+  if (intent === "recording" || intent === "recording_and_stream") {
+    targets.push(
+      compositorRenderTarget(
+        "target-recording",
+        "Recording Output",
+        "recording",
+        recordingProfile?.resolution.width ?? graph.output.width,
+        recordingProfile?.resolution.height ?? graph.output.height,
+        framerate,
+      ),
+    );
+  }
+
+  if (intent === "stream" || intent === "recording_and_stream") {
+    if (streamDestinations.length === 0) {
+      targets.push(
+        compositorRenderTarget(
+          "target-stream",
+          "Stream Output",
+          "stream",
+          graph.output.width,
+          graph.output.height,
+          framerate,
+        ),
+      );
+    } else {
+      targets.push(
+        ...streamDestinations.map((destination) =>
+          compositorRenderTarget(
+            `target-stream-${destination.id}`,
+            `Stream Output: ${destination.name}`,
+            "stream",
+            graph.output.width,
+            graph.output.height,
+            framerate,
+          ),
+        ),
+      );
+    }
+  }
+
+  return targets;
+}
+
+export function validateCompositorRenderPlan(
+  plan: CompositorRenderPlan,
+): CompositorValidation {
+  const validation = validateCompositorGraph(plan.graph);
+  const targetIds = new Set<string>();
+  const enabledTargets = plan.targets.filter((target) => target.enabled);
+
+  if (!Number.isInteger(plan.version) || plan.version < 1) {
+    validation.errors.push("Compositor render plan version must be a positive integer.");
+  }
+  if (plan.targets.length === 0) {
+    validation.errors.push("Compositor render plan must contain at least one target.");
+  }
+  if (enabledTargets.length === 0) {
+    validation.errors.push("Compositor render plan must contain at least one enabled target.");
+  }
+  if (!enabledTargets.some((target) => target.kind === "program")) {
+    validation.warnings.push("Compositor render plan has no enabled program target.");
+  }
+
+  plan.targets.forEach((target) => {
+    if (targetIds.has(target.id)) {
+      validation.errors.push(`Duplicate compositor render target id "${target.id}".`);
+    }
+    targetIds.add(target.id);
+    if (!target.id.trim()) {
+      validation.errors.push("Compositor render target id is required.");
+    }
+    if (!target.name.trim()) {
+      validation.errors.push(`Compositor render target "${target.id}" name is required.`);
+    }
+    validateGraphPositiveNumber(target.width, `${target.id}.width`, validation.errors);
+    validateGraphPositiveNumber(target.height, `${target.id}.height`, validation.errors);
+    validateGraphPositiveNumber(target.framerate, `${target.id}.framerate`, validation.errors);
+  });
+
+  return {
+    ...validation,
+    ready: validation.errors.length === 0,
+  };
+}
+
+function compositorRenderTarget(
+  id: string,
+  name: string,
+  kind: CompositorRenderTargetKind,
+  width: number,
+  height: number,
+  framerate: number,
+): CompositorRenderTarget {
+  return {
+    id,
+    name,
+    kind,
+    width,
+    height,
+    framerate,
+    frame_format: "bgra8",
+    scale_mode: "fit",
+    enabled: true,
   };
 }
 

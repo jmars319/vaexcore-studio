@@ -1,6 +1,7 @@
 use crate::{
-    build_compositor_graph, CaptureSourceSelection, CompositorGraph, MediaProfile, Scene,
-    StreamDestination,
+    build_compositor_graph, build_compositor_render_plan, compositor_render_target,
+    CaptureSourceSelection, CompositorGraph, CompositorRenderPlan, CompositorRenderTarget,
+    CompositorRenderTargetKind, MediaProfile, Scene, StreamDestination,
 };
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +23,8 @@ pub struct MediaPipelineConfig {
     pub active_scene: Option<Scene>,
     #[serde(default)]
     pub compositor_graph: Option<CompositorGraph>,
+    #[serde(default)]
+    pub compositor_render_plan: Option<CompositorRenderPlan>,
     pub recording_profile: Option<MediaProfile>,
     pub stream_destinations: Vec<StreamDestination>,
 }
@@ -74,6 +77,17 @@ pub struct MediaPipelineValidation {
 impl MediaPipelinePlanRequest {
     pub fn into_config(self) -> MediaPipelineConfig {
         let compositor_graph = self.active_scene.as_ref().map(build_compositor_graph);
+        let compositor_render_plan = compositor_graph.as_ref().map(|graph| {
+            build_compositor_render_plan(
+                graph,
+                default_compositor_render_targets(
+                    &self.intent,
+                    graph,
+                    self.recording_profile.as_ref(),
+                    &self.stream_destinations,
+                ),
+            )
+        });
 
         MediaPipelineConfig {
             version: 1,
@@ -82,10 +96,94 @@ impl MediaPipelinePlanRequest {
             capture_sources: self.capture_sources,
             active_scene: self.active_scene,
             compositor_graph,
+            compositor_render_plan,
             recording_profile: self.recording_profile,
             stream_destinations: self.stream_destinations,
         }
     }
+}
+
+fn default_compositor_render_targets(
+    intent: &PipelineIntent,
+    graph: &CompositorGraph,
+    recording_profile: Option<&MediaProfile>,
+    stream_destinations: &[StreamDestination],
+) -> Vec<CompositorRenderTarget> {
+    let mut targets = vec![
+        compositor_render_target(
+            "target-preview",
+            "Preview",
+            CompositorRenderTargetKind::Preview,
+            graph.output.width,
+            graph.output.height,
+            recording_profile
+                .map(|profile| profile.framerate)
+                .unwrap_or(60),
+        ),
+        compositor_render_target(
+            "target-program",
+            "Program",
+            CompositorRenderTargetKind::Program,
+            graph.output.width,
+            graph.output.height,
+            recording_profile
+                .map(|profile| profile.framerate)
+                .unwrap_or(60),
+        ),
+    ];
+
+    if matches!(
+        intent,
+        PipelineIntent::Recording | PipelineIntent::RecordingAndStream
+    ) {
+        targets.push(compositor_render_target(
+            "target-recording",
+            "Recording Output",
+            CompositorRenderTargetKind::Recording,
+            recording_profile
+                .map(|profile| profile.resolution.width)
+                .unwrap_or(graph.output.width),
+            recording_profile
+                .map(|profile| profile.resolution.height)
+                .unwrap_or(graph.output.height),
+            recording_profile
+                .map(|profile| profile.framerate)
+                .unwrap_or(60),
+        ));
+    }
+
+    if matches!(
+        intent,
+        PipelineIntent::Stream | PipelineIntent::RecordingAndStream
+    ) {
+        if stream_destinations.is_empty() {
+            targets.push(compositor_render_target(
+                "target-stream",
+                "Stream Output",
+                CompositorRenderTargetKind::Stream,
+                graph.output.width,
+                graph.output.height,
+                recording_profile
+                    .map(|profile| profile.framerate)
+                    .unwrap_or(60),
+            ));
+        } else {
+            targets.extend(stream_destinations.iter().map(|destination| {
+                compositor_render_target(
+                    format!("target-stream-{}", destination.id),
+                    format!("Stream Output: {}", destination.name),
+                    CompositorRenderTargetKind::Stream,
+                    graph.output.width,
+                    graph.output.height,
+                    recording_profile
+                        .map(|profile| profile.framerate)
+                        .unwrap_or(60),
+                )
+            }));
+        }
+    }
+
+    targets
 }
 
 impl MediaPipelinePlan {

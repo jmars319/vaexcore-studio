@@ -13,11 +13,11 @@ use std::{
 };
 use tokio::sync::Mutex;
 use vaexcore_core::{
-    build_compositor_graph, new_id, validate_compositor_graph, CaptureSourceKind,
-    CaptureSourceSelection, EngineMode, EngineStatus, MediaPipelineConfig, MediaPipelinePlan,
-    MediaPipelinePlanRequest, MediaPipelineStep, MediaProfile, PipelineIntent, PipelineStepStatus,
-    PlatformKind, RecordingContainer, RecordingSession, Scene, StreamDestination, StreamSession,
-    StudioEvent, StudioEventKind,
+    build_compositor_graph, new_id, validate_compositor_graph, validate_compositor_render_plan,
+    CaptureSourceKind, CaptureSourceSelection, EngineMode, EngineStatus, MediaPipelineConfig,
+    MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep, MediaProfile, PipelineIntent,
+    PipelineStepStatus, PlatformKind, RecordingContainer, RecordingSession, Scene,
+    StreamDestination, StreamSession, StudioEvent, StudioEventKind,
 };
 
 mod sidecar;
@@ -444,6 +444,7 @@ fn validate_scene_compositor(
         .compositor_graph
         .clone()
         .or_else(|| config.active_scene.as_ref().map(build_compositor_graph));
+    let render_plan = config.compositor_render_plan.clone();
     let Some(graph) = graph else {
         warnings.push(
             "pipeline has no active scene; capture sources will be used directly".to_string(),
@@ -457,7 +458,10 @@ fn validate_scene_compositor(
         return;
     };
 
-    let validation = validate_compositor_graph(&graph);
+    let validation = render_plan
+        .as_ref()
+        .map(validate_compositor_render_plan)
+        .unwrap_or_else(|| validate_compositor_graph(&graph));
     let visible_nodes = graph.nodes.iter().filter(|node| node.visible).count();
     let total_nodes = graph.nodes.len();
 
@@ -487,6 +491,31 @@ fn validate_scene_compositor(
             "Active scene has invalid compositor geometry.".to_string()
         },
     });
+
+    if let Some(render_plan) = render_plan {
+        let enabled_targets = render_plan
+            .targets
+            .iter()
+            .filter(|target| target.enabled)
+            .count();
+        steps.push(MediaPipelineStep {
+            id: "scene.render_targets".to_string(),
+            label: "Compositor render targets".to_string(),
+            status: if validation.ready {
+                PipelineStepStatus::Ready
+            } else {
+                PipelineStepStatus::Blocked
+            },
+            detail: format!(
+                "{} renderer with {}/{} enabled target(s).",
+                serde_json::to_string(&render_plan.renderer)
+                    .unwrap_or_else(|_| "\"contract\"".to_string())
+                    .trim_matches('"'),
+                enabled_targets,
+                render_plan.targets.len()
+            ),
+        });
+    }
 }
 
 fn validate_recording(

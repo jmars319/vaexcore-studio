@@ -83,6 +83,52 @@ pub struct CompositorGraph {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CompositorRendererKind {
+    Contract,
+    Software,
+    Gpu,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CompositorRenderTargetKind {
+    Preview,
+    Program,
+    Recording,
+    Stream,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum CompositorFrameFormat {
+    Rgba8,
+    Bgra8,
+    Nv12,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CompositorRenderTarget {
+    pub id: String,
+    pub name: String,
+    pub kind: CompositorRenderTargetKind,
+    pub width: u32,
+    pub height: u32,
+    pub framerate: u32,
+    pub frame_format: CompositorFrameFormat,
+    pub scale_mode: CompositorScaleMode,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CompositorRenderPlan {
+    pub version: u32,
+    pub renderer: CompositorRendererKind,
+    pub graph: CompositorGraph,
+    pub targets: Vec<CompositorRenderTarget>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct CompositorValidation {
     pub ready: bool,
     pub warnings: Vec<String>,
@@ -218,6 +264,105 @@ pub fn validate_compositor_graph(graph: &CompositorGraph) -> CompositorValidatio
         ready: errors.is_empty(),
         warnings,
         errors,
+    }
+}
+
+pub fn build_compositor_render_plan(
+    graph: &CompositorGraph,
+    targets: Vec<CompositorRenderTarget>,
+) -> CompositorRenderPlan {
+    CompositorRenderPlan {
+        version: 1,
+        renderer: CompositorRendererKind::Contract,
+        graph: graph.clone(),
+        targets,
+    }
+}
+
+pub fn validate_compositor_render_plan(plan: &CompositorRenderPlan) -> CompositorValidation {
+    let mut validation = validate_compositor_graph(&plan.graph);
+    let mut target_ids = HashSet::new();
+    let enabled_targets = plan.targets.iter().filter(|target| target.enabled).count();
+
+    if plan.version == 0 {
+        validation
+            .errors
+            .push("compositor render plan version must be greater than zero".to_string());
+    }
+    if plan.targets.is_empty() {
+        validation
+            .errors
+            .push("compositor render plan must contain at least one target".to_string());
+    }
+    if enabled_targets == 0 {
+        validation
+            .errors
+            .push("compositor render plan must contain at least one enabled target".to_string());
+    }
+    if !plan
+        .targets
+        .iter()
+        .any(|target| target.enabled && target.kind == CompositorRenderTargetKind::Program)
+    {
+        validation
+            .warnings
+            .push("compositor render plan has no enabled program target".to_string());
+    }
+
+    for target in &plan.targets {
+        if !target_ids.insert(target.id.as_str()) {
+            validation.errors.push(format!(
+                "duplicate compositor render target id \"{}\"",
+                target.id
+            ));
+        }
+        if target.id.trim().is_empty() {
+            validation
+                .errors
+                .push("compositor render target id is required".to_string());
+        }
+        if target.name.trim().is_empty() {
+            validation.errors.push(format!(
+                "compositor render target \"{}\" name is required",
+                target.id
+            ));
+        }
+        if target.width == 0 || target.height == 0 {
+            validation.errors.push(format!(
+                "compositor render target \"{}\" dimensions must be greater than zero",
+                target.id
+            ));
+        }
+        if target.framerate == 0 {
+            validation.errors.push(format!(
+                "compositor render target \"{}\" framerate must be greater than zero",
+                target.id
+            ));
+        }
+    }
+
+    validation.ready = validation.errors.is_empty();
+    validation
+}
+
+pub fn compositor_render_target(
+    id: impl Into<String>,
+    name: impl Into<String>,
+    kind: CompositorRenderTargetKind,
+    width: u32,
+    height: u32,
+    framerate: u32,
+) -> CompositorRenderTarget {
+    CompositorRenderTarget {
+        id: id.into(),
+        name: name.into(),
+        kind,
+        width,
+        height,
+        framerate,
+        frame_format: CompositorFrameFormat::Bgra8,
+        scale_mode: CompositorScaleMode::Fit,
+        enabled: true,
     }
 }
 
@@ -444,5 +589,39 @@ mod tests {
             .errors
             .iter()
             .any(|error| error.contains("opacity")));
+    }
+
+    #[test]
+    fn compositor_render_plan_validates_program_and_output_targets() {
+        let collection = crate::SceneCollection::default_collection(crate::now_utc());
+        let scene = collection.active_scene().unwrap();
+        let graph = build_compositor_graph(scene);
+        let plan = build_compositor_render_plan(
+            &graph,
+            vec![
+                compositor_render_target(
+                    "preview",
+                    "Preview",
+                    CompositorRenderTargetKind::Preview,
+                    graph.output.width,
+                    graph.output.height,
+                    60,
+                ),
+                compositor_render_target(
+                    "program",
+                    "Program",
+                    CompositorRenderTargetKind::Program,
+                    graph.output.width,
+                    graph.output.height,
+                    60,
+                ),
+            ],
+        );
+
+        let validation = validate_compositor_render_plan(&plan);
+
+        assert!(validation.ready, "{:?}", validation.errors);
+        assert_eq!(plan.targets.len(), 2);
+        assert_eq!(plan.targets[1].kind, CompositorRenderTargetKind::Program);
     }
 }
