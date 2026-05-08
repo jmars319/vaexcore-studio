@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Scene, SceneCrop, ScenePoint, SceneSize, SceneSource, SceneSourceFilter, SceneSourceKind,
+    Scene, SceneCrop, ScenePoint, SceneSize, SceneSource, SceneSourceBoundsMode, SceneSourceFilter,
+    SceneSourceKind,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -38,6 +39,7 @@ pub enum CompositorScaleMode {
     Stretch,
     Fit,
     Fill,
+    Center,
     OriginalSize,
 }
 
@@ -541,6 +543,7 @@ fn evaluate_node_for_target(
     target: &CompositorRenderTarget,
 ) -> CompositorEvaluatedNode {
     let transform = effective_node_transform(node, graph);
+    let source_rect = node_bounds_rect(&transform, node);
     let (scale_x, scale_y, offset_x, offset_y) = target_mapping(&graph.output, target);
     CompositorEvaluatedNode {
         node_id: node.id.clone(),
@@ -549,10 +552,10 @@ fn evaluate_node_for_target(
         role: node.role.clone(),
         status: node.status.clone(),
         rect: CompositorRect {
-            x: offset_x + transform.position.x * scale_x,
-            y: offset_y + transform.position.y * scale_y,
-            width: transform.size.width * scale_x,
-            height: transform.size.height * scale_y,
+            x: offset_x + source_rect.x * scale_x,
+            y: offset_y + source_rect.y * scale_y,
+            width: source_rect.width * scale_x,
+            height: source_rect.height * scale_y,
         },
         crop: SceneCrop {
             top: transform.crop.top * scale_y,
@@ -563,6 +566,84 @@ fn evaluate_node_for_target(
         rotation_degrees: transform.rotation_degrees,
         opacity: transform.opacity,
         z_index: node.z_index,
+    }
+}
+
+fn node_bounds_rect(transform: &CompositorTransform, node: &CompositorNode) -> CompositorRect {
+    let bounds = CompositorRect {
+        x: transform.position.x,
+        y: transform.position.y,
+        width: transform.size.width,
+        height: transform.size.height,
+    };
+    let native_size = node_native_size(node, transform);
+
+    match node.scale_mode {
+        CompositorScaleMode::Stretch => bounds,
+        CompositorScaleMode::Fit => {
+            let scale = (bounds.width / native_size.width).min(bounds.height / native_size.height);
+            centered_rect(
+                &bounds,
+                native_size.width * scale,
+                native_size.height * scale,
+            )
+        }
+        CompositorScaleMode::Fill => {
+            let scale = (bounds.width / native_size.width).max(bounds.height / native_size.height);
+            centered_rect(
+                &bounds,
+                native_size.width * scale,
+                native_size.height * scale,
+            )
+        }
+        CompositorScaleMode::Center => {
+            centered_rect(&bounds, native_size.width, native_size.height)
+        }
+        CompositorScaleMode::OriginalSize => CompositorRect {
+            x: bounds.x,
+            y: bounds.y,
+            width: native_size.width,
+            height: native_size.height,
+        },
+    }
+}
+
+fn centered_rect(bounds: &CompositorRect, width: f64, height: f64) -> CompositorRect {
+    CompositorRect {
+        x: bounds.x + (bounds.width - width) / 2.0,
+        y: bounds.y + (bounds.height - height) / 2.0,
+        width,
+        height,
+    }
+}
+
+fn node_native_size(node: &CompositorNode, transform: &CompositorTransform) -> SceneSize {
+    let size = match node.source_kind {
+        SceneSourceKind::Display | SceneSourceKind::Window | SceneSourceKind::Camera => {
+            config_size(&node.config, "resolution")
+        }
+        SceneSourceKind::BrowserOverlay => config_size(&node.config, "viewport"),
+        SceneSourceKind::ImageMedia
+        | SceneSourceKind::AudioMeter
+        | SceneSourceKind::Text
+        | SceneSourceKind::Group => None,
+    }
+    .unwrap_or_else(|| transform.size.clone());
+
+    SceneSize {
+        width: size.width.max(1.0),
+        height: size.height.max(1.0),
+    }
+}
+
+fn config_size(config: &serde_json::Value, key: &str) -> Option<SceneSize> {
+    let value = config.get(key)?;
+    let width = value.get("width")?.as_f64()?;
+    let height = value.get("height")?.as_f64()?;
+    if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
+        Some(SceneSize { width, height })
+    } else {
+        None
     }
 }
 
@@ -625,6 +706,12 @@ fn target_mapping(
                 (target_height - source_height * scale) / 2.0,
             )
         }
+        CompositorScaleMode::Center => (
+            1.0,
+            1.0,
+            (target_width - source_width) / 2.0,
+            (target_height - source_height) / 2.0,
+        ),
         CompositorScaleMode::OriginalSize => (
             1.0,
             1.0,
@@ -822,7 +909,7 @@ fn build_compositor_node(
         locked: source.locked,
         z_index: source.z_index,
         blend_mode: CompositorBlendMode::Normal,
-        scale_mode: CompositorScaleMode::Stretch,
+        scale_mode: node_scale_mode(&source.bounds_mode),
         status,
         status_detail,
         filters: source.filters.clone(),
@@ -889,6 +976,16 @@ fn node_role(kind: &SceneSourceKind) -> CompositorNodeRole {
         }
         SceneSourceKind::Text => CompositorNodeRole::Text,
         SceneSourceKind::Group => CompositorNodeRole::Group,
+    }
+}
+
+fn node_scale_mode(bounds_mode: &SceneSourceBoundsMode) -> CompositorScaleMode {
+    match bounds_mode {
+        SceneSourceBoundsMode::Stretch => CompositorScaleMode::Stretch,
+        SceneSourceBoundsMode::Fit => CompositorScaleMode::Fit,
+        SceneSourceBoundsMode::Fill => CompositorScaleMode::Fill,
+        SceneSourceBoundsMode::Center => CompositorScaleMode::Center,
+        SceneSourceBoundsMode::OriginalSize => CompositorScaleMode::OriginalSize,
     }
 }
 
@@ -1171,6 +1268,7 @@ mod tests {
             visible: true,
             locked: false,
             z_index: 5,
+            bounds_mode: SceneSourceBoundsMode::Stretch,
             filters: Vec::new(),
             config: serde_json::json!({
                 "child_source_ids": ["source-camera-placeholder"]
@@ -1211,6 +1309,54 @@ mod tests {
         assert_eq!(camera_frame_node.rect.y, 80.0);
         assert_eq!(camera_frame_node.rotation_degrees, 15.0);
         assert!((camera_frame_node.opacity - 0.4).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn compositor_frame_evaluation_applies_source_bounds_modes() {
+        let mut collection = crate::SceneCollection::default_collection(crate::now_utc());
+        let scene = collection.scenes.first_mut().unwrap();
+        let camera = scene
+            .sources
+            .iter_mut()
+            .find(|source| source.id == "source-camera-placeholder")
+            .unwrap();
+        camera.position = ScenePoint { x: 0.0, y: 0.0 };
+        camera.size = SceneSize {
+            width: 300.0,
+            height: 300.0,
+        };
+        camera.bounds_mode = SceneSourceBoundsMode::Fit;
+
+        let graph = build_compositor_graph(scene);
+        let camera_node = graph
+            .nodes
+            .iter()
+            .find(|node| node.source_id == "source-camera-placeholder")
+            .unwrap();
+        assert_eq!(camera_node.scale_mode, CompositorScaleMode::Fit);
+
+        let plan = build_compositor_render_plan(
+            &graph,
+            vec![compositor_render_target(
+                "program",
+                "Program",
+                CompositorRenderTargetKind::Program,
+                1920,
+                1080,
+                60,
+            )],
+        );
+        let frame = evaluate_compositor_frame(&plan, 0);
+        let camera_frame_node = frame.targets[0]
+            .nodes
+            .iter()
+            .find(|node| node.source_id == "source-camera-placeholder")
+            .unwrap();
+
+        assert_eq!(camera_frame_node.rect.x, 0.0);
+        assert!((camera_frame_node.rect.y - 65.625).abs() < f64::EPSILON);
+        assert_eq!(camera_frame_node.rect.width, 300.0);
+        assert!((camera_frame_node.rect.height - 168.75).abs() < f64::EPSILON);
     }
 
     #[test]

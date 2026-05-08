@@ -51,8 +51,10 @@ foundation to OBS-class scene editing and output.
     edge/center snapping guides; multi-select, rotate handles, distribute, and
     copy/paste are not started.
 21. Crop, bounds modes, fit/fill/stretch/center controls: started with numeric
-    crop fields, reset crop, fit-to-canvas, and center controls; source bounds
-    modes and fit/fill/stretch policies are not started.
+    crop fields, reset crop, fit-to-canvas, center controls, serializable source
+    bounds modes, Designer bounds controls, and first-pass compositor
+    fit/fill/stretch/center/original-size evaluation. Real source clipping and
+    full renderer policy parity are not started.
 22. Source filters and effects: started with serializable per-source filter
     chains, supported filter kinds, validation, and compositor graph
     propagation plus first-pass Designer filter chain editing. Real video/audio

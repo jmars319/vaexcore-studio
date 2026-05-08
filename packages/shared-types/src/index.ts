@@ -48,6 +48,13 @@ export type SceneSourceFilterKind =
   | "noise_gate"
   | "compressor";
 
+export type SceneSourceBoundsMode =
+  | "stretch"
+  | "fit"
+  | "fill"
+  | "center"
+  | "original_size";
+
 export interface SceneSourceFilter {
   id: string;
   name: string;
@@ -153,6 +160,7 @@ export interface SceneSourceBase<
   visible: boolean;
   locked: boolean;
   z_index: number;
+  bounds_mode: SceneSourceBoundsMode;
   filters: SceneSourceFilter[];
   config: Config;
 }
@@ -271,7 +279,7 @@ export type CompositorNodeStatus =
 
 export type CompositorBlendMode = "normal";
 
-export type CompositorScaleMode = "stretch" | "fit" | "fill" | "original_size";
+export type CompositorScaleMode = "stretch" | "fit" | "fill" | "center" | "original_size";
 
 export interface CompositorOutput {
   width: number;
@@ -440,6 +448,7 @@ export interface SceneSourceDefaults {
   visible?: boolean;
   locked?: boolean;
   z_index?: number;
+  bounds_mode?: SceneSourceBoundsMode;
   filters?: SceneSourceFilter[];
   config?: Partial<SceneSourceConfig>;
 }
@@ -1074,6 +1083,7 @@ export function createDefaultSceneSource(
     visible: defaults.visible ?? true,
     locked: defaults.locked ?? false,
     z_index: defaults.z_index ?? 0,
+    bounds_mode: defaults.bounds_mode ?? "stretch",
     filters: cloneJson(defaults.filters ?? []),
     config,
   } as SceneSource;
@@ -1794,7 +1804,7 @@ export function buildCompositorGraph(scene: Scene): CompositorGraph {
         locked: source.locked,
         z_index: source.z_index,
         blend_mode: "normal",
-        scale_mode: "stretch",
+        scale_mode: compositorScaleMode(source.bounds_mode),
         status,
         status_detail: detail,
         filters: cloneJson(source.filters ?? []),
@@ -1813,6 +1823,23 @@ export function buildCompositorGraph(scene: Scene): CompositorGraph {
     },
     nodes,
   };
+}
+
+function compositorScaleMode(boundsMode: SceneSourceBoundsMode | undefined): CompositorScaleMode {
+  switch (boundsMode) {
+    case "stretch":
+      return "stretch";
+    case "fit":
+      return "fit";
+    case "fill":
+      return "fill";
+    case "center":
+      return "center";
+    case "original_size":
+      return "original_size";
+    default:
+      return "stretch";
+  }
 }
 
 function buildGroupParentMap(sources: SceneSource[]): Map<string, string> {
@@ -2308,6 +2335,7 @@ function evaluateNodeForTarget(
   target: CompositorRenderTarget,
 ): CompositorEvaluatedNode {
   const transform = effectiveNodeTransform(node, graph);
+  const sourceRect = nodeBoundsRect(transform, node);
   const { scaleX, scaleY, offsetX, offsetY } = targetMapping(graph.output, target);
   return {
     node_id: node.id,
@@ -2316,10 +2344,10 @@ function evaluateNodeForTarget(
     role: node.role,
     status: node.status,
     rect: {
-      x: offsetX + transform.position.x * scaleX,
-      y: offsetY + transform.position.y * scaleY,
-      width: transform.size.width * scaleX,
-      height: transform.size.height * scaleY,
+      x: offsetX + sourceRect.x * scaleX,
+      y: offsetY + sourceRect.y * scaleY,
+      width: sourceRect.width * scaleX,
+      height: sourceRect.height * scaleY,
     },
     crop: {
       top: transform.crop.top * scaleY,
@@ -2331,6 +2359,87 @@ function evaluateNodeForTarget(
     opacity: transform.opacity,
     z_index: node.z_index,
   };
+}
+
+function nodeBoundsRect(
+  transform: CompositorTransform,
+  node: CompositorNode,
+): CompositorRect {
+  const bounds: CompositorRect = {
+    x: transform.position.x,
+    y: transform.position.y,
+    width: transform.size.width,
+    height: transform.size.height,
+  };
+  const nativeSize = nodeNativeSize(node, transform);
+
+  if (node.scale_mode === "fit") {
+    const scale = Math.min(bounds.width / nativeSize.width, bounds.height / nativeSize.height);
+    return centeredRect(bounds, nativeSize.width * scale, nativeSize.height * scale);
+  }
+  if (node.scale_mode === "fill") {
+    const scale = Math.max(bounds.width / nativeSize.width, bounds.height / nativeSize.height);
+    return centeredRect(bounds, nativeSize.width * scale, nativeSize.height * scale);
+  }
+  if (node.scale_mode === "center") {
+    return centeredRect(bounds, nativeSize.width, nativeSize.height);
+  }
+  if (node.scale_mode === "original_size") {
+    return {
+      x: bounds.x,
+      y: bounds.y,
+      width: nativeSize.width,
+      height: nativeSize.height,
+    };
+  }
+
+  return bounds;
+}
+
+function centeredRect(bounds: CompositorRect, width: number, height: number): CompositorRect {
+  return {
+    x: bounds.x + (bounds.width - width) / 2,
+    y: bounds.y + (bounds.height - height) / 2,
+    width,
+    height,
+  };
+}
+
+function nodeNativeSize(node: CompositorNode, transform: CompositorTransform): SceneSize {
+  const size =
+    node.source_kind === "browser_overlay"
+      ? configSize(node.config, "viewport")
+      : node.source_kind === "display" ||
+          node.source_kind === "window" ||
+          node.source_kind === "camera"
+        ? configSize(node.config, "resolution")
+        : null;
+
+  return {
+    width: Math.max(1, size?.width ?? transform.size.width),
+    height: Math.max(1, size?.height ?? transform.size.height),
+  };
+}
+
+function configSize(config: SceneSourceConfig, key: "resolution" | "viewport"): SceneSize | null {
+  const value =
+    key === "resolution" && "resolution" in config
+      ? config.resolution
+      : key === "viewport" && "viewport" in config
+        ? config.viewport
+        : null;
+
+  if (
+    value &&
+    Number.isFinite(value.width) &&
+    Number.isFinite(value.height) &&
+    value.width > 0 &&
+    value.height > 0
+  ) {
+    return { width: value.width, height: value.height };
+  }
+
+  return null;
 }
 
 function effectiveNodeTransform(
@@ -2388,7 +2497,7 @@ function targetMapping(
       offsetY: (targetHeight - sourceHeight * scale) / 2,
     };
   }
-  if (target.scale_mode === "original_size") {
+  if (target.scale_mode === "center" || target.scale_mode === "original_size") {
     return {
       scaleX: 1,
       scaleY: 1,

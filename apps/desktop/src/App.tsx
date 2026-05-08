@@ -85,6 +85,7 @@ import type {
   ScenePoint,
   SceneSize,
   SceneSource,
+  SceneSourceBoundsMode,
   SceneSourceFilter,
   SceneSourceFilterKind,
   SceneSourceKind,
@@ -174,6 +175,7 @@ type SceneSourcePatch = Partial<
     | "visible"
     | "locked"
     | "z_index"
+    | "bounds_mode"
     | "filters"
   >
 > & {
@@ -186,6 +188,14 @@ type SceneSourcePatch = Partial<
 type SceneTransitionPatch = Partial<
   Pick<SceneTransition, "name" | "kind" | "duration_ms" | "easing" | "config">
 >;
+
+const sceneSourceBoundsModeLabels: Record<SceneSourceBoundsMode, string> = {
+  stretch: "Stretch",
+  fit: "Fit",
+  fill: "Fill",
+  center: "Center",
+  original_size: "Original Size",
+};
 
 type DesignerDragState = {
   mode: "move" | "resize";
@@ -2596,6 +2606,23 @@ function DesignerPage(props: {
                 value={props.selectedSource.size.height}
               />
             </div>
+            <label>
+              Bounds
+              <select
+                onChange={(event) =>
+                  props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                    bounds_mode: event.target.value as SceneSourceBoundsMode,
+                  })
+                }
+                value={props.selectedSource.bounds_mode}
+              >
+                {Object.entries(sceneSourceBoundsModeLabels).map(([mode, label]) => (
+                  <option key={mode} value={mode}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="form-grid">
               <SceneNumberInput
                 label="Crop Top"

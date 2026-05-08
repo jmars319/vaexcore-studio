@@ -31,6 +31,8 @@ fields so group/nesting transforms can be resolved consistently by preview and
 program renderers.
 Scene sources may include a serializable `filters` chain; the compositor graph
 preserves that chain for future video/audio filter execution.
+Scene sources also include `bounds_mode` (`stretch`, `fit`, `fill`, `center`,
+or `original_size`), which maps into compositor node `scale_mode` evaluation.
 Scene transition helpers expose frame-count and easing sample plans for preview
 and future renderer handoff.
 Desktop scene bundle imports create timestamped backups under `scene-backups`

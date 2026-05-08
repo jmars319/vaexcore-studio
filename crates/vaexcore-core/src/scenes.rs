@@ -63,6 +63,16 @@ pub struct SceneSourceFilter {
     pub config: serde_json::Value,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SceneSourceBoundsMode {
+    Stretch,
+    Fit,
+    Fill,
+    Center,
+    OriginalSize,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SceneSource {
     pub id: String,
@@ -76,6 +86,8 @@ pub struct SceneSource {
     pub visible: bool,
     pub locked: bool,
     pub z_index: i32,
+    #[serde(default = "default_scene_source_bounds_mode")]
+    pub bounds_mode: SceneSourceBoundsMode,
     #[serde(default)]
     pub filters: Vec<SceneSourceFilter>,
     pub config: serde_json::Value,
@@ -388,6 +400,10 @@ fn default_scene_transitions() -> Vec<SceneTransition> {
     ]
 }
 
+fn default_scene_source_bounds_mode() -> SceneSourceBoundsMode {
+    SceneSourceBoundsMode::Stretch
+}
+
 impl SceneSource {
     fn new(
         id: &str,
@@ -415,6 +431,7 @@ impl SceneSource {
             visible: true,
             locked: false,
             z_index,
+            bounds_mode: SceneSourceBoundsMode::Stretch,
             filters: Vec::new(),
             config,
         }

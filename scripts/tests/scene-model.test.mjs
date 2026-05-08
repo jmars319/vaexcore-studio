@@ -100,6 +100,7 @@ test("scene source defaults cover supported source kinds", async () => {
     assert.equal(source.visible, true);
     assert.equal(source.locked, false);
     assert.equal(source.opacity, 1);
+    assert.equal(source.bounds_mode, "stretch");
     assert.deepEqual(source.filters, []);
     assert.ok(source.config);
   }
@@ -230,6 +231,45 @@ test("scene groups validate children and apply parent transforms", async () => {
     invalid.issues.map((issue) => issue.message).join("\n"),
     /Duplicate group child|does not exist|Group cannot contain itself/,
   );
+});
+
+test("source bounds modes are reflected in compositor frame evaluation", async () => {
+  const {
+    buildCompositorGraph,
+    buildCompositorRenderPlan,
+    createDefaultSceneCollection,
+    evaluateCompositorFrame,
+  } = await sharedTypes;
+  const scene = createDefaultSceneCollection("2026-05-08T12:00:00.000Z").scenes[0];
+  const camera = scene.sources.find((source) => source.id === "source-camera-placeholder");
+  assert.ok(camera);
+  camera.position = { x: 0, y: 0 };
+  camera.size = { width: 300, height: 300 };
+  camera.bounds_mode = "fit";
+
+  const graph = buildCompositorGraph(scene);
+  const cameraNode = graph.nodes.find((node) => node.source_id === camera.id);
+  const plan = buildCompositorRenderPlan(graph, [
+    {
+      id: "program",
+      name: "Program",
+      kind: "program",
+      width: 1920,
+      height: 1080,
+      framerate: 60,
+      enabled: true,
+      frame_format: "bgra8",
+      scale_mode: "fit",
+    },
+  ]);
+  const frame = evaluateCompositorFrame(plan, 0);
+  const cameraFrameNode = frame.targets[0].nodes.find((node) => node.source_id === camera.id);
+
+  assert.equal(cameraNode.scale_mode, "fit");
+  assert.equal(cameraFrameNode.rect.x, 0);
+  assert.equal(cameraFrameNode.rect.y, 65.625);
+  assert.equal(cameraFrameNode.rect.width, 300);
+  assert.equal(cameraFrameNode.rect.height, 168.75);
 });
 
 test("compositor graph builder preserves source order and warnings", async () => {
