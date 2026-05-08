@@ -505,6 +505,7 @@ export interface MediaPipelineConfig {
   dry_run: boolean;
   intent: PipelineIntent;
   capture_sources: CaptureSourceSelection[];
+  active_scene?: Scene | null;
   recording_profile: MediaProfile | null;
   stream_destinations: StreamDestination[];
 }
@@ -513,6 +514,7 @@ export interface MediaPipelinePlanRequest {
   dry_run: boolean;
   intent: PipelineIntent;
   capture_sources: CaptureSourceSelection[];
+  active_scene?: Scene | null;
   recording_profile: MediaProfile | null;
   stream_destinations: StreamDestination[];
 }
@@ -852,6 +854,12 @@ function validateSceneSources(
   issues: SceneValidationIssue[],
 ) {
   const sourceIds = new Set<string>();
+  if (!sources.some((source) => source.visible)) {
+    issues.push({
+      path: `${scenePath}.sources`,
+      message: "Scene must contain at least one visible source.",
+    });
+  }
 
   sources.forEach((source, sourceIndex) => {
     const sourcePath = `${scenePath}.sources[${sourceIndex}]`;

@@ -17,6 +17,8 @@ import type {
   PreflightSnapshot,
   ProfilesSnapshot,
   RecentRecordingsSnapshot,
+  SceneCollection,
+  SceneValidationResult,
   StudioStatus,
   StreamDestinationInput,
 } from "@vaexcore/shared-types";
@@ -464,6 +466,24 @@ export const StudioApi = {
     apiRequest<MediaPipelinePlan>(config, "/media/plan"),
   profiles: (config: RuntimeApiConfig) =>
     apiRequest<ProfilesSnapshot>(config, "/profiles"),
+  sceneCollection: (config: RuntimeApiConfig) =>
+    apiRequest<SceneCollection>(config, "/scenes"),
+  saveSceneCollection: (
+    config: RuntimeApiConfig,
+    collection: SceneCollection,
+  ) =>
+    apiRequest<SceneCollection>(config, "/scenes", {
+      method: "PUT",
+      body: JSON.stringify(collection),
+    }),
+  validateSceneCollection: (
+    config: RuntimeApiConfig,
+    collection: SceneCollection,
+  ) =>
+    apiRequest<SceneValidationResult>(config, "/scenes/validate", {
+      method: "POST",
+      body: JSON.stringify(collection),
+    }),
   createProfile: (config: RuntimeApiConfig, request: CreateProfileRequest) =>
     apiRequest<CreatedProfile>(config, "/profiles", {
       method: "POST",

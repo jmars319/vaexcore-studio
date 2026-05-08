@@ -1,5 +1,5 @@
-use crate::StreamLaunchRequest;
 use crate::{MediaEngine, MediaError, MediaEventSink, MediaTransition};
+use crate::{RecordingLaunchRequest, StreamLaunchRequest};
 use async_trait::async_trait;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
@@ -15,8 +15,7 @@ use std::{
 };
 use vaexcore_core::{
     ApiResponse, EngineMode, EngineStatus, MediaPipelinePlan, MediaPipelinePlanRequest,
-    MediaPipelineValidation, MediaProfile, RecordingSession, StreamSession, StudioEvent,
-    StudioEventKind,
+    MediaPipelineValidation, RecordingSession, StreamSession, StudioEvent, StudioEventKind,
 };
 
 #[cfg(target_os = "windows")]
@@ -146,10 +145,10 @@ impl MediaRunnerSupervisor {
 
     pub async fn start_recording(
         &self,
-        profile: MediaProfile,
+        request: RecordingLaunchRequest,
     ) -> Result<MediaTransition<RecordingSession>, SidecarError> {
         let supervisor = self.clone();
-        tokio::task::spawn_blocking(move || supervisor.post_blocking("/recording/start", &profile))
+        tokio::task::spawn_blocking(move || supervisor.post_blocking("/recording/start", &request))
             .await
             .map_err(|error| SidecarError::Join(error.to_string()))?
     }
@@ -510,9 +509,9 @@ impl From<SidecarError> for MediaError {
 impl MediaEngine for SidecarMediaEngine {
     async fn start_recording(
         &self,
-        profile: MediaProfile,
+        request: RecordingLaunchRequest,
     ) -> Result<MediaTransition<RecordingSession>, MediaError> {
-        let mut transition = self.runner.start_recording(profile).await?;
+        let mut transition = self.runner.start_recording(request).await?;
         transition.status = self
             .runner
             .status()
@@ -629,7 +628,9 @@ mod tests {
         },
         thread::{self, JoinHandle},
     };
-    use vaexcore_core::{new_id, PlatformKind, StreamDestination, StreamDestinationInput};
+    use vaexcore_core::{
+        new_id, MediaProfile, PlatformKind, StreamDestination, StreamDestinationInput,
+    };
 
     #[test]
     fn missing_runner_executable_is_reported() {
@@ -649,8 +650,14 @@ mod tests {
         let engine = SidecarMediaEngine::new(runner.supervisor(), None);
         let profile = MediaProfile::default_local();
 
-        let first = engine.start_recording(profile.clone()).await.unwrap();
-        let second = engine.start_recording(profile).await.unwrap();
+        let first = engine
+            .start_recording(RecordingLaunchRequest::new(profile.clone()))
+            .await
+            .unwrap();
+        let second = engine
+            .start_recording(RecordingLaunchRequest::new(profile))
+            .await
+            .unwrap();
         assert!(first.changed);
         assert!(!second.changed);
         assert!(second.status.recording_active);
@@ -725,10 +732,10 @@ mod tests {
                                 }))
                                 .unwrap()
                             } else if request.starts_with("POST /recording/start ") {
-                                let profile: MediaProfile =
+                                let request: RecordingLaunchRequest =
                                     serde_json::from_str(request_body).unwrap();
                                 serde_json::to_string(&ApiResponse::ok(
-                                    runner_state.start_recording(profile),
+                                    runner_state.start_recording(request.profile),
                                 ))
                                 .unwrap()
                             } else if request.starts_with("POST /recording/stop ") {

@@ -378,7 +378,7 @@ nav {
 
 .designer-list-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
   width: 100%;
@@ -410,6 +410,20 @@ nav {
 
 .source-stack-item {
   grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.source-add-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.source-add-controls select {
+  width: 150px;
+  min-height: 30px;
+  font-size: 12px;
 }
 
 .source-stack-main,
@@ -488,6 +502,7 @@ nav {
   color: var(--text);
   text-align: left;
   transform-origin: center;
+  touch-action: none;
 }
 
 .designer-source-box span,
@@ -534,6 +549,29 @@ nav {
   color: var(--warning);
   font-size: 11px;
   content: "locked";
+}
+
+.designer-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-left: 1px solid rgba(34, 216, 255, 0.58);
+  border-top: 1px solid rgba(34, 216, 255, 0.58);
+  border-radius: 6px 0 0;
+  background: rgba(57, 217, 255, 0.34);
+  cursor: nwse-resize;
+}
+
+.source-config-editor {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0b0c13;
 }
 
 .designer-preview-meta {
@@ -1093,6 +1131,7 @@ select:focus {
     justify-content: flex-start;
   }
 
+  .designer-list-item,
   .source-stack-item {
     grid-template-columns: 1fr;
   }

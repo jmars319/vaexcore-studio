@@ -9,14 +9,14 @@ use serde_json::{json, Value};
 use vaexcore_core::{
     new_id, now_utc, AppSettings, AuditLogEntry, Marker, MediaProfile, MediaProfileInput,
     PlatformKind, ProfileBundle, ProfileBundleImportResult, ProfilesSnapshot, RecordingContainer,
-    RecordingHistoryEntry, RecordingSession, Resolution, SecretRef, SecretStore, SecretStoreError,
-    SensitiveString, StreamDestination, StreamDestinationBundleItem, StreamDestinationInput,
-    LOCAL_SQLITE_SECRET_PROVIDER, MACOS_KEYCHAIN_SECRET_PROVIDER,
-    WINDOWS_CREDENTIAL_MANAGER_SECRET_PROVIDER,
+    RecordingHistoryEntry, RecordingSession, Resolution, SceneCollection, SceneValidationResult,
+    SecretRef, SecretStore, SecretStoreError, SensitiveString, StreamDestination,
+    StreamDestinationBundleItem, StreamDestinationInput, LOCAL_SQLITE_SECRET_PROVIDER,
+    MACOS_KEYCHAIN_SECRET_PROVIDER, WINDOWS_CREDENTIAL_MANAGER_SECRET_PROVIDER,
 };
 use vaexcore_platforms::apply_platform_defaults;
 
-const CURRENT_SCHEMA_VERSION: u32 = 4;
+const CURRENT_SCHEMA_VERSION: u32 = 5;
 const AUDIT_LOG_LIMIT: usize = 200;
 const MARKER_LIST_LIMIT: usize = 200;
 const MACOS_KEYCHAIN_SERVICE: &str = "com.vaexcore.studio.stream-keys";
@@ -346,6 +346,47 @@ impl ProfileStore {
         )?;
 
         Ok(settings)
+    }
+
+    pub fn scene_collection(&self) -> Result<SceneCollection, StoreError> {
+        if let Some(collection) = self.read_scene_collection()? {
+            return Ok(collection);
+        }
+
+        self.save_scene_collection(SceneCollection::default_collection(now_utc()))
+    }
+
+    pub fn save_scene_collection(
+        &self,
+        mut collection: SceneCollection,
+    ) -> Result<SceneCollection, StoreError> {
+        collection.id = collection.id.trim().to_string();
+        collection.name = collection.name.trim().to_string();
+        collection.updated_at = now_utc();
+        validate_scene_collection_for_store(&collection)?;
+
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        connection.execute(
+            "INSERT INTO scene_collections (id, value_json, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET
+               value_json = excluded.value_json,
+               updated_at = excluded.updated_at",
+            params![
+                &collection.id,
+                serde_json::to_string(&collection)?,
+                collection.updated_at.to_rfc3339(),
+            ],
+        )?;
+
+        Ok(collection)
+    }
+
+    pub fn validate_scene_collection(&self, collection: &SceneCollection) -> SceneValidationResult {
+        collection.validation()
     }
 
     pub fn insert_recording_profile(
@@ -1002,6 +1043,9 @@ impl ProfileStore {
         if current_version < 4 {
             apply_migration_4(&connection)?;
         }
+        if current_version < 5 {
+            apply_migration_5(&connection)?;
+        }
 
         Ok(())
     }
@@ -1109,6 +1153,24 @@ impl ProfileStore {
         let value = connection
             .query_row(
                 "SELECT value_json FROM app_settings WHERE id = 'app'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        value
+            .map(|value| serde_json::from_str(&value).map_err(StoreError::Json))
+            .transpose()
+    }
+
+    fn read_scene_collection(&self) -> Result<Option<SceneCollection>, StoreError> {
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        let value = connection
+            .query_row(
+                "SELECT value_json FROM scene_collections ORDER BY updated_at DESC LIMIT 1",
                 [],
                 |row| row.get::<_, String>(0),
             )
@@ -1368,6 +1430,43 @@ fn apply_migration_4(connection: &Connection) -> Result<(), StoreError> {
         params![4_u32, now_utc().to_rfc3339()],
     )?;
     Ok(())
+}
+
+fn apply_migration_5(connection: &Connection) -> Result<(), StoreError> {
+    connection.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS scene_collections (
+              id TEXT PRIMARY KEY,
+              value_json TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_scene_collections_updated_at
+            ON scene_collections(updated_at DESC);
+            "#,
+    )?;
+    connection.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+        params![5_u32, now_utc().to_rfc3339()],
+    )?;
+    Ok(())
+}
+
+fn validate_scene_collection_for_store(collection: &SceneCollection) -> Result<(), StoreError> {
+    let validation = collection.validation();
+    if validation.ok {
+        return Ok(());
+    }
+
+    let messages = validation
+        .issues
+        .into_iter()
+        .map(|issue| format!("{}: {}", issue.path, issue.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(StoreError::InvalidValue(format!(
+        "invalid scene collection: {messages}"
+    )))
 }
 
 fn schema_version(connection: &Connection) -> Result<u32, StoreError> {
@@ -1832,6 +1931,36 @@ mod tests {
         let store = ProfileStore::open_memory().unwrap();
 
         assert_eq!(store.schema_version().unwrap(), CURRENT_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn scene_collection_round_trip() {
+        let store = ProfileStore::open_memory().unwrap();
+        let mut collection = store.scene_collection().unwrap();
+        assert_eq!(collection.active_scene_id, "scene-main");
+
+        collection.name = "Updated Scenes".to_string();
+        collection.scenes[0].name = "Updated Main".to_string();
+        let saved = store.save_scene_collection(collection.clone()).unwrap();
+
+        assert_eq!(saved.name, "Updated Scenes");
+        assert_eq!(
+            store.scene_collection().unwrap().scenes[0].name,
+            "Updated Main"
+        );
+    }
+
+    #[test]
+    fn invalid_scene_collection_is_rejected() {
+        let store = ProfileStore::open_memory().unwrap();
+        let mut collection = store.scene_collection().unwrap();
+        collection.active_scene_id = "missing".to_string();
+
+        let error = store.save_scene_collection(collection).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("Active scene id must match a scene"));
     }
 
     #[test]

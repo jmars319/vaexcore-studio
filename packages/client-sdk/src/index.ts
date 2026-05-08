@@ -15,6 +15,8 @@ import type {
   MediaProfileInput,
   ProfilesSnapshot,
   RecentRecordingsSnapshot,
+  SceneCollection,
+  SceneValidationResult,
   StudioStatus,
   StreamDestinationInput,
 } from "@vaexcore/shared-types";
@@ -84,6 +86,24 @@ export class VaexcoreStudioClient {
 
   profiles(): Promise<ProfilesSnapshot> {
     return this.request<ProfilesSnapshot>("/profiles");
+  }
+
+  sceneCollection(): Promise<SceneCollection> {
+    return this.request<SceneCollection>("/scenes");
+  }
+
+  saveSceneCollection(collection: SceneCollection): Promise<SceneCollection> {
+    return this.request<SceneCollection>("/scenes", {
+      method: "PUT",
+      body: JSON.stringify(collection),
+    });
+  }
+
+  validateSceneCollection(collection: SceneCollection): Promise<SceneValidationResult> {
+    return this.request<SceneValidationResult>("/scenes/validate", {
+      method: "POST",
+      body: JSON.stringify(collection),
+    });
   }
 
   clients(): Promise<ConnectedClientsSnapshot> {

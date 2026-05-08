@@ -34,7 +34,16 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
-import { CSSProperties, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import {
+  CSSProperties,
+  FormEvent,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
   AppSettings,
   AuditLogEntry,
@@ -68,6 +77,7 @@ import type {
 } from "@vaexcore/shared-types";
 import {
   createDefaultSceneCollection,
+  createDefaultSceneSource,
   platformLabels,
   sceneSourceKindLabels,
   validateSceneCollection,
@@ -139,6 +149,17 @@ type SceneSourcePatch = Partial<
   position?: Partial<ScenePoint>;
   size?: Partial<SceneSize>;
   crop?: Partial<SceneCrop>;
+  config?: Record<string, unknown>;
+};
+
+type DesignerDragState = {
+  mode: "move" | "resize";
+  pointerId: number;
+  sourceId: string;
+  startClientX: number;
+  startClientY: number;
+  startPosition: ScenePoint;
+  startSize: SceneSize;
 };
 
 const sectionIds: readonly Section[] = [
@@ -268,6 +289,8 @@ function App() {
   const [selectedSceneSourceId, setSelectedSceneSourceId] = useState(
     "source-main-display",
   );
+  const [sceneSaveStatus, setSceneSaveStatus] = useState<string | null>(null);
+  const [sceneDirty, setSceneDirty] = useState(false);
 
   useEffect(() => {
     loadRuntimeConfig().then(setConfig).catch((error: Error) => {
@@ -401,6 +424,32 @@ function App() {
     return () => {
       cancelled = true;
       window.clearInterval(interval);
+    };
+  }, [config]);
+
+  useEffect(() => {
+    if (!config) return;
+    let cancelled = false;
+    StudioApi.sceneCollection(config)
+      .then((collection) => {
+        if (cancelled) return;
+        setSceneCollection(collection);
+        const scene =
+          collection.scenes.find(
+            (item) => item.id === collection.active_scene_id,
+          ) ?? collection.scenes[0];
+        setSelectedSceneSourceId(scene?.sources[0]?.id ?? "");
+        setSceneDirty(false);
+        setSceneSaveStatus(null);
+      })
+      .catch((error: Error) => {
+        if (!cancelled) {
+          setSceneSaveStatus(error.message);
+        }
+      });
+
+    return () => {
+      cancelled = true;
     };
   }, [config]);
 
@@ -876,12 +925,22 @@ function App() {
   function handleSelectDesignerScene(sceneId: string) {
     const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
     if (!scene) return;
-    setSceneCollection((current) => ({
+    updateDesignerCollection((current) => ({
       ...current,
       active_scene_id: sceneId,
-      updated_at: new Date().toISOString(),
     }));
     setSelectedSceneSourceId(scene.sources[0]?.id ?? "");
+  }
+
+  function updateDesignerCollection(
+    updater: (current: SceneCollection) => SceneCollection,
+  ) {
+    setSceneCollection((current) => ({
+      ...updater(current),
+      updated_at: new Date().toISOString(),
+    }));
+    setSceneDirty(true);
+    setSceneSaveStatus("Unsaved scene changes");
   }
 
   function handleUpdateDesignerSource(
@@ -889,7 +948,7 @@ function App() {
     sourceId: string,
     patch: SceneSourcePatch,
   ) {
-    setSceneCollection((current) => ({
+    updateDesignerCollection((current) => ({
       ...current,
       scenes: current.scenes.map((scene) =>
         scene.id === sceneId
@@ -903,7 +962,6 @@ function App() {
             }
           : scene,
       ),
-      updated_at: new Date().toISOString(),
     }));
   }
 
@@ -912,7 +970,7 @@ function App() {
     sourceId: string,
     direction: "up" | "down",
   ) {
-    setSceneCollection((current) => ({
+    updateDesignerCollection((current) => ({
       ...current,
       scenes: current.scenes.map((scene) => {
         if (scene.id !== sceneId) return scene;
@@ -936,8 +994,164 @@ function App() {
           }),
         };
       }),
-      updated_at: new Date().toISOString(),
     }));
+  }
+
+  function handleCreateDesignerScene() {
+    const now = new Date().toISOString();
+    const sceneId = designerId("scene");
+    const source = createDefaultSceneSource("display", {
+      id: designerId("source-display"),
+      name: "Display Placeholder",
+      position: { x: 0, y: 0 },
+      size: { width: 1920, height: 1080 },
+      z_index: 0,
+    });
+    updateDesignerCollection((current) => ({
+      ...current,
+      active_scene_id: sceneId,
+      scenes: [
+        ...current.scenes,
+        {
+          id: sceneId,
+          name: `Scene ${current.scenes.length + 1}`,
+          canvas: { width: 1920, height: 1080, background_color: "#050711" },
+          sources: [source],
+        },
+      ],
+      updated_at: now,
+    }));
+    setSelectedSceneSourceId(source.id);
+  }
+
+  function handleDuplicateDesignerScene(sceneId: string) {
+    const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
+    if (!scene) return;
+    const nextScene = {
+      ...scene,
+      id: designerId("scene"),
+      name: `${scene.name} Copy`,
+      sources: scene.sources.map((source) => ({
+        ...source,
+        id: designerId("source"),
+      })) as SceneSource[],
+    };
+    updateDesignerCollection((current) => ({
+      ...current,
+      active_scene_id: nextScene.id,
+      scenes: [...current.scenes, nextScene],
+    }));
+    setSelectedSceneSourceId(nextScene.sources[0]?.id ?? "");
+  }
+
+  function handleDeleteDesignerScene(sceneId: string) {
+    if (sceneCollection.scenes.length <= 1) return;
+    updateDesignerCollection((current) => {
+      const scenes = current.scenes.filter((scene) => scene.id !== sceneId);
+      const active_scene_id =
+        current.active_scene_id === sceneId ? scenes[0].id : current.active_scene_id;
+      return {
+        ...current,
+        active_scene_id,
+        scenes,
+      };
+    });
+    const nextScene = sceneCollection.scenes.find((scene) => scene.id !== sceneId);
+    setSelectedSceneSourceId(nextScene?.sources[0]?.id ?? "");
+  }
+
+  function handleRenameDesignerScene(sceneId: string, name: string) {
+    updateDesignerCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) =>
+        scene.id === sceneId ? { ...scene, name } : scene,
+      ),
+    }));
+  }
+
+  function handleCreateDesignerSource(sceneId: string, kind: SceneSourceKind) {
+    const source = createDefaultSceneSource(kind, {
+      id: designerId(`source-${kind}`),
+      name: sceneSourceKindLabels[kind],
+      position: { x: 120, y: 120 },
+      size: defaultDesignerSourceSize(kind),
+      z_index: nextSceneZIndex(activeDesignerScene),
+    });
+    updateDesignerCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) =>
+        scene.id === sceneId
+          ? { ...scene, sources: [...scene.sources, source] }
+          : scene,
+      ),
+    }));
+    setSelectedSceneSourceId(source.id);
+  }
+
+  function handleDuplicateDesignerSource(sceneId: string, sourceId: string) {
+    const source = activeDesignerScene.sources.find((item) => item.id === sourceId);
+    if (!source) return;
+    const duplicate = {
+      ...source,
+      id: designerId("source"),
+      name: `${source.name} Copy`,
+      position: {
+        x: source.position.x + 32,
+        y: source.position.y + 32,
+      },
+      z_index: nextSceneZIndex(activeDesignerScene),
+    } as SceneSource;
+    updateDesignerCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) =>
+        scene.id === sceneId
+          ? { ...scene, sources: [...scene.sources, duplicate] }
+          : scene,
+      ),
+    }));
+    setSelectedSceneSourceId(duplicate.id);
+  }
+
+  function handleDeleteDesignerSource(sceneId: string, sourceId: string) {
+    updateDesignerCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) =>
+        scene.id === sceneId
+          ? {
+              ...scene,
+              sources: scene.sources.filter((source) => source.id !== sourceId),
+            }
+          : scene,
+      ),
+    }));
+    const nextSource = activeDesignerScene.sources.find(
+      (source) => source.id !== sourceId,
+    );
+    setSelectedSceneSourceId(nextSource?.id ?? "");
+  }
+
+  async function handleSaveDesignerScenes() {
+    if (!config) return;
+    try {
+      const saved = await StudioApi.saveSceneCollection(config, sceneCollection);
+      setSceneCollection(saved);
+      const scene =
+        saved.scenes.find((item) => item.id === saved.active_scene_id) ??
+        saved.scenes[0];
+      setSelectedSceneSourceId((current) =>
+        scene.sources.some((source) => source.id === current)
+          ? current
+          : (scene.sources[0]?.id ?? ""),
+      );
+      setSceneDirty(false);
+      setSceneSaveStatus("Scene collection saved");
+      setError(null);
+      StudioApi.mediaPlan(config).then(setPipelinePlan).catch(() => undefined);
+    } catch (error) {
+      setSceneSaveStatus(
+        error instanceof Error ? error.message : "Scene save failed",
+      );
+    }
   }
 
   const page = useMemo(() => {
@@ -958,11 +1172,22 @@ function App() {
       case "designer":
         return (
           <DesignerPage
+            captureInventory={captureInventory}
             collection={sceneCollection}
+            dirty={sceneDirty}
+            onCreateScene={handleCreateDesignerScene}
+            onCreateSource={handleCreateDesignerSource}
+            onDeleteScene={handleDeleteDesignerScene}
+            onDeleteSource={handleDeleteDesignerSource}
+            onDuplicateScene={handleDuplicateDesignerScene}
+            onDuplicateSource={handleDuplicateDesignerSource}
+            onRenameScene={handleRenameDesignerScene}
             scene={activeDesignerScene}
+            saveStatus={sceneSaveStatus}
             selectedSource={selectedDesignerSource}
             selectedSourceId={selectedSceneSourceId}
             onReorderSource={handleReorderDesignerSource}
+            onSave={handleSaveDesignerScenes}
             onSelectScene={handleSelectDesignerScene}
             onSelectSource={setSelectedSceneSourceId}
             onUpdateSource={handleUpdateDesignerSource}
@@ -1111,7 +1336,10 @@ function App() {
     streamBandwidthTest,
     twitchReadiness,
     activeDesignerScene,
+    captureInventory,
     sceneCollection,
+    sceneDirty,
+    sceneSaveStatus,
     selectedDesignerSource,
     selectedSceneSourceId,
   ]);
@@ -1247,8 +1475,18 @@ function App() {
 }
 
 function DesignerPage(props: {
+  captureInventory: CaptureSourceInventory | null;
   collection: SceneCollection;
+  dirty: boolean;
+  onCreateScene: () => void;
+  onCreateSource: (sceneId: string, kind: SceneSourceKind) => void;
+  onDeleteScene: (sceneId: string) => void;
+  onDeleteSource: (sceneId: string, sourceId: string) => void;
+  onDuplicateScene: (sceneId: string) => void;
+  onDuplicateSource: (sceneId: string, sourceId: string) => void;
+  onRenameScene: (sceneId: string, name: string) => void;
   scene: Scene;
+  saveStatus: string | null;
   selectedSource: SceneSource | null;
   selectedSourceId: string;
   onReorderSource: (
@@ -1258,6 +1496,7 @@ function DesignerPage(props: {
   ) => void;
   onSelectScene: (sceneId: string) => void;
   onSelectSource: (sourceId: string) => void;
+  onSave: () => void;
   onUpdateSource: (
     sceneId: string,
     sourceId: string,
@@ -1266,40 +1505,159 @@ function DesignerPage(props: {
 }) {
   const validation = validateSceneCollection(props.collection);
   const sourceStack = sortedSceneSources(props.scene);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [dragState, setDragState] = useState<DesignerDragState | null>(null);
+  const [newSourceKind, setNewSourceKind] = useState<SceneSourceKind>("display");
+
+  function beginSourceDrag(
+    event: ReactPointerEvent,
+    source: SceneSource,
+    mode: "move" | "resize",
+  ) {
+    if (source.locked || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    props.onSelectSource(source.id);
+    canvasRef.current?.setPointerCapture(event.pointerId);
+    setDragState({
+      mode,
+      pointerId: event.pointerId,
+      sourceId: source.id,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startPosition: { ...source.position },
+      startSize: { ...source.size },
+    });
+  }
+
+  function updateDrag(event: ReactPointerEvent) {
+    if (!dragState || dragState.pointerId !== event.pointerId) return;
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const deltaX = ((event.clientX - dragState.startClientX) / rect.width) * props.scene.canvas.width;
+    const deltaY = ((event.clientY - dragState.startClientY) / rect.height) * props.scene.canvas.height;
+
+    if (dragState.mode === "move") {
+      props.onUpdateSource(props.scene.id, dragState.sourceId, {
+        position: {
+          x: Math.round(dragState.startPosition.x + deltaX),
+          y: Math.round(dragState.startPosition.y + deltaY),
+        },
+      });
+      return;
+    }
+
+    props.onUpdateSource(props.scene.id, dragState.sourceId, {
+      size: {
+        width: Math.max(16, Math.round(dragState.startSize.width + deltaX)),
+        height: Math.max(16, Math.round(dragState.startSize.height + deltaY)),
+      },
+    });
+  }
+
+  function endDrag(event: ReactPointerEvent) {
+    if (dragState?.pointerId === event.pointerId) {
+      setDragState(null);
+    }
+  }
 
   return (
     <div className="designer-grid">
       <div className="designer-left-rail">
         <section className="panel">
-          <PanelTitle title="Scenes" />
+          <PanelTitle
+            action={
+              <button
+                className="secondary-button compact"
+                onClick={props.onCreateScene}
+                type="button"
+              >
+                <Plus size={14} />
+                Scene
+              </button>
+            }
+            title="Scenes"
+          />
           <div className="designer-list">
             {props.collection.scenes.map((scene) => (
-              <button
+              <div
                 className={
                   scene.id === props.scene.id
                     ? "designer-list-item selected"
                     : "designer-list-item"
                 }
                 key={scene.id}
-                onClick={() => props.onSelectScene(scene.id)}
-                type="button"
               >
-                <div>
-                  <strong>{scene.name}</strong>
-                  <span>
-                    {scene.canvas.width}x{scene.canvas.height} - {scene.sources.length} sources
-                  </span>
-                </div>
+                <button
+                  className="source-stack-select-button"
+                  onClick={() => props.onSelectScene(scene.id)}
+                  type="button"
+                >
+                  <div>
+                    <strong>{scene.name}</strong>
+                    <span>
+                      {scene.canvas.width}x{scene.canvas.height} - {scene.sources.length} sources
+                    </span>
+                  </div>
+                </button>
                 <Pill tone={scene.id === props.collection.active_scene_id ? "green" : "muted"}>
                   {scene.id === props.collection.active_scene_id ? "Active" : "Ready"}
                 </Pill>
-              </button>
+                <div className="source-stack-actions">
+                  <button
+                    aria-label={`Duplicate ${scene.name}`}
+                    className="icon-button compact"
+                    onClick={() => props.onDuplicateScene(scene.id)}
+                    title={`Duplicate ${scene.name}`}
+                    type="button"
+                  >
+                    <Copy size={14} />
+                  </button>
+                  <button
+                    aria-label={`Delete ${scene.name}`}
+                    className="icon-button compact danger"
+                    disabled={props.collection.scenes.length <= 1}
+                    onClick={() => props.onDeleteScene(scene.id)}
+                    title={`Delete ${scene.name}`}
+                    type="button"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
         </section>
 
         <section className="panel">
-          <PanelTitle title="Source Stack" />
+          <PanelTitle
+            action={
+              <div className="source-add-controls">
+                <select
+                  aria-label="New source kind"
+                  value={newSourceKind}
+                  onChange={(event) =>
+                    setNewSourceKind(event.target.value as SceneSourceKind)
+                  }
+                >
+                  {Object.entries(sceneSourceKindLabels).map(([kind, label]) => (
+                    <option key={kind} value={kind}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="secondary-button compact"
+                  onClick={() => props.onCreateSource(props.scene.id, newSourceKind)}
+                  type="button"
+                >
+                  <Plus size={14} />
+                  Source
+                </button>
+              </div>
+            }
+            title="Source Stack"
+          />
           <div className="designer-list source-stack">
             {sourceStack.map((source, index) => (
               <div
@@ -1376,6 +1734,26 @@ function DesignerPage(props: {
                   >
                     <ArrowDown size={14} />
                   </button>
+                  <button
+                    aria-label={`Duplicate ${source.name}`}
+                    className="icon-button compact"
+                    onClick={() =>
+                      props.onDuplicateSource(props.scene.id, source.id)
+                    }
+                    title={`Duplicate ${source.name}`}
+                    type="button"
+                  >
+                    <Copy size={14} />
+                  </button>
+                  <button
+                    aria-label={`Delete ${source.name}`}
+                    className="icon-button compact danger"
+                    onClick={() => props.onDeleteSource(props.scene.id, source.id)}
+                    title={`Delete ${source.name}`}
+                    type="button"
+                  >
+                    <Trash2 size={14} />
+                  </button>
                 </div>
               </div>
             ))}
@@ -1386,22 +1764,42 @@ function DesignerPage(props: {
       <section className="panel designer-preview-panel">
         <PanelTitle
           action={
-            <Pill tone={validation.ok ? "green" : "amber"}>
-              {validation.ok ? "Valid" : `${validation.issues.length} issues`}
-            </Pill>
+            <div className="button-row">
+              <Pill tone={validation.ok ? "green" : "amber"}>
+                {validation.ok ? "Valid" : `${validation.issues.length} issues`}
+              </Pill>
+              {props.saveStatus && (
+                <Pill tone={props.dirty ? "amber" : "green"}>
+                  {props.saveStatus}
+                </Pill>
+              )}
+              <button
+                className="secondary-button compact"
+                disabled={!validation.ok || !props.dirty}
+                onClick={props.onSave}
+                type="button"
+              >
+                <CheckCircle2 size={14} />
+                Save
+              </button>
+            </div>
           }
           title="Preview"
         />
         <div className="designer-preview-shell">
           <div
             className="designer-preview-canvas"
+            onPointerMove={updateDrag}
+            onPointerUp={endDrag}
+            onPointerCancel={endDrag}
+            ref={canvasRef}
             style={{
               aspectRatio: `${props.scene.canvas.width} / ${props.scene.canvas.height}`,
               backgroundColor: props.scene.canvas.background_color,
             }}
           >
             {sortedSceneSources(props.scene, "asc").map((source) => (
-              <button
+              <div
                 className={[
                   "designer-source-box",
                   `source-${source.kind}`,
@@ -1413,8 +1811,34 @@ function DesignerPage(props: {
                   .join(" ")}
                 key={source.id}
                 onClick={() => props.onSelectSource(source.id)}
+                onKeyDown={(event) => {
+                  if (source.locked) return;
+                  const nudge = event.shiftKey ? 10 : 1;
+                  if (event.key === "ArrowLeft") {
+                    props.onUpdateSource(props.scene.id, source.id, {
+                      position: { x: source.position.x - nudge },
+                    });
+                  } else if (event.key === "ArrowRight") {
+                    props.onUpdateSource(props.scene.id, source.id, {
+                      position: { x: source.position.x + nudge },
+                    });
+                  } else if (event.key === "ArrowUp") {
+                    props.onUpdateSource(props.scene.id, source.id, {
+                      position: { y: source.position.y - nudge },
+                    });
+                  } else if (event.key === "ArrowDown") {
+                    props.onUpdateSource(props.scene.id, source.id, {
+                      position: { y: source.position.y + nudge },
+                    });
+                  } else {
+                    return;
+                  }
+                  event.preventDefault();
+                }}
+                onPointerDown={(event) => beginSourceDrag(event, source, "move")}
+                role="button"
                 style={sceneSourcePreviewStyle(source, props.scene)}
-                type="button"
+                tabIndex={0}
               >
                 <div className="designer-source-label">
                   <SourceKindIcon kind={source.kind} />
@@ -1424,7 +1848,19 @@ function DesignerPage(props: {
                 {sceneSourceAvailability(source) && (
                   <small>{sceneSourceAvailability(source)?.detail}</small>
                 )}
-              </button>
+                {!source.locked && (
+                  <button
+                    aria-label={`Resize ${source.name}`}
+                    className="designer-resize-handle"
+                    onClick={(event) => event.stopPropagation()}
+                    onPointerDown={(event) =>
+                      beginSourceDrag(event, source, "resize")
+                    }
+                    title={`Resize ${source.name}`}
+                    type="button"
+                  />
+                )}
+              </div>
             ))}
           </div>
         </div>
@@ -1442,6 +1878,11 @@ function DesignerPage(props: {
         <PanelTitle title="Inspector" />
         {props.selectedSource ? (
           <div className="form">
+            <TextInput
+              label="Scene Name"
+              onChange={(name) => props.onRenameScene(props.scene.id, name)}
+              value={props.scene.name}
+            />
             <TextInput
               label="Name"
               onChange={(name) =>
@@ -1599,9 +2040,14 @@ function DesignerPage(props: {
               label="Source Kind"
               value={sceneSourceKindLabels[props.selectedSource.kind]}
             />
-            <KeyValue
-              label="Config"
-              value={sourceConfigSummary(props.selectedSource)}
+            <SourceConfigEditor
+              captureInventory={props.captureInventory}
+              onChange={(config) =>
+                props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                  config,
+                })
+              }
+              source={props.selectedSource}
             />
             {sceneSourceAvailability(props.selectedSource) && (
               <KeyValue
@@ -1616,6 +2062,333 @@ function DesignerPage(props: {
       </section>
     </div>
   );
+}
+
+function SourceConfigEditor(props: {
+  captureInventory: CaptureSourceInventory | null;
+  onChange: (config: Record<string, unknown>) => void;
+  source: SceneSource;
+}) {
+  const candidates = props.captureInventory?.candidates ?? [];
+  const source = props.source;
+
+  switch (source.kind) {
+    case "display":
+      return (
+        <div className="source-config-editor">
+          <label>
+            Display
+            <select
+              value={source.config.display_id ?? ""}
+              onChange={(event) =>
+                props.onChange({ display_id: event.target.value || null })
+              }
+            >
+              <option value="">Unassigned display</option>
+              {candidates
+                .filter((candidate) => candidate.kind === "display")
+                .map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="check-row">
+            <input
+              checked={source.config.capture_cursor}
+              onChange={(event) =>
+                props.onChange({ capture_cursor: event.target.checked })
+              }
+              type="checkbox"
+            />
+            Capture cursor
+          </label>
+        </div>
+      );
+    case "window":
+      return (
+        <div className="source-config-editor">
+          <label>
+            Window
+            <select
+              value={source.config.window_id ?? ""}
+              onChange={(event) =>
+                props.onChange({ window_id: event.target.value || null })
+              }
+            >
+              <option value="">Unassigned window</option>
+              {candidates
+                .filter((candidate) => candidate.kind === "window")
+                .map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <TextInput
+            label="Application"
+            onChange={(application_name) => props.onChange({ application_name })}
+            value={source.config.application_name ?? ""}
+          />
+          <TextInput
+            label="Title"
+            onChange={(title) => props.onChange({ title })}
+            value={source.config.title ?? ""}
+          />
+        </div>
+      );
+    case "camera":
+      return (
+        <div className="source-config-editor">
+          <label>
+            Camera
+            <select
+              value={source.config.device_id ?? ""}
+              onChange={(event) =>
+                props.onChange({ device_id: event.target.value || null })
+              }
+            >
+              <option value="">Unassigned camera</option>
+              {candidates
+                .filter((candidate) => candidate.kind === "camera")
+                .map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Width"
+              min={1}
+              onChange={(width) =>
+                props.onChange({
+                  resolution: {
+                    ...(source.config.resolution ?? {
+                      width: 1280,
+                      height: 720,
+                    }),
+                    width,
+                  },
+                })
+              }
+              value={source.config.resolution?.width ?? 1280}
+            />
+            <SceneNumberInput
+              label="Height"
+              min={1}
+              onChange={(height) =>
+                props.onChange({
+                  resolution: {
+                    ...(source.config.resolution ?? {
+                      width: 1280,
+                      height: 720,
+                    }),
+                    height,
+                  },
+                })
+              }
+              value={source.config.resolution?.height ?? 720}
+            />
+          </div>
+          <SceneNumberInput
+            label="Framerate"
+            min={1}
+            onChange={(framerate) => props.onChange({ framerate })}
+            value={source.config.framerate ?? 30}
+          />
+        </div>
+      );
+    case "audio_meter":
+      return (
+        <div className="source-config-editor">
+          <label>
+            Audio Device
+            <select
+              value={source.config.device_id ?? ""}
+              onChange={(event) =>
+                props.onChange({ device_id: event.target.value || null })
+              }
+            >
+              <option value="">Unassigned audio device</option>
+              {candidates
+                .filter(
+                  (candidate) =>
+                    candidate.kind === "microphone" ||
+                    candidate.kind === "system_audio",
+                )
+                .map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.name}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <div className="form-grid">
+            <label>
+              Channel
+              <select
+                value={source.config.channel}
+                onChange={(event) =>
+                  props.onChange({
+                    channel: event.target.value as "microphone" | "system" | "mixed",
+                  })
+                }
+              >
+                <option value="microphone">Microphone</option>
+                <option value="system">System</option>
+                <option value="mixed">Mixed</option>
+              </select>
+            </label>
+            <label>
+              Meter
+              <select
+                value={source.config.meter_style}
+                onChange={(event) =>
+                  props.onChange({
+                    meter_style: event.target.value as "bar" | "waveform",
+                  })
+                }
+              >
+                <option value="bar">Bar</option>
+                <option value="waveform">Waveform</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      );
+    case "image_media":
+      return (
+        <div className="source-config-editor">
+          <TextInput
+            label="Asset URI"
+            onChange={(asset_uri) => props.onChange({ asset_uri })}
+            value={source.config.asset_uri ?? ""}
+          />
+          <div className="form-grid">
+            <label>
+              Media Type
+              <select
+                value={source.config.media_type}
+                onChange={(event) =>
+                  props.onChange({
+                    media_type: event.target.value as "image" | "video",
+                  })
+                }
+              >
+                <option value="image">Image</option>
+                <option value="video">Video</option>
+              </select>
+            </label>
+            <label className="check-row">
+              <input
+                checked={source.config.loop}
+                onChange={(event) => props.onChange({ loop: event.target.checked })}
+                type="checkbox"
+              />
+              Loop
+            </label>
+          </div>
+        </div>
+      );
+    case "browser_overlay":
+      return (
+        <div className="source-config-editor">
+          <TextInput
+            label="URL"
+            onChange={(url) => props.onChange({ url })}
+            value={source.config.url ?? ""}
+          />
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Viewport Width"
+              min={1}
+              onChange={(width) =>
+                props.onChange({
+                  viewport: { ...source.config.viewport, width },
+                })
+              }
+              value={source.config.viewport.width}
+            />
+            <SceneNumberInput
+              label="Viewport Height"
+              min={1}
+              onChange={(height) =>
+                props.onChange({
+                  viewport: { ...source.config.viewport, height },
+                })
+              }
+              value={source.config.viewport.height}
+            />
+          </div>
+        </div>
+      );
+    case "text":
+      return (
+        <div className="source-config-editor">
+          <TextInput
+            label="Text"
+            onChange={(text) => props.onChange({ text })}
+            value={source.config.text}
+          />
+          <div className="form-grid">
+            <TextInput
+              label="Font"
+              onChange={(font_family) => props.onChange({ font_family })}
+              value={source.config.font_family}
+            />
+            <SceneNumberInput
+              label="Font Size"
+              min={1}
+              onChange={(font_size) => props.onChange({ font_size })}
+              value={source.config.font_size}
+            />
+          </div>
+          <div className="form-grid">
+            <TextInput
+              label="Color"
+              onChange={(color) => props.onChange({ color })}
+              value={source.config.color}
+            />
+            <label>
+              Align
+              <select
+                value={source.config.align}
+                onChange={(event) =>
+                  props.onChange({
+                    align: event.target.value as "left" | "center" | "right",
+                  })
+                }
+              >
+                <option value="left">Left</option>
+                <option value="center">Center</option>
+                <option value="right">Right</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      );
+    case "group":
+      return (
+        <div className="source-config-editor">
+          <TextInput
+            label="Child Source IDs"
+            onChange={(value) =>
+              props.onChange({
+                child_source_ids: value
+                  .split(",")
+                  .map((item) => item.trim())
+                  .filter(Boolean),
+              })
+            }
+            value={source.config.child_source_ids.join(", ")}
+          />
+        </div>
+      );
+  }
 }
 
 function Dashboard(props: {
@@ -2377,7 +3150,40 @@ function mergeSceneSourcePatch(
       : source.position,
     size: patch.size ? { ...source.size, ...patch.size } : source.size,
     crop: patch.crop ? { ...source.crop, ...patch.crop } : source.crop,
+    config: patch.config ? { ...source.config, ...patch.config } : source.config,
   } as SceneSource;
+}
+
+function defaultDesignerSourceSize(kind: SceneSourceKind): SceneSize {
+  switch (kind) {
+    case "display":
+    case "window":
+      return { width: 1280, height: 720 };
+    case "camera":
+      return { width: 380, height: 214 };
+    case "audio_meter":
+      return { width: 420, height: 72 };
+    case "image_media":
+      return { width: 640, height: 360 };
+    case "browser_overlay":
+      return { width: 560, height: 170 };
+    case "text":
+      return { width: 640, height: 110 };
+    case "group":
+      return { width: 720, height: 420 };
+  }
+}
+
+function nextSceneZIndex(scene: Scene): number {
+  return scene.sources.reduce((highest, source) => Math.max(highest, source.z_index), 0) + 10;
+}
+
+function designerId(prefix: string): string {
+  const random =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2);
+  return `${prefix}-${random}`;
 }
 
 function sortedSceneSources(

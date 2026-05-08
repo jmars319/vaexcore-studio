@@ -28,15 +28,16 @@ use serde_json::{json, Value};
 use tokio::{net::TcpListener, sync::broadcast};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use vaexcore_core::{
-    new_id, now_utc, ApiResponse, AuditLogEntry, AuditLogSnapshot, CommandStatus,
-    ConnectedClientsSnapshot, HealthResponse, LocalRuntimeDependency, LocalRuntimeHealth, Marker,
-    MarkersSnapshot, MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineValidation,
-    MediaProfileInput, PipelineIntent, ProfilesSnapshot, RecentRecordingsSnapshot, SecretStore,
+    new_id, now_utc, scene_capture_sources, ApiResponse, AuditLogEntry, AuditLogSnapshot,
+    CommandStatus, ConnectedClientsSnapshot, HealthResponse, LocalRuntimeDependency,
+    LocalRuntimeHealth, Marker, MarkersSnapshot, MediaPipelinePlan, MediaPipelinePlanRequest,
+    MediaPipelineValidation, MediaProfileInput, PipelineIntent, ProfilesSnapshot,
+    RecentRecordingsSnapshot, SceneCollection, SceneValidationResult, SecretStore,
     StreamDestinationInput, StudioEvent, StudioEventKind, StudioStatus, APP_NAME,
 };
 use vaexcore_media::{
     build_dry_run_pipeline_plan, DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor,
-    SidecarMediaEngine, StreamLaunchRequest,
+    RecordingLaunchRequest, SidecarMediaEngine, StreamLaunchRequest,
 };
 
 pub use auth::{AuthConfig, SharedAuthConfig};
@@ -275,6 +276,8 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .route("/recording/stop", post(stop_recording))
         .route("/stream/start", post(start_stream))
         .route("/stream/stop", post(stop_stream))
+        .route("/scenes", get(get_scenes).put(put_scenes))
+        .route("/scenes/validate", post(post_scenes_validate))
         .route(
             "/media/plan",
             get(default_pipeline_plan).post(post_pipeline_plan),
@@ -435,6 +438,8 @@ fn command_action(method: &Method, path: &str) -> Option<String> {
         ("POST", "/recording/stop") => "recording.stop",
         ("POST", "/stream/start") => "stream.start",
         ("POST", "/stream/stop") => "stream.stop",
+        ("PUT", "/scenes") => "scenes.save",
+        ("POST", "/scenes/validate") => "scenes.validate",
         ("POST", "/media/plan") => "media.plan",
         ("POST", "/media/validate") => "media.validate",
         ("POST", "/marker/create") => "marker.create",
@@ -586,6 +591,7 @@ fn studio_local_runtime_health(state: &ApiState) -> LocalRuntimeHealth {
         secret_storage_state,
         durable_storage: vec![
             "SQLite profiles, destinations, markers, and app settings".to_string(),
+            "SQLite scene collections".to_string(),
             "Stream keys in app-owned secure storage".to_string(),
             "api-discovery.json".to_string(),
             "pipeline-plan.json and pipeline-config.json".to_string(),
@@ -625,6 +631,36 @@ async fn get_profiles(
 ) -> Result<Json<ApiResponse<ProfilesSnapshot>>, ApiError> {
     auth::authorize_headers(&headers, &state.auth)?;
     Ok(Json(ApiResponse::ok(state.store.profiles_snapshot()?)))
+}
+
+async fn get_scenes(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<SceneCollection>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    Ok(Json(ApiResponse::ok(state.store.scene_collection()?)))
+}
+
+async fn put_scenes(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(collection): Json<SceneCollection>,
+) -> Result<Json<ApiResponse<SceneCollection>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let saved = state.store.save_scene_collection(collection)?;
+    refresh_default_pipeline_contract(&state).await;
+    Ok(Json(ApiResponse::ok(saved)))
+}
+
+async fn post_scenes_validate(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(collection): Json<SceneCollection>,
+) -> Result<Json<ApiResponse<SceneValidationResult>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    Ok(Json(ApiResponse::ok(
+        state.store.validate_scene_collection(&collection),
+    )))
 }
 
 async fn get_clients(
@@ -844,8 +880,23 @@ async fn start_recording(
                 "recording profile not found",
             )
         })?;
+    let settings = state.store.app_settings()?;
+    let active_scene = state.store.scene_collection()?.active_scene().cloned();
+    let scene_capture_sources = active_scene
+        .as_ref()
+        .map(scene_capture_sources)
+        .unwrap_or_default();
+    let launch_request = RecordingLaunchRequest {
+        profile,
+        capture_sources: if scene_capture_sources.is_empty() {
+            settings.capture_sources
+        } else {
+            scene_capture_sources
+        },
+        active_scene,
+    };
 
-    match state.engine.start_recording(profile).await {
+    match state.engine.start_recording(launch_request).await {
         Ok(transition) => Ok(Json(ApiResponse::ok(CommandStatus {
             changed: transition.changed,
             message: if transition.changed {
@@ -922,12 +973,22 @@ async fn start_stream(
         .map(|secret| secret.expose_secret().to_string());
     let settings = state.store.app_settings()?;
     let profile = state.store.recording_profile_by_id(None)?;
+    let active_scene = state.store.scene_collection()?.active_scene().cloned();
+    let scene_capture_sources = active_scene
+        .as_ref()
+        .map(scene_capture_sources)
+        .unwrap_or_default();
     let launch_request = StreamLaunchRequest {
         destination,
         stream_key,
         bandwidth_test: request.bandwidth_test,
-        capture_sources: settings.capture_sources,
+        capture_sources: if scene_capture_sources.is_empty() {
+            settings.capture_sources
+        } else {
+            scene_capture_sources
+        },
         profile,
+        active_scene,
     };
 
     match state.engine.start_stream(launch_request).await {
@@ -1118,6 +1179,17 @@ async fn stream_events(mut socket: WebSocket, state: Arc<ApiState>, replay_limit
 
 fn default_pipeline_plan_request(state: &ApiState) -> Result<MediaPipelinePlanRequest, StoreError> {
     let settings = state.store.app_settings()?;
+    let scene_collection = state.store.scene_collection()?;
+    let active_scene = scene_collection.active_scene().cloned();
+    let scene_capture_sources = active_scene
+        .as_ref()
+        .map(scene_capture_sources)
+        .unwrap_or_default();
+    let capture_sources = if scene_capture_sources.is_empty() {
+        settings.capture_sources
+    } else {
+        scene_capture_sources
+    };
     let recording_profile = state.store.recording_profile_by_id(None)?;
     let stream_destinations = state
         .store
@@ -1134,7 +1206,8 @@ fn default_pipeline_plan_request(state: &ApiState) -> Result<MediaPipelinePlanRe
     Ok(MediaPipelinePlanRequest {
         dry_run: true,
         intent,
-        capture_sources: settings.capture_sources,
+        capture_sources,
+        active_scene,
         recording_profile,
         stream_destinations,
     })
@@ -1601,6 +1674,36 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["data"]["dry_run"], true);
         assert!(body["data"]["steps"].as_array().unwrap().len() >= 2);
+        assert_eq!(
+            body["data"]["config"]["active_scene"]["id"],
+            serde_json::json!("scene-main")
+        );
+    }
+
+    #[tokio::test]
+    async fn scene_collection_api_round_trip() {
+        let app = test_app();
+        let (status, body) = request_json(app.clone(), "GET", "/scenes".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let mut collection = body["data"].clone();
+        collection["name"] = serde_json::json!("API Scenes");
+        collection["scenes"][0]["name"] = serde_json::json!("API Main");
+
+        let (status, saved) =
+            request_json(app.clone(), "PUT", "/scenes".to_string(), Some(collection)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(saved["data"]["name"], "API Scenes");
+
+        let (status, validation) = request_json(
+            app,
+            "POST",
+            "/scenes/validate".to_string(),
+            Some(saved["data"].clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(validation["data"]["ok"], true);
     }
 
     #[tokio::test]
@@ -1638,6 +1741,7 @@ mod tests {
         assert_eq!(config_json["pipeline_name"], plan.pipeline_name);
         assert_eq!(config_json["dry_run"], true);
         assert_eq!(config_json["pipeline"]["version"], 1);
+        assert_eq!(config_json["pipeline"]["active_scene"]["id"], "scene-main");
         assert!(config_json["pipeline"]["capture_sources"]
             .as_array()
             .unwrap()

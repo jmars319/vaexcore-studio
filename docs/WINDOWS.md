@@ -34,6 +34,24 @@ The suite-level build kit can also call:
 npm run app:dist:windows
 ```
 
+Before handing a Windows build to suite validation, run the same code gates used
+for Scene Designer persistence and the local media pipeline contract:
+
+```sh
+npm run test:scripts
+npm run typecheck --workspaces --if-present
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test --workspace
+npm run app:build:windows
+```
+
+Scene Designer state is stored in the local Studio SQLite database through the
+`/scenes` API and is included in the generated `pipeline-config.json` as
+`active_scene`. On Windows, verify that creating/editing a scene in Studio,
+saving it, quitting, and reopening Studio preserves the scene collection before
+running a full suite recording/streaming pass.
+
 Studio also carries versioned Windows launchers under `tools/windows-launchers`.
 The `.cmd` files can be double-clicked to start the full suite or an individual
 installed app. `Install-VaexcoreLaunchers.cmd` creates Start Menu shortcuts and

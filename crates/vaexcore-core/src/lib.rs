@@ -3,6 +3,7 @@ pub mod events;
 pub mod pipeline;
 pub mod profiles;
 pub mod responses;
+pub mod scenes;
 pub mod security;
 pub mod settings;
 pub mod status;
@@ -26,6 +27,11 @@ pub use responses::{
     MarkersSnapshot, PreflightCheck, PreflightSnapshot, PreflightStatus, ProfileBundle,
     ProfileBundleImportResult, ProfilesSnapshot, RecentRecordingsSnapshot, RecordingHistoryEntry,
     StreamDestinationBundleItem, StudioStatus,
+};
+pub use scenes::{
+    scene_capture_sources, scene_resolution, validate_scene_collection, Scene, SceneCanvas,
+    SceneCollection, SceneCrop, ScenePoint, SceneSize, SceneSource, SceneSourceKind,
+    SceneValidationIssue, SceneValidationResult,
 };
 pub use security::{
     SecretRef, SecretStore, SecretStoreError, SensitiveString, LOCAL_SQLITE_SECRET_PROVIDER,

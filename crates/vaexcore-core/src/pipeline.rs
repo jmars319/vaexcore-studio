@@ -1,4 +1,4 @@
-use crate::{CaptureSourceSelection, MediaProfile, StreamDestination};
+use crate::{CaptureSourceSelection, MediaProfile, Scene, StreamDestination};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -9,21 +9,25 @@ pub enum PipelineIntent {
     RecordingAndStream,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MediaPipelineConfig {
     pub version: u32,
     pub dry_run: bool,
     pub intent: PipelineIntent,
     pub capture_sources: Vec<CaptureSourceSelection>,
+    #[serde(default)]
+    pub active_scene: Option<Scene>,
     pub recording_profile: Option<MediaProfile>,
     pub stream_destinations: Vec<StreamDestination>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MediaPipelinePlanRequest {
     pub dry_run: bool,
     pub intent: PipelineIntent,
     pub capture_sources: Vec<CaptureSourceSelection>,
+    #[serde(default)]
+    pub active_scene: Option<Scene>,
     pub recording_profile: Option<MediaProfile>,
     pub stream_destinations: Vec<StreamDestination>,
 }
@@ -44,7 +48,7 @@ pub enum PipelineStepStatus {
     Blocked,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct MediaPipelinePlan {
     pub pipeline_name: String,
     pub dry_run: bool,
@@ -69,6 +73,7 @@ impl MediaPipelinePlanRequest {
             dry_run: self.dry_run,
             intent: self.intent,
             capture_sources: self.capture_sources,
+            active_scene: self.active_scene,
             recording_profile: self.recording_profile,
             stream_destinations: self.stream_destinations,
         }

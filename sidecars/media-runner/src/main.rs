@@ -16,12 +16,11 @@ use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use vaexcore_core::{
     ApiResponse, EngineMode, EngineStatus, MediaPipelineConfig, MediaPipelinePlan,
-    MediaPipelinePlanRequest, MediaPipelineValidation, MediaProfile, RecordingSession,
-    StreamSession, APP_NAME,
+    MediaPipelinePlanRequest, MediaPipelineValidation, RecordingSession, StreamSession, APP_NAME,
 };
 use vaexcore_media::{
     build_dry_run_pipeline_plan, find_ffmpeg_binary, DryRunMediaEngine, FfmpegRtmpEngine,
-    MediaEngine, MediaError, MediaTransition, StreamLaunchRequest,
+    MediaEngine, MediaError, MediaTransition, RecordingLaunchRequest, StreamLaunchRequest,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -125,9 +124,9 @@ async fn status(State(state): State<RunnerState>) -> Json<ApiResponse<RunnerStat
 
 async fn start_recording(
     State(state): State<RunnerState>,
-    Json(profile): Json<MediaProfile>,
+    Json(request): Json<RecordingLaunchRequest>,
 ) -> Result<Json<ApiResponse<MediaTransition<RecordingSession>>>, RunnerApiError> {
-    let transition = state.engine.start_recording(profile).await?;
+    let transition = state.engine.start_recording(request).await?;
     Ok(Json(ApiResponse::ok(transition)))
 }
 

@@ -16,7 +16,7 @@ use vaexcore_core::{
     new_id, CaptureSourceKind, CaptureSourceSelection, EngineMode, EngineStatus,
     MediaPipelineConfig, MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep,
     MediaProfile, PipelineIntent, PipelineStepStatus, PlatformKind, RecordingContainer,
-    RecordingSession, StreamDestination, StreamSession, StudioEvent, StudioEventKind,
+    RecordingSession, Scene, StreamDestination, StreamSession, StudioEvent, StudioEventKind,
 };
 
 mod sidecar;
@@ -54,7 +54,26 @@ pub struct MediaTransition<T> {
     pub status: EngineStatus,
 }
 
-#[derive(Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct RecordingLaunchRequest {
+    pub profile: MediaProfile,
+    #[serde(default)]
+    pub capture_sources: Vec<CaptureSourceSelection>,
+    #[serde(default)]
+    pub active_scene: Option<Scene>,
+}
+
+impl RecordingLaunchRequest {
+    pub fn new(profile: MediaProfile) -> Self {
+        Self {
+            profile,
+            capture_sources: Vec::new(),
+            active_scene: None,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct StreamLaunchRequest {
     pub destination: StreamDestination,
     #[serde(default)]
@@ -65,6 +84,8 @@ pub struct StreamLaunchRequest {
     pub capture_sources: Vec<CaptureSourceSelection>,
     #[serde(default)]
     pub profile: Option<MediaProfile>,
+    #[serde(default)]
+    pub active_scene: Option<Scene>,
 }
 
 impl fmt::Debug for StreamLaunchRequest {
@@ -79,6 +100,13 @@ impl fmt::Debug for StreamLaunchRequest {
             .field("bandwidth_test", &self.bandwidth_test)
             .field("capture_sources", &self.capture_sources)
             .field("profile", &self.profile)
+            .field(
+                "active_scene",
+                &self
+                    .active_scene
+                    .as_ref()
+                    .map(|scene| (&scene.id, &scene.name)),
+            )
             .finish()
     }
 }
@@ -91,6 +119,7 @@ impl StreamLaunchRequest {
             bandwidth_test: false,
             capture_sources: Vec::new(),
             profile: None,
+            active_scene: None,
         }
     }
 }
@@ -102,6 +131,7 @@ pub fn build_dry_run_pipeline_plan(request: MediaPipelinePlanRequest) -> MediaPi
     let mut errors = Vec::new();
 
     validate_capture_sources(&config, &mut steps, &mut warnings, &mut errors);
+    validate_scene_compositor(&config, &mut steps, &mut warnings, &mut errors);
     validate_recording(&config, &mut steps, &mut errors);
     validate_streaming(&config, &mut steps, &mut warnings, &mut errors);
     steps.push(MediaPipelineStep {
@@ -126,7 +156,7 @@ pub fn build_dry_run_pipeline_plan(request: MediaPipelinePlanRequest) -> MediaPi
 pub trait MediaEngine: Send + Sync {
     async fn start_recording(
         &self,
-        profile: MediaProfile,
+        request: RecordingLaunchRequest,
     ) -> Result<MediaTransition<RecordingSession>, MediaError>;
 
     async fn stop_recording(&self) -> Result<MediaTransition<RecordingSession>, MediaError>;
@@ -192,8 +222,13 @@ impl DryRunMediaEngine {
 impl MediaEngine for DryRunMediaEngine {
     async fn start_recording(
         &self,
-        profile: MediaProfile,
+        request: RecordingLaunchRequest,
     ) -> Result<MediaTransition<RecordingSession>, MediaError> {
+        let RecordingLaunchRequest {
+            profile,
+            active_scene,
+            ..
+        } = request;
         let mut state = self.state.lock().await;
 
         if let Some(existing) = state.recording.clone() {
@@ -221,6 +256,8 @@ impl MediaEngine for DryRunMediaEngine {
                 "session_id": session.id,
                 "output_path": session.output_path,
                 "profile_id": session.profile.id,
+                "scene_id": active_scene.as_ref().map(|scene| scene.id.as_str()),
+                "scene_name": active_scene.as_ref().map(|scene| scene.name.as_str()),
             }),
         ));
 
@@ -393,6 +430,64 @@ fn validate_capture_sources(
             PipelineStepStatus::Warning
         },
         detail: format!("{} enabled source(s).", enabled_sources.len()),
+    });
+}
+
+fn validate_scene_compositor(
+    config: &MediaPipelineConfig,
+    steps: &mut Vec<MediaPipelineStep>,
+    warnings: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    let Some(scene) = &config.active_scene else {
+        warnings.push(
+            "pipeline has no active scene; capture sources will be used directly".to_string(),
+        );
+        steps.push(MediaPipelineStep {
+            id: "scene.compositor".to_string(),
+            label: "Scene compositor".to_string(),
+            status: PipelineStepStatus::Warning,
+            detail: "No active scene was attached to the pipeline plan.".to_string(),
+        });
+        return;
+    };
+
+    let visible_sources = scene.sources.iter().filter(|source| source.visible).count();
+    let validation = vaexcore_core::validate_scene_collection(&vaexcore_core::SceneCollection {
+        id: "pipeline-validation".to_string(),
+        name: "Pipeline Validation".to_string(),
+        version: 1,
+        active_scene_id: scene.id.clone(),
+        scenes: vec![scene.clone()],
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    });
+
+    if !validation.ok {
+        errors.extend(
+            validation
+                .issues
+                .iter()
+                .map(|issue| format!("{}: {}", issue.path, issue.message)),
+        );
+    }
+
+    steps.push(MediaPipelineStep {
+        id: "scene.compositor".to_string(),
+        label: "Scene compositor".to_string(),
+        status: if validation.ok {
+            PipelineStepStatus::Ready
+        } else {
+            PipelineStepStatus::Blocked
+        },
+        detail: if validation.ok {
+            format!(
+                "{} at {}x{} with {} visible source(s).",
+                scene.name, scene.canvas.width, scene.canvas.height, visible_sources
+            )
+        } else {
+            "Active scene has invalid compositor geometry.".to_string()
+        },
     });
 }
 
@@ -620,9 +715,9 @@ impl FfmpegRtmpEngine {
 impl MediaEngine for FfmpegRtmpEngine {
     async fn start_recording(
         &self,
-        profile: MediaProfile,
+        request: RecordingLaunchRequest,
     ) -> Result<MediaTransition<RecordingSession>, MediaError> {
-        self.inner.recording_engine.start_recording(profile).await
+        self.inner.recording_engine.start_recording(request).await
     }
 
     async fn stop_recording(&self) -> Result<MediaTransition<RecordingSession>, MediaError> {
@@ -1107,7 +1202,7 @@ impl GStreamerMediaEngine {
 impl MediaEngine for GStreamerMediaEngine {
     async fn start_recording(
         &self,
-        _profile: MediaProfile,
+        _request: RecordingLaunchRequest,
     ) -> Result<MediaTransition<RecordingSession>, MediaError> {
         Err(MediaError::Unavailable(
             "GStreamerMediaEngine is a feature-gated placeholder; install and wire GStreamer in a future media engine milestone".to_string(),
@@ -1152,11 +1247,17 @@ mod tests {
         let engine = DryRunMediaEngine::new(None);
         let profile = MediaProfile::default_local();
 
-        let first = engine.start_recording(profile.clone()).await.unwrap();
+        let first = engine
+            .start_recording(RecordingLaunchRequest::new(profile.clone()))
+            .await
+            .unwrap();
         assert!(first.changed);
         assert!(first.status.recording_active);
 
-        let second = engine.start_recording(profile).await.unwrap();
+        let second = engine
+            .start_recording(RecordingLaunchRequest::new(profile))
+            .await
+            .unwrap();
         assert!(!second.changed);
         assert_eq!(first.session.unwrap().id, second.session.unwrap().id);
 
@@ -1223,6 +1324,7 @@ mod tests {
             dry_run: true,
             intent: PipelineIntent::RecordingAndStream,
             capture_sources: default_capture_sources(),
+            active_scene: None,
             recording_profile: Some(MediaProfile::default_local()),
             stream_destinations: vec![destination],
         });
@@ -1240,6 +1342,7 @@ mod tests {
             dry_run: true,
             intent: PipelineIntent::Recording,
             capture_sources: vec![],
+            active_scene: None,
             recording_profile: Some(MediaProfile::default_local()),
             stream_destinations: vec![],
         });
