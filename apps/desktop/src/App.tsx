@@ -9,6 +9,7 @@ import {
   Copy,
   Crosshair,
   Crop,
+  Download,
   Eye,
   EyeOff,
   FileVideo,
@@ -40,6 +41,7 @@ import {
   Trash2,
   Type,
   Unlock,
+  Upload,
   Redo2,
   Undo2,
   Video,
@@ -83,6 +85,8 @@ import type {
   ScenePoint,
   SceneSize,
   SceneSource,
+  SceneSourceFilter,
+  SceneSourceFilterKind,
   SceneSourceKind,
   SceneTransition,
   StudioEvent,
@@ -102,10 +106,12 @@ import {
 } from "@vaexcore/shared-types";
 import {
   eventSocketUrl,
+  exportSceneCollectionBundle,
   exportProfileBundle,
   fetchTwitchBroadcastReadinessFromConsole,
   fetchTwitchStreamKeyFromConsole,
   handoffRecordingToPulse,
+  importSceneCollectionBundle,
   importProfileBundle,
   launchVaexcoreSuite,
   LocalAppSettingsSnapshot,
@@ -161,7 +167,13 @@ type SuiteTimelineItem = {
 type SceneSourcePatch = Partial<
   Pick<
     SceneSource,
-    "name" | "opacity" | "rotation_degrees" | "visible" | "locked" | "z_index"
+    | "name"
+    | "opacity"
+    | "rotation_degrees"
+    | "visible"
+    | "locked"
+    | "z_index"
+    | "filters"
   >
 > & {
   position?: Partial<ScenePoint>;
@@ -200,6 +212,19 @@ type SceneUpdateOptions = {
 
 const designerHistoryLimit = 50;
 const designerSnapThreshold = 12;
+
+const sceneFilterKindLabels: Record<SceneSourceFilterKind, string> = {
+  color_correction: "Color Correction",
+  chroma_key: "Chroma Key",
+  crop_pad: "Crop / Pad",
+  mask_blend: "Mask / Blend",
+  blur: "Blur",
+  sharpen: "Sharpen",
+  lut: "LUT",
+  audio_gain: "Audio Gain",
+  noise_gate: "Noise Gate",
+  compressor: "Compressor",
+};
 
 const sectionIds: readonly Section[] = [
   "dashboard",
@@ -976,6 +1001,51 @@ function App() {
     }
   }
 
+  async function handleExportSceneCollectionBundle() {
+    try {
+      const result = await exportSceneCollectionBundle();
+      setSceneSaveStatus(
+        `Exported ${result.scenes} scene(s) and ${result.transitions} transition(s).`,
+      );
+      setError(null);
+    } catch (error) {
+      setSceneSaveStatus(
+        error instanceof Error ? error.message : "Scene export failed",
+      );
+    }
+  }
+
+  async function handleImportSceneCollectionBundle() {
+    if (!window.confirm("Import scene collection bundle from the app data directory?")) {
+      return;
+    }
+
+    try {
+      const result = await importSceneCollectionBundle();
+      if (config) {
+        const collection = await StudioApi.sceneCollection(config);
+        setSceneCollection(collection);
+        const scene =
+          collection.scenes.find(
+            (item) => item.id === collection.active_scene_id,
+          ) ?? collection.scenes[0];
+        setSelectedSceneSourceId(scene?.sources[0]?.id ?? "");
+        StudioApi.mediaPlan(config).then(setPipelinePlan).catch(() => undefined);
+      }
+      setSceneDirty(false);
+      setSceneHistory({ past: [], future: [] });
+      designerHistoryGroupRef.current = null;
+      setSceneSaveStatus(
+        `Imported ${result.scenes} scene(s) and ${result.transitions} transition(s).`,
+      );
+      setError(null);
+    } catch (error) {
+      setSceneSaveStatus(
+        error instanceof Error ? error.message : "Scene import failed",
+      );
+    }
+  }
+
   function handleSelectDesignerScene(sceneId: string) {
     const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
     if (!scene) return;
@@ -1326,7 +1396,9 @@ function App() {
             onDeleteSource={handleDeleteDesignerSource}
             onDuplicateScene={handleDuplicateDesignerScene}
             onDuplicateSource={handleDuplicateDesignerSource}
+            onExportCollection={handleExportSceneCollectionBundle}
             onFinishContinuousEdit={handleFinishDesignerContinuousEdit}
+            onImportCollection={handleImportSceneCollectionBundle}
             onRenameScene={handleRenameDesignerScene}
             canRedo={sceneHistory.future.length > 0}
             canUndo={sceneHistory.past.length > 0}
@@ -1641,7 +1713,9 @@ function DesignerPage(props: {
   onDeleteSource: (sceneId: string, sourceId: string) => void;
   onDuplicateScene: (sceneId: string) => void;
   onDuplicateSource: (sceneId: string, sourceId: string) => void;
+  onExportCollection: () => void;
   onFinishContinuousEdit: () => void;
+  onImportCollection: () => void;
   onRenameScene: (sceneId: string, name: string) => void;
   graph: CompositorGraph;
   scene: Scene;
@@ -2113,6 +2187,24 @@ function DesignerPage(props: {
                 <Redo2 size={14} />
               </button>
               <button
+                aria-label="Export scene collection"
+                className="icon-button compact"
+                onClick={props.onExportCollection}
+                title="Export scene collection"
+                type="button"
+              >
+                <Download size={14} />
+              </button>
+              <button
+                aria-label="Import scene collection"
+                className="icon-button compact"
+                onClick={props.onImportCollection}
+                title="Import scene collection"
+                type="button"
+              >
+                <Upload size={14} />
+              </button>
+              <button
                 className="secondary-button compact"
                 disabled={!validation.ok || !props.dirty}
                 onClick={props.onSave}
@@ -2547,6 +2639,14 @@ function DesignerPage(props: {
               }
               source={props.selectedSource}
             />
+            <SourceFilterEditor
+              onChange={(filters) =>
+                props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                  filters,
+                })
+              }
+              source={props.selectedSource}
+            />
             {sceneSourceAvailability(props.selectedSource) && (
               <KeyValue
                 label="Availability"
@@ -2558,6 +2658,206 @@ function DesignerPage(props: {
           <div className="empty">No source selected</div>
         )}
       </section>
+    </div>
+  );
+}
+
+function SourceFilterEditor(props: {
+  onChange: (filters: SceneSourceFilter[]) => void;
+  source: SceneSource;
+}) {
+  const [newFilterKind, setNewFilterKind] =
+    useState<SceneSourceFilterKind>("color_correction");
+  const filters = sortedSceneSourceFilters(props.source.filters ?? []);
+
+  function commit(nextFilters: SceneSourceFilter[]) {
+    props.onChange(nextFilters);
+  }
+
+  function updateFilter(
+    filterId: string,
+    patch: Partial<SceneSourceFilter>,
+  ) {
+    commit(
+      (props.source.filters ?? []).map((filter) =>
+        filter.id === filterId ? { ...filter, ...patch } : filter,
+      ),
+    );
+  }
+
+  function moveFilter(filterId: string, direction: "up" | "down") {
+    const index = filters.findIndex((filter) => filter.id === filterId);
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (index < 0 || targetIndex < 0 || targetIndex >= filters.length) return;
+    const reordered = [...filters];
+    [reordered[index], reordered[targetIndex]] = [
+      reordered[targetIndex],
+      reordered[index],
+    ];
+    commit(reordered.map((filter, nextIndex) => ({ ...filter, order: nextIndex * 10 })));
+  }
+
+  function addFilter() {
+    const nextOrder =
+      filters.reduce((highest, filter) => Math.max(highest, filter.order), -10) + 10;
+    commit([
+      ...(props.source.filters ?? []),
+      createDefaultSceneSourceFilter(newFilterKind, nextOrder),
+    ]);
+  }
+
+  function removeFilter(filterId: string) {
+    commit((props.source.filters ?? []).filter((filter) => filter.id !== filterId));
+  }
+
+  return (
+    <div className="source-filter-editor">
+      <div className="source-filter-editor-header">
+        <div>
+          <strong>Filters</strong>
+          <span>{filters.length} configured</span>
+        </div>
+        <div className="source-filter-add-controls">
+          <select
+            aria-label="New filter kind"
+            value={newFilterKind}
+            onChange={(event) =>
+              setNewFilterKind(event.target.value as SceneSourceFilterKind)
+            }
+          >
+            {Object.entries(sceneFilterKindLabels).map(([kind, label]) => (
+              <option key={kind} value={kind}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <button
+            className="secondary-button compact"
+            onClick={addFilter}
+            type="button"
+          >
+            <Plus size={14} />
+            Filter
+          </button>
+        </div>
+      </div>
+
+      {filters.length === 0 ? (
+        <div className="empty compact-empty">No filters</div>
+      ) : (
+        <div className="source-filter-list">
+          {filters.map((filter, index) => (
+            <div className="source-filter-item" key={filter.id}>
+              <div className="source-filter-item-header">
+                <SlidersHorizontal size={15} />
+                <strong>{filter.name}</strong>
+                <Pill tone={filter.enabled ? "green" : "muted"}>
+                  {filter.enabled ? "Enabled" : "Bypassed"}
+                </Pill>
+              </div>
+              <div className="source-filter-actions">
+                <button
+                  aria-label={`Move ${filter.name} earlier`}
+                  className="icon-button compact"
+                  disabled={index === 0}
+                  onClick={() => moveFilter(filter.id, "up")}
+                  title={`Move ${filter.name} earlier`}
+                  type="button"
+                >
+                  <ArrowUp size={14} />
+                </button>
+                <button
+                  aria-label={`Move ${filter.name} later`}
+                  className="icon-button compact"
+                  disabled={index === filters.length - 1}
+                  onClick={() => moveFilter(filter.id, "down")}
+                  title={`Move ${filter.name} later`}
+                  type="button"
+                >
+                  <ArrowDown size={14} />
+                </button>
+                <button
+                  aria-label={`Remove ${filter.name}`}
+                  className="icon-button compact danger"
+                  onClick={() => removeFilter(filter.id)}
+                  title={`Remove ${filter.name}`}
+                  type="button"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              <TextInput
+                label="Filter Name"
+                onChange={(name) => updateFilter(filter.id, { name })}
+                value={filter.name}
+              />
+              <div className="form-grid">
+                <label>
+                  Kind
+                  <select
+                    value={filter.kind}
+                    onChange={(event) => {
+                      const kind = event.target.value as SceneSourceFilterKind;
+                      updateFilter(filter.id, {
+                        kind,
+                        name: sceneFilterKindLabels[kind],
+                        config: defaultSceneSourceFilterConfig(kind),
+                      });
+                    }}
+                  >
+                    {Object.entries(sceneFilterKindLabels).map(([kind, label]) => (
+                      <option key={kind} value={kind}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <SceneNumberInput
+                  label="Order"
+                  onChange={(order) => updateFilter(filter.id, { order })}
+                  step={1}
+                  value={filter.order}
+                />
+              </div>
+              <label className="check-row">
+                <input
+                  checked={filter.enabled}
+                  onChange={(event) =>
+                    updateFilter(filter.id, { enabled: event.target.checked })
+                  }
+                  type="checkbox"
+                />
+                Enabled
+              </label>
+              <label>
+                Config JSON
+                <textarea
+                  key={`${filter.id}-${filter.kind}`}
+                  defaultValue={JSON.stringify(filter.config ?? {}, null, 2)}
+                  onBlur={(event) => {
+                    try {
+                      const parsed = JSON.parse(event.target.value) as unknown;
+                      if (!isPlainObject(parsed)) {
+                        throw new Error("Filter config must be a JSON object.");
+                      }
+                      updateFilter(filter.id, {
+                        config: parsed as Record<string, unknown>,
+                      });
+                    } catch (error) {
+                      window.alert(
+                        error instanceof Error
+                          ? error.message
+                          : "Filter config must be valid JSON.",
+                      );
+                    }
+                  }}
+                  rows={4}
+                />
+              </label>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -3755,6 +4055,57 @@ function sortedSceneSources(
   return [...scene.sources].sort(
     (left, right) => (left.z_index - right.z_index) * multiplier,
   );
+}
+
+function sortedSceneSourceFilters(filters: SceneSourceFilter[]): SceneSourceFilter[] {
+  return [...filters].sort(
+    (left, right) => left.order - right.order || left.id.localeCompare(right.id),
+  );
+}
+
+function createDefaultSceneSourceFilter(
+  kind: SceneSourceFilterKind,
+  order: number,
+): SceneSourceFilter {
+  return {
+    id: designerId("filter"),
+    name: sceneFilterKindLabels[kind],
+    kind,
+    enabled: true,
+    order,
+    config: defaultSceneSourceFilterConfig(kind),
+  };
+}
+
+function defaultSceneSourceFilterConfig(
+  kind: SceneSourceFilterKind,
+): Record<string, unknown> {
+  switch (kind) {
+    case "color_correction":
+      return { brightness: 0, contrast: 1, saturation: 1, gamma: 1 };
+    case "chroma_key":
+      return { key_color: "#00ff00", similarity: 0.25, smoothness: 0.08 };
+    case "crop_pad":
+      return { top: 0, right: 0, bottom: 0, left: 0 };
+    case "mask_blend":
+      return { mask_uri: null, blend_mode: "normal" };
+    case "blur":
+      return { radius: 4, quality: "balanced" };
+    case "sharpen":
+      return { amount: 0.35 };
+    case "lut":
+      return { lut_uri: null, strength: 1 };
+    case "audio_gain":
+      return { gain_db: 0 };
+    case "noise_gate":
+      return { close_threshold_db: -45, open_threshold_db: -35, attack_ms: 10, release_ms: 120 };
+    case "compressor":
+      return { threshold_db: -18, ratio: 3, attack_ms: 8, release_ms: 120, makeup_gain_db: 0 };
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function drawCompositorPreview(

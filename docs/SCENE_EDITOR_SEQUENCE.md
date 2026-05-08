@@ -53,15 +53,16 @@ foundation to OBS-class scene editing and output.
     modes and fit/fill/stretch policies are not started.
 22. Source filters and effects: started with serializable per-source filter
     chains, supported filter kinds, validation, and compositor graph
-    propagation. Real video/audio filter rendering and Designer filter editing
-    UX are not started.
+    propagation plus first-pass Designer filter chain editing. Real video/audio
+    filter rendering and detailed per-filter controls are not started.
 23. Scene transitions and transition preview: started with persisted transition
     contracts, validation, and Designer controls; live transition preview and
     renderer application are not started.
 24. Scene collection import/export/backup: started with versioned bundle
     contracts, local API export/import routes, SDK helpers, desktop bridge
-    commands, and store validation. Designer-facing file picker UX and
-    automatic backup rotation are not started.
+    commands, store validation, and Designer import/export actions against the
+    app data bundle path. Designer-facing file picker UX and automatic backup
+    rotation are not started.
 25. Hotkeys and workflow shortcuts: not started.
 26. Active-scene recording and streaming integration: not started.
 27. Performance tuning: frame pacing, latency, dropped frames, GPU/CPU load:
