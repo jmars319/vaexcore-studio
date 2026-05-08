@@ -936,6 +936,85 @@ export function normalizeSceneCollection(
   };
 }
 
+export function bindSceneCollectionCaptureInventory(
+  collection: SceneCollection,
+  inventory: CaptureSourceInventory | null | undefined,
+): SceneCollection {
+  if (!inventory) {
+    return collection;
+  }
+
+  return {
+    ...collection,
+    scenes: collection.scenes.map((scene) => ({
+      ...scene,
+      sources: scene.sources.map((source) => bindSceneSourceCaptureInventory(source, inventory)),
+    })),
+  };
+}
+
+function bindSceneSourceCaptureInventory(
+  source: SceneSource,
+  inventory: CaptureSourceInventory,
+): SceneSource {
+  switch (source.kind) {
+    case "display":
+      return bindCaptureCandidate(source, inventory, ["display"], "display_id", "display");
+    case "window":
+      return bindCaptureCandidate(source, inventory, ["window"], "window_id", "window");
+    case "camera":
+      return bindCaptureCandidate(source, inventory, ["camera"], "device_id", "camera");
+    case "audio_meter":
+      return bindCaptureCandidate(
+        source,
+        inventory,
+        ["microphone", "system_audio"],
+        "device_id",
+        "audio device",
+      );
+    default:
+      return source;
+  }
+}
+
+function bindCaptureCandidate<Source extends SceneSource>(
+  source: Source,
+  inventory: CaptureSourceInventory,
+  candidateKinds: CaptureSourceKind[],
+  configKey: string,
+  label: string,
+): Source {
+  const config = source.config as unknown as Record<string, unknown>;
+  const configuredId = typeof config[configKey] === "string" ? String(config[configKey]) : "";
+  const candidates = inventory.candidates.filter((candidate) =>
+    candidateKinds.includes(candidate.kind),
+  );
+  const candidate = configuredId
+    ? candidates.find((item) => item.id === configuredId)
+    : undefined;
+  const availability = candidate
+    ? {
+        state: candidate.available ? "available" : "unavailable",
+        detail: candidate.available
+          ? `${candidate.name} is available.`
+          : (candidate.notes ?? `${candidate.name} is not available.`),
+      }
+    : {
+        state: candidates.some((item) => item.available) ? "unknown" : "unavailable",
+        detail: configuredId
+          ? `Configured ${label} "${configuredId}" was not found in the current inventory.`
+          : `No ${label} has been assigned.`,
+      };
+
+  return {
+    ...source,
+    config: {
+      ...source.config,
+      availability,
+    },
+  } as Source;
+}
+
 export function buildCompositorGraph(scene: Scene): CompositorGraph {
   const nodes = [...scene.sources]
     .sort((left, right) => left.z_index - right.z_index || left.id.localeCompare(right.id))

@@ -19,10 +19,14 @@ foundation to OBS-class scene editing and output.
 9. Program/output renderer producing real frames: not started.
 10. Frame timing, resolution, FPS, scaling, and color contracts: started with
     render target timing/scaling evaluation.
-11. Display capture binding on macOS and Windows: not started.
-12. Window capture binding on macOS and Windows: not started.
-13. Camera source engine: not started.
-14. Microphone and system audio capture: not started.
+11. Display capture binding on macOS and Windows: started with inventory-backed
+    source availability in Designer; real capture is not started.
+12. Window capture binding on macOS and Windows: started with inventory-backed
+    source availability in Designer; real capture is not started.
+13. Camera source engine: started with inventory-backed source availability in
+    Designer; real capture is not started.
+14. Microphone and system audio capture: started with inventory-backed source
+    availability in Designer; real audio capture is not started.
 15. Audio mixer model, meters, and routing: not started.
 16. Image and media source engine: not started.
 17. Browser/web overlay source engine: not started.

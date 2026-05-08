@@ -78,6 +78,7 @@ import type {
   StreamDestinationInput,
 } from "@vaexcore/shared-types";
 import {
+  bindSceneCollectionCaptureInventory,
   buildCompositorGraph,
   createDefaultSceneCollection,
   createDefaultSceneSource,
@@ -503,13 +504,17 @@ function App() {
         recentMarkers,
         events,
         persistedSuiteTimeline,
-      ),
+    ),
     [events, persistedSuiteTimeline, recentMarkers, recentRecordings, suiteStatus],
   );
+  const designerSceneCollection = useMemo(
+    () => bindSceneCollectionCaptureInventory(sceneCollection, captureInventory),
+    [captureInventory, sceneCollection],
+  );
   const activeDesignerScene =
-    sceneCollection.scenes.find(
-      (scene) => scene.id === sceneCollection.active_scene_id,
-    ) ?? sceneCollection.scenes[0];
+    designerSceneCollection.scenes.find(
+      (scene) => scene.id === designerSceneCollection.active_scene_id,
+    ) ?? designerSceneCollection.scenes[0];
   const activeCompositorGraph = useMemo(
     () => buildCompositorGraph(activeDesignerScene),
     [activeDesignerScene],
@@ -1181,7 +1186,7 @@ function App() {
         return (
           <DesignerPage
             captureInventory={captureInventory}
-            collection={sceneCollection}
+            collection={designerSceneCollection}
             dirty={sceneDirty}
             onCreateScene={handleCreateDesignerScene}
             onCreateSource={handleCreateDesignerSource}
@@ -1346,6 +1351,7 @@ function App() {
     twitchReadiness,
     activeDesignerScene,
     captureInventory,
+    designerSceneCollection,
     sceneCollection,
     sceneDirty,
     sceneSaveStatus,

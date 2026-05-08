@@ -145,3 +145,37 @@ test("compositor graph builder preserves source order and warnings", async () =>
   assert.equal(frame.targets.length, 3);
   assert.equal(frame.targets[0].nodes[0].rect.width, 1920);
 });
+
+test("capture inventory binding updates scene source availability", async () => {
+  const {
+    bindSceneCollectionCaptureInventory,
+    createDefaultSceneCollection,
+  } = await sharedTypes;
+  const collection = createDefaultSceneCollection("2026-05-08T12:00:00.000Z");
+  const bound = bindSceneCollectionCaptureInventory(collection, {
+    candidates: [
+      {
+        id: "display:main",
+        kind: "display",
+        name: "Main Display",
+        available: true,
+        notes: null,
+      },
+      {
+        id: "microphone:default",
+        kind: "microphone",
+        name: "Default Microphone",
+        available: false,
+        notes: "Microphone permission is required.",
+      },
+    ],
+    selected: [],
+  });
+
+  const display = bound.scenes[0].sources.find((source) => source.kind === "display");
+  const microphone = bound.scenes[0].sources.find((source) => source.kind === "audio_meter");
+
+  assert.equal(display.config.availability.state, "available");
+  assert.equal(microphone.config.availability.state, "unavailable");
+  assert.equal(collection.scenes[0].sources[0].config.availability.state, "permission_required");
+});
