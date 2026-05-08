@@ -21,6 +21,7 @@
     "lint:rust": "cargo clippy --all-targets -- -D warnings",
     "test:rust": "cargo test --workspace",
     "test:scripts": "node --test scripts/tests/*.test.mjs",
+    "validate:windows": "node scripts/validate-windows.mjs",
     "check:sidecars": "npm run check:sidecars -w apps/desktop",
     "prepare:sidecars": "npm run prepare:sidecars -w apps/desktop",
     "smoke:visual": "node scripts/visual-smoke.mjs"
