@@ -1679,6 +1679,11 @@ mod tests {
             .unwrap()
             .iter()
             .any(|step| step["id"] == serde_json::json!("scene.render_runtime")));
+        assert!(body["data"]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["id"] == serde_json::json!("scene.software_renderer")));
         assert_eq!(
             body["data"]["config"]["active_scene"]["id"],
             serde_json::json!("scene-main")

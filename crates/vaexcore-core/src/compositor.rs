@@ -178,6 +178,24 @@ pub struct CompositorRenderedFrame {
     pub validation: CompositorValidation,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SoftwareCompositorFrame {
+    pub target_id: String,
+    pub target_kind: CompositorRenderTargetKind,
+    pub width: u32,
+    pub height: u32,
+    pub frame_format: CompositorFrameFormat,
+    pub bytes_per_row: usize,
+    pub checksum: u64,
+    pub pixels: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SoftwareCompositorRenderResult {
+    pub frame: CompositorRenderedFrame,
+    pub pixel_frames: Vec<SoftwareCompositorFrame>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct CompositorValidation {
     pub ready: bool,
@@ -465,6 +483,25 @@ pub fn evaluate_compositor_frame(
     }
 }
 
+pub fn render_software_compositor_frame(
+    plan: &CompositorRenderPlan,
+    frame_index: u64,
+) -> SoftwareCompositorRenderResult {
+    let mut frame = evaluate_compositor_frame(plan, frame_index);
+    frame.renderer = CompositorRendererKind::Software;
+    let background = parse_background_color(&plan.graph.output.background_color);
+    let pixel_frames = frame
+        .targets
+        .iter()
+        .map(|target| render_software_target(target, background))
+        .collect();
+
+    SoftwareCompositorRenderResult {
+        frame,
+        pixel_frames,
+    }
+}
+
 fn evaluate_node_for_target(
     node: &CompositorNode,
     output: &CompositorOutput,
@@ -535,6 +572,169 @@ fn target_mapping(
             (target_height - source_height) / 2.0,
         ),
     }
+}
+
+fn render_software_target(
+    target: &CompositorRenderedTarget,
+    background: [u8; 4],
+) -> SoftwareCompositorFrame {
+    let width = target.width.max(1) as usize;
+    let height = target.height.max(1) as usize;
+    let bytes_per_row = width * 4;
+    let mut pixels = vec![0; bytes_per_row * height];
+    fill_background(&mut pixels, background);
+
+    for node in &target.nodes {
+        draw_node(&mut pixels, width, height, node);
+    }
+
+    let checksum = checksum_pixels(&pixels);
+    SoftwareCompositorFrame {
+        target_id: target.target_id.clone(),
+        target_kind: target.target_kind.clone(),
+        width: width as u32,
+        height: height as u32,
+        frame_format: CompositorFrameFormat::Rgba8,
+        bytes_per_row,
+        checksum,
+        pixels,
+    }
+}
+
+fn fill_background(pixels: &mut [u8], background: [u8; 4]) {
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel.copy_from_slice(&background);
+    }
+}
+
+fn draw_node(
+    pixels: &mut [u8],
+    target_width: usize,
+    target_height: usize,
+    node: &CompositorEvaluatedNode,
+) {
+    let Some(rect) = drawable_rect(node) else {
+        return;
+    };
+    let left = rect.x.floor().max(0.0) as usize;
+    let top = rect.y.floor().max(0.0) as usize;
+    let right = (rect.x + rect.width).ceil().min(target_width as f64) as usize;
+    let bottom = (rect.y + rect.height).ceil().min(target_height as f64) as usize;
+
+    if left >= right || top >= bottom {
+        return;
+    }
+
+    let alpha = (node.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+    if alpha == 0 {
+        return;
+    }
+    let color = node_color(node, alpha);
+
+    for y in top..bottom {
+        let row_offset = y * target_width * 4;
+        for x in left..right {
+            blend_pixel(
+                &mut pixels[row_offset + x * 4..row_offset + x * 4 + 4],
+                color,
+            );
+        }
+    }
+}
+
+fn drawable_rect(node: &CompositorEvaluatedNode) -> Option<CompositorRect> {
+    if !node.opacity.is_finite()
+        || !node.rect.x.is_finite()
+        || !node.rect.y.is_finite()
+        || !node.rect.width.is_finite()
+        || !node.rect.height.is_finite()
+        || node.rect.width <= 0.0
+        || node.rect.height <= 0.0
+    {
+        return None;
+    }
+
+    let crop_left = node.crop.left.max(0.0).min(node.rect.width);
+    let crop_right = node.crop.right.max(0.0).min(node.rect.width - crop_left);
+    let crop_top = node.crop.top.max(0.0).min(node.rect.height);
+    let crop_bottom = node.crop.bottom.max(0.0).min(node.rect.height - crop_top);
+    let width = node.rect.width - crop_left - crop_right;
+    let height = node.rect.height - crop_top - crop_bottom;
+
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+
+    Some(CompositorRect {
+        x: node.rect.x + crop_left,
+        y: node.rect.y + crop_top,
+        width,
+        height,
+    })
+}
+
+fn blend_pixel(pixel: &mut [u8], color: [u8; 4]) {
+    let alpha = u16::from(color[3]);
+    let inverse_alpha = 255 - alpha;
+    pixel[0] = blend_channel(color[0], pixel[0], alpha, inverse_alpha);
+    pixel[1] = blend_channel(color[1], pixel[1], alpha, inverse_alpha);
+    pixel[2] = blend_channel(color[2], pixel[2], alpha, inverse_alpha);
+    pixel[3] = (alpha + u16::from(pixel[3]) * inverse_alpha / 255).min(255) as u8;
+}
+
+fn blend_channel(source: u8, destination: u8, alpha: u16, inverse_alpha: u16) -> u8 {
+    ((u16::from(source) * alpha + u16::from(destination) * inverse_alpha + 127) / 255) as u8
+}
+
+fn node_color(node: &CompositorEvaluatedNode, alpha: u8) -> [u8; 4] {
+    let [red, green, blue] = match node.status {
+        CompositorNodeStatus::Unavailable => [133, 55, 71],
+        CompositorNodeStatus::PermissionRequired => [202, 126, 46],
+        CompositorNodeStatus::Placeholder => [94, 112, 139],
+        CompositorNodeStatus::Hidden | CompositorNodeStatus::Ready => match node.role {
+            CompositorNodeRole::Video => [43, 104, 217],
+            CompositorNodeRole::Audio => [36, 170, 142],
+            CompositorNodeRole::Overlay => [211, 137, 55],
+            CompositorNodeRole::Text => [178, 81, 209],
+            CompositorNodeRole::Group => [123, 139, 163],
+        },
+    };
+    [red, green, blue, alpha]
+}
+
+fn parse_background_color(value: &str) -> [u8; 4] {
+    let trimmed = value.trim();
+    let Some(hex) = trimmed.strip_prefix('#') else {
+        return [5, 7, 17, 255];
+    };
+    if hex.len() != 6 {
+        return [5, 7, 17, 255];
+    }
+
+    let Some(red) = parse_hex_channel(&hex[0..2]) else {
+        return [5, 7, 17, 255];
+    };
+    let Some(green) = parse_hex_channel(&hex[2..4]) else {
+        return [5, 7, 17, 255];
+    };
+    let Some(blue) = parse_hex_channel(&hex[4..6]) else {
+        return [5, 7, 17, 255];
+    };
+
+    [red, green, blue, 255]
+}
+
+fn parse_hex_channel(value: &str) -> Option<u8> {
+    u8::from_str_radix(value, 16).ok()
+}
+
+fn checksum_pixels(pixels: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325;
+    for byte in pixels {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 fn build_compositor_node(source: &SceneSource) -> CompositorNode {
@@ -822,5 +1022,51 @@ mod tests {
         assert_eq!(frame.targets[0].nodes.len(), graph.nodes.len());
         assert_eq!(frame.targets[0].nodes[0].rect.width, 1280.0);
         assert_eq!(frame.targets[0].nodes[0].rect.height, 720.0);
+    }
+
+    #[test]
+    fn software_compositor_renders_rgba_target_buffers() {
+        let collection = crate::SceneCollection::default_collection(crate::now_utc());
+        let scene = collection.active_scene().unwrap();
+        let graph = build_compositor_graph(scene);
+        let mut disabled_target = compositor_render_target(
+            "disabled-preview",
+            "Disabled Preview",
+            CompositorRenderTargetKind::Preview,
+            320,
+            180,
+            30,
+        );
+        disabled_target.enabled = false;
+        let plan = build_compositor_render_plan(
+            &graph,
+            vec![
+                compositor_render_target(
+                    "program-720",
+                    "Program 720p",
+                    CompositorRenderTargetKind::Program,
+                    1280,
+                    720,
+                    30,
+                ),
+                disabled_target,
+            ],
+        );
+
+        let result = render_software_compositor_frame(&plan, 0);
+
+        assert!(
+            result.frame.validation.ready,
+            "{:?}",
+            result.frame.validation.errors
+        );
+        assert_eq!(result.frame.renderer, CompositorRendererKind::Software);
+        assert_eq!(result.pixel_frames.len(), 1);
+        let target = &result.pixel_frames[0];
+        assert_eq!(target.frame_format, CompositorFrameFormat::Rgba8);
+        assert_eq!(target.bytes_per_row, 1280 * 4);
+        assert_eq!(target.pixels.len(), 1280 * 720 * 4);
+        assert_ne!(target.checksum, 0);
+        assert_ne!(&target.pixels[0..4], &[5, 7, 17, 255]);
     }
 }

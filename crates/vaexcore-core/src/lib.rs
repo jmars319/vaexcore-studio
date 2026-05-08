@@ -15,12 +15,14 @@ pub use capture::{
 };
 pub use compositor::{
     build_compositor_graph, build_compositor_render_plan, compositor_render_target,
-    evaluate_compositor_frame, validate_compositor_graph, validate_compositor_render_plan,
-    CompositorBlendMode, CompositorEvaluatedNode, CompositorFrameClock, CompositorFrameFormat,
-    CompositorGraph, CompositorNode, CompositorNodeRole, CompositorNodeStatus, CompositorOutput,
-    CompositorRect, CompositorRenderPlan, CompositorRenderTarget, CompositorRenderTargetKind,
+    evaluate_compositor_frame, render_software_compositor_frame, validate_compositor_graph,
+    validate_compositor_render_plan, CompositorBlendMode, CompositorEvaluatedNode,
+    CompositorFrameClock, CompositorFrameFormat, CompositorGraph, CompositorNode,
+    CompositorNodeRole, CompositorNodeStatus, CompositorOutput, CompositorRect,
+    CompositorRenderPlan, CompositorRenderTarget, CompositorRenderTargetKind,
     CompositorRenderedFrame, CompositorRenderedTarget, CompositorRendererKind, CompositorScaleMode,
-    CompositorTransform, CompositorValidation,
+    CompositorTransform, CompositorValidation, SoftwareCompositorFrame,
+    SoftwareCompositorRenderResult,
 };
 pub use events::{StudioEvent, StudioEventKind};
 pub use pipeline::{

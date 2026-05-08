@@ -13,12 +13,12 @@ use std::{
 };
 use tokio::sync::Mutex;
 use vaexcore_core::{
-    build_compositor_graph, evaluate_compositor_frame, new_id, validate_compositor_graph,
-    validate_compositor_render_plan, CaptureSourceKind, CaptureSourceSelection, EngineMode,
-    EngineStatus, MediaPipelineConfig, MediaPipelinePlan, MediaPipelinePlanRequest,
-    MediaPipelineStep, MediaProfile, PipelineIntent, PipelineStepStatus, PlatformKind,
-    RecordingContainer, RecordingSession, Scene, StreamDestination, StreamSession, StudioEvent,
-    StudioEventKind,
+    build_compositor_graph, evaluate_compositor_frame, new_id, render_software_compositor_frame,
+    validate_compositor_graph, validate_compositor_render_plan, CaptureSourceKind,
+    CaptureSourceSelection, CompositorFrameFormat, CompositorRenderPlan, EngineMode, EngineStatus,
+    MediaPipelineConfig, MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep,
+    MediaProfile, PipelineIntent, PipelineStepStatus, PlatformKind, RecordingContainer,
+    RecordingSession, Scene, StreamDestination, StreamSession, StudioEvent, StudioEventKind,
 };
 
 mod sidecar;
@@ -495,6 +495,17 @@ fn validate_scene_compositor(
 
     if let Some(render_plan) = render_plan {
         let rendered_frame = evaluate_compositor_frame(&render_plan, 0);
+        let software_probe_plan = compact_software_probe_plan(&render_plan);
+        let software_probe = render_software_compositor_frame(&software_probe_plan, 0);
+        let software_probe_bytes = software_probe
+            .pixel_frames
+            .iter()
+            .map(|frame| frame.pixels.len())
+            .sum::<usize>();
+        let software_probe_checksum = software_probe
+            .pixel_frames
+            .iter()
+            .fold(0_u64, |checksum, frame| checksum ^ frame.checksum);
         let enabled_targets = render_plan
             .targets
             .iter()
@@ -532,7 +543,51 @@ fn validate_scene_compositor(
                 rendered_frame.clock.framerate
             ),
         });
+        steps.push(MediaPipelineStep {
+            id: "scene.software_renderer".to_string(),
+            label: "Software frame probe".to_string(),
+            status: if software_probe.frame.validation.ready
+                && !software_probe.pixel_frames.is_empty()
+            {
+                PipelineStepStatus::Ready
+            } else {
+                PipelineStepStatus::Blocked
+            },
+            detail: if let Some(frame) = software_probe.pixel_frames.first() {
+                format!(
+                    "Rendered compact {}x{} RGBA probe for {} target(s), {} byte(s), checksum {:016x}.",
+                    frame.width,
+                    frame.height,
+                    software_probe.pixel_frames.len(),
+                    software_probe_bytes,
+                    software_probe_checksum
+                )
+            } else {
+                "No enabled render target was available for a software frame probe.".to_string()
+            },
+        });
     }
+}
+
+fn compact_software_probe_plan(render_plan: &CompositorRenderPlan) -> CompositorRenderPlan {
+    let mut probe_plan = render_plan.clone();
+    let Some(target) = render_plan.targets.iter().find(|target| target.enabled) else {
+        probe_plan.targets.clear();
+        return probe_plan;
+    };
+
+    let mut probe_target = target.clone();
+    let scale = (320.0 / f64::from(target.width.max(1)))
+        .min(180.0 / f64::from(target.height.max(1)))
+        .min(1.0);
+    probe_target.id = "software-probe".to_string();
+    probe_target.name = "Software Probe".to_string();
+    probe_target.width = (f64::from(target.width.max(1)) * scale).round().max(1.0) as u32;
+    probe_target.height = (f64::from(target.height.max(1)) * scale).round().max(1.0) as u32;
+    probe_target.frame_format = CompositorFrameFormat::Rgba8;
+    probe_target.enabled = true;
+    probe_plan.targets = vec![probe_target];
+    probe_plan
 }
 
 fn validate_recording(
@@ -1378,6 +1433,31 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("stored stream keys")));
+    }
+
+    #[test]
+    fn dry_run_pipeline_plan_reports_software_frame_probe() {
+        let collection =
+            vaexcore_core::SceneCollection::default_collection(vaexcore_core::now_utc());
+        let plan = build_dry_run_pipeline_plan(MediaPipelinePlanRequest {
+            dry_run: true,
+            intent: PipelineIntent::Recording,
+            capture_sources: default_capture_sources(),
+            active_scene: collection.active_scene().cloned(),
+            recording_profile: Some(MediaProfile::default_local()),
+            stream_destinations: vec![],
+        });
+
+        let software_step = plan
+            .steps
+            .iter()
+            .find(|step| step.id == "scene.software_renderer")
+            .expect("software renderer probe step");
+
+        assert!(plan.ready, "{:?}", plan.errors);
+        assert_eq!(software_step.status, PipelineStepStatus::Ready);
+        assert!(software_step.detail.contains("RGBA probe"));
+        assert!(software_step.detail.contains("checksum"));
     }
 
     #[test]
