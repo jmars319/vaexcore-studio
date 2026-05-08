@@ -359,6 +359,195 @@ nav {
   gap: 18px;
 }
 
+.designer-grid {
+  display: grid;
+  grid-template-columns: minmax(250px, 300px) minmax(440px, 1fr) minmax(300px, 360px);
+  gap: 18px;
+  align-items: start;
+}
+
+.designer-left-rail {
+  display: grid;
+  gap: 18px;
+}
+
+.designer-list {
+  display: grid;
+  gap: 9px;
+}
+
+.designer-list-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 58px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0b0c13;
+  color: var(--text);
+  text-align: left;
+}
+
+.designer-list-item.selected,
+.designer-source-box.selected {
+  border-color: rgba(34, 216, 255, 0.78);
+  box-shadow: 0 0 0 2px rgba(34, 216, 255, 0.12);
+}
+
+.designer-list-item strong,
+.designer-list-item span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.designer-list-item span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.source-stack-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.source-stack-main,
+.designer-source-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.source-stack-main svg,
+.designer-source-label svg {
+  flex: 0 0 auto;
+  color: var(--cyan);
+}
+
+.source-stack-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.source-stack-select-button {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.icon-button.compact {
+  width: 30px;
+  min-height: 30px;
+}
+
+.designer-preview-panel {
+  min-width: 0;
+}
+
+.designer-preview-shell {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, transparent 0 98%, rgba(57, 217, 255, 0.08) 98% 100%),
+    linear-gradient(180deg, transparent 0 98%, rgba(255, 59, 244, 0.07) 98% 100%),
+    #070810;
+  background-size: 28px 28px;
+}
+
+.designer-preview-canvas {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid rgba(138, 174, 255, 0.24);
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.designer-source-box {
+  position: absolute;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 46px;
+  min-height: 30px;
+  padding: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(34, 216, 255, 0.56);
+  border-radius: 8px;
+  background: rgba(18, 22, 42, 0.82);
+  color: var(--text);
+  text-align: left;
+  transform-origin: center;
+}
+
+.designer-source-box span,
+.designer-source-box small {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.designer-source-box strong {
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.designer-source-box.source-camera {
+  border-color: rgba(255, 210, 122, 0.72);
+}
+
+.designer-source-box.source-audio_meter {
+  border-color: rgba(117, 240, 207, 0.72);
+}
+
+.designer-source-box.source-browser_overlay,
+.designer-source-box.source-text {
+  border-color: rgba(255, 59, 244, 0.62);
+}
+
+.designer-source-box.hidden-source {
+  border-style: dashed;
+  filter: grayscale(0.7);
+}
+
+.designer-source-box.locked-source::after {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  color: var(--warning);
+  font-size: 11px;
+  content: "locked";
+}
+
+.designer-preview-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.designer-preview-meta .key-value,
+.designer-inspector .key-value {
+  margin-bottom: 0;
+}
+
 .settings-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -847,6 +1036,7 @@ select:focus {
 
   .metric-grid,
   .two-column,
+  .designer-grid,
   .control-grid,
   .settings-grid {
     grid-template-columns: 1fr;
@@ -894,11 +1084,20 @@ select:focus {
   .form-grid,
   .permission-line,
   .source-grid,
+  .designer-preview-meta,
   .identity-panel {
     grid-template-columns: 1fr;
   }
 
   .permission-actions {
+    justify-content: flex-start;
+  }
+
+  .source-stack-item {
+    grid-template-columns: 1fr;
+  }
+
+  .source-stack-actions {
     justify-content: flex-start;
   }
 }

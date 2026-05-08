@@ -1,11 +1,22 @@
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
   Cable,
   CheckCircle2,
   Copy,
+  Eye,
+  EyeOff,
   FileVideo,
+  Globe,
+  Group,
+  Image as ImageIcon,
+  Layers,
   Link2,
+  Lock,
   MapPin,
+  Mic,
+  Monitor,
   Pencil,
   Play,
   Plus,
@@ -17,11 +28,13 @@ import {
   Square,
   Terminal,
   Trash2,
+  Type,
+  Unlock,
   Video,
   WifiOff,
   X,
 } from "lucide-react";
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { CSSProperties, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import type {
   AppSettings,
   AuditLogEntry,
@@ -41,12 +54,24 @@ import type {
   ProfilesSnapshot,
   RecordingContainer,
   RecordingHistoryEntry,
+  Scene,
+  SceneCollection,
+  SceneCrop,
+  ScenePoint,
+  SceneSize,
+  SceneSource,
+  SceneSourceKind,
   StudioEvent,
   StudioStatus,
   StreamDestination,
   StreamDestinationInput,
 } from "@vaexcore/shared-types";
-import { platformLabels } from "@vaexcore/shared-types";
+import {
+  createDefaultSceneCollection,
+  platformLabels,
+  sceneSourceKindLabels,
+  validateSceneCollection,
+} from "@vaexcore/shared-types";
 import {
   eventSocketUrl,
   exportProfileBundle,
@@ -89,6 +114,7 @@ import logoUrl from "./assets/brand/vaexcore-studio-logo.jpg";
 
 type Section =
   | "dashboard"
+  | "designer"
   | "destinations"
   | "profiles"
   | "controls"
@@ -104,8 +130,20 @@ type SuiteTimelineItem = {
   source: string;
 };
 
+type SceneSourcePatch = Partial<
+  Pick<
+    SceneSource,
+    "name" | "opacity" | "rotation_degrees" | "visible" | "locked" | "z_index"
+  >
+> & {
+  position?: Partial<ScenePoint>;
+  size?: Partial<SceneSize>;
+  crop?: Partial<SceneCrop>;
+};
+
 const sectionIds: readonly Section[] = [
   "dashboard",
+  "designer",
   "destinations",
   "profiles",
   "controls",
@@ -115,6 +153,7 @@ const sectionIds: readonly Section[] = [
 
 const navItems: Array<{ id: Section; label: string; icon: ReactNode }> = [
   { id: "dashboard", label: "Control Room", icon: <Activity size={17} /> },
+  { id: "designer", label: "Designer", icon: <Layers size={17} /> },
   { id: "destinations", label: "Broadcast Destinations", icon: <Radio size={17} /> },
   { id: "profiles", label: "Recording Profiles", icon: <FileVideo size={17} /> },
   { id: "controls", label: "Broadcast Setup", icon: <SlidersHorizontal size={17} /> },
@@ -223,6 +262,12 @@ function App() {
   const [twitchReadiness, setTwitchReadiness] =
     useState<TwitchBroadcastReadiness | null>(null);
   const [streamBandwidthTest, setStreamBandwidthTest] = useState(false);
+  const [sceneCollection, setSceneCollection] = useState<SceneCollection>(() =>
+    createDefaultSceneCollection(),
+  );
+  const [selectedSceneSourceId, setSelectedSceneSourceId] = useState(
+    "source-main-display",
+  );
 
   useEffect(() => {
     loadRuntimeConfig().then(setConfig).catch((error: Error) => {
@@ -408,6 +453,16 @@ function App() {
       ),
     [events, persistedSuiteTimeline, recentMarkers, recentRecordings, suiteStatus],
   );
+  const activeDesignerScene =
+    sceneCollection.scenes.find(
+      (scene) => scene.id === sceneCollection.active_scene_id,
+    ) ?? sceneCollection.scenes[0];
+  const selectedDesignerSource =
+    activeDesignerScene?.sources.find(
+      (source) => source.id === selectedSceneSourceId,
+    ) ??
+    activeDesignerScene?.sources[0] ??
+    null;
 
   async function refreshProfiles() {
     if (!config) return;
@@ -818,6 +873,73 @@ function App() {
     }
   }
 
+  function handleSelectDesignerScene(sceneId: string) {
+    const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
+    if (!scene) return;
+    setSceneCollection((current) => ({
+      ...current,
+      active_scene_id: sceneId,
+      updated_at: new Date().toISOString(),
+    }));
+    setSelectedSceneSourceId(scene.sources[0]?.id ?? "");
+  }
+
+  function handleUpdateDesignerSource(
+    sceneId: string,
+    sourceId: string,
+    patch: SceneSourcePatch,
+  ) {
+    setSceneCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) =>
+        scene.id === sceneId
+          ? {
+              ...scene,
+              sources: scene.sources.map((source) =>
+                source.id === sourceId
+                  ? mergeSceneSourcePatch(source, patch)
+                  : source,
+              ),
+            }
+          : scene,
+      ),
+      updated_at: new Date().toISOString(),
+    }));
+  }
+
+  function handleReorderDesignerSource(
+    sceneId: string,
+    sourceId: string,
+    direction: "up" | "down",
+  ) {
+    setSceneCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) => {
+        if (scene.id !== sceneId) return scene;
+        const ordered = [...scene.sources].sort(
+          (left, right) => left.z_index - right.z_index,
+        );
+        const index = ordered.findIndex((source) => source.id === sourceId);
+        const swapIndex = direction === "up" ? index + 1 : index - 1;
+        if (index < 0 || swapIndex < 0 || swapIndex >= ordered.length) {
+          return scene;
+        }
+
+        const source = ordered[index];
+        const swap = ordered[swapIndex];
+        return {
+          ...scene,
+          sources: scene.sources.map((item) => {
+            if (item.id === source.id) return { ...item, z_index: swap.z_index };
+            if (item.id === swap.id) return { ...item, z_index: source.z_index };
+            return item;
+          }),
+        };
+      }),
+      updated_at: new Date().toISOString(),
+    }));
+  }
+
   const page = useMemo(() => {
     switch (section) {
       case "dashboard":
@@ -831,6 +953,19 @@ function App() {
             recordingActive={activeStatus?.recording_active ?? false}
             recordingPath={recordingPath ?? "No active recording"}
             streamActive={activeStatus?.stream_active ?? false}
+          />
+        );
+      case "designer":
+        return (
+          <DesignerPage
+            collection={sceneCollection}
+            scene={activeDesignerScene}
+            selectedSource={selectedDesignerSource}
+            selectedSourceId={selectedSceneSourceId}
+            onReorderSource={handleReorderDesignerSource}
+            onSelectScene={handleSelectDesignerScene}
+            onSelectSource={setSelectedSceneSourceId}
+            onUpdateSource={handleUpdateDesignerSource}
           />
         );
       case "destinations":
@@ -975,6 +1110,10 @@ function App() {
     suiteLaunchStatus,
     streamBandwidthTest,
     twitchReadiness,
+    activeDesignerScene,
+    sceneCollection,
+    selectedDesignerSource,
+    selectedSceneSourceId,
   ]);
 
   if (isSettingsWindow) {
@@ -1104,6 +1243,378 @@ function App() {
         {page}
       </section>
     </main>
+  );
+}
+
+function DesignerPage(props: {
+  collection: SceneCollection;
+  scene: Scene;
+  selectedSource: SceneSource | null;
+  selectedSourceId: string;
+  onReorderSource: (
+    sceneId: string,
+    sourceId: string,
+    direction: "up" | "down",
+  ) => void;
+  onSelectScene: (sceneId: string) => void;
+  onSelectSource: (sourceId: string) => void;
+  onUpdateSource: (
+    sceneId: string,
+    sourceId: string,
+    patch: SceneSourcePatch,
+  ) => void;
+}) {
+  const validation = validateSceneCollection(props.collection);
+  const sourceStack = sortedSceneSources(props.scene);
+
+  return (
+    <div className="designer-grid">
+      <div className="designer-left-rail">
+        <section className="panel">
+          <PanelTitle title="Scenes" />
+          <div className="designer-list">
+            {props.collection.scenes.map((scene) => (
+              <button
+                className={
+                  scene.id === props.scene.id
+                    ? "designer-list-item selected"
+                    : "designer-list-item"
+                }
+                key={scene.id}
+                onClick={() => props.onSelectScene(scene.id)}
+                type="button"
+              >
+                <div>
+                  <strong>{scene.name}</strong>
+                  <span>
+                    {scene.canvas.width}x{scene.canvas.height} - {scene.sources.length} sources
+                  </span>
+                </div>
+                <Pill tone={scene.id === props.collection.active_scene_id ? "green" : "muted"}>
+                  {scene.id === props.collection.active_scene_id ? "Active" : "Ready"}
+                </Pill>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <PanelTitle title="Source Stack" />
+          <div className="designer-list source-stack">
+            {sourceStack.map((source, index) => (
+              <div
+                className={
+                  source.id === props.selectedSourceId
+                    ? "designer-list-item source-stack-item selected"
+                    : "designer-list-item source-stack-item"
+                }
+                key={source.id}
+              >
+                <button
+                  className="source-stack-select-button"
+                  onClick={() => props.onSelectSource(source.id)}
+                  type="button"
+                >
+                  <div className="source-stack-main">
+                    <SourceKindIcon kind={source.kind} />
+                    <div>
+                      <strong>{source.name}</strong>
+                      <span>
+                        {sceneSourceKindLabels[source.kind]} - z {source.z_index}
+                      </span>
+                    </div>
+                  </div>
+                </button>
+                <div className="source-stack-actions">
+                  <button
+                    aria-label={`${source.visible ? "Hide" : "Show"} ${source.name}`}
+                    className="icon-button compact"
+                    onClick={() => {
+                      props.onUpdateSource(props.scene.id, source.id, {
+                        visible: !source.visible,
+                      });
+                    }}
+                    title={`${source.visible ? "Hide" : "Show"} ${source.name}`}
+                    type="button"
+                  >
+                    {source.visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                  </button>
+                  <button
+                    aria-label={`${source.locked ? "Unlock" : "Lock"} ${source.name}`}
+                    className="icon-button compact"
+                    onClick={() => {
+                      props.onUpdateSource(props.scene.id, source.id, {
+                        locked: !source.locked,
+                      });
+                    }}
+                    title={`${source.locked ? "Unlock" : "Lock"} ${source.name}`}
+                    type="button"
+                  >
+                    {source.locked ? <Lock size={14} /> : <Unlock size={14} />}
+                  </button>
+                  <button
+                    aria-label={`Move ${source.name} forward`}
+                    className="icon-button compact"
+                    disabled={index === 0}
+                    onClick={() => {
+                      props.onReorderSource(props.scene.id, source.id, "up");
+                    }}
+                    title={`Move ${source.name} forward`}
+                    type="button"
+                  >
+                    <ArrowUp size={14} />
+                  </button>
+                  <button
+                    aria-label={`Move ${source.name} backward`}
+                    className="icon-button compact"
+                    disabled={index === sourceStack.length - 1}
+                    onClick={() => {
+                      props.onReorderSource(props.scene.id, source.id, "down");
+                    }}
+                    title={`Move ${source.name} backward`}
+                    type="button"
+                  >
+                    <ArrowDown size={14} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <section className="panel designer-preview-panel">
+        <PanelTitle
+          action={
+            <Pill tone={validation.ok ? "green" : "amber"}>
+              {validation.ok ? "Valid" : `${validation.issues.length} issues`}
+            </Pill>
+          }
+          title="Preview"
+        />
+        <div className="designer-preview-shell">
+          <div
+            className="designer-preview-canvas"
+            style={{
+              aspectRatio: `${props.scene.canvas.width} / ${props.scene.canvas.height}`,
+              backgroundColor: props.scene.canvas.background_color,
+            }}
+          >
+            {sortedSceneSources(props.scene, "asc").map((source) => (
+              <button
+                className={[
+                  "designer-source-box",
+                  `source-${source.kind}`,
+                  source.id === props.selectedSourceId ? "selected" : "",
+                  source.visible ? "" : "hidden-source",
+                  source.locked ? "locked-source" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                key={source.id}
+                onClick={() => props.onSelectSource(source.id)}
+                style={sceneSourcePreviewStyle(source, props.scene)}
+                type="button"
+              >
+                <div className="designer-source-label">
+                  <SourceKindIcon kind={source.kind} />
+                  <strong>{source.name}</strong>
+                </div>
+                <span>{sourceConfigSummary(source)}</span>
+                {sceneSourceAvailability(source) && (
+                  <small>{sceneSourceAvailability(source)?.detail}</small>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="designer-preview-meta">
+          <KeyValue
+            label="Canvas"
+            value={`${props.scene.canvas.width}x${props.scene.canvas.height}`}
+          />
+          <KeyValue label="Collection" value={props.collection.name} />
+          <KeyValue label="Updated" value={formatSuiteTimestamp(props.collection.updated_at)} />
+        </div>
+      </section>
+
+      <section className="panel designer-inspector">
+        <PanelTitle title="Inspector" />
+        {props.selectedSource ? (
+          <div className="form">
+            <TextInput
+              label="Name"
+              onChange={(name) =>
+                props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                  name,
+                })
+              }
+              value={props.selectedSource.name}
+            />
+            <div className="form-grid">
+              <SceneNumberInput
+                label="X"
+                onChange={(x) =>
+                  props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                    position: { x },
+                  })
+                }
+                value={props.selectedSource.position.x}
+              />
+              <SceneNumberInput
+                label="Y"
+                onChange={(y) =>
+                  props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                    position: { y },
+                  })
+                }
+                value={props.selectedSource.position.y}
+              />
+            </div>
+            <div className="form-grid">
+              <SceneNumberInput
+                label="Width"
+                min={1}
+                onChange={(width) =>
+                  props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                    size: { width },
+                  })
+                }
+                value={props.selectedSource.size.width}
+              />
+              <SceneNumberInput
+                label="Height"
+                min={1}
+                onChange={(height) =>
+                  props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                    size: { height },
+                  })
+                }
+                value={props.selectedSource.size.height}
+              />
+            </div>
+            <div className="form-grid">
+              <SceneNumberInput
+                label="Crop Top"
+                min={0}
+                onChange={(top) =>
+                  props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                    crop: { top },
+                  })
+                }
+                value={props.selectedSource.crop.top}
+              />
+              <SceneNumberInput
+                label="Crop Right"
+                min={0}
+                onChange={(right) =>
+                  props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                    crop: { right },
+                  })
+                }
+                value={props.selectedSource.crop.right}
+              />
+            </div>
+            <div className="form-grid">
+              <SceneNumberInput
+                label="Crop Bottom"
+                min={0}
+                onChange={(bottom) =>
+                  props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                    crop: { bottom },
+                  })
+                }
+                value={props.selectedSource.crop.bottom}
+              />
+              <SceneNumberInput
+                label="Crop Left"
+                min={0}
+                onChange={(left) =>
+                  props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                    crop: { left },
+                  })
+                }
+                value={props.selectedSource.crop.left}
+              />
+            </div>
+            <div className="form-grid">
+              <SceneNumberInput
+                label="Rotation"
+                onChange={(rotation_degrees) =>
+                  props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                    rotation_degrees,
+                  })
+                }
+                step={1}
+                value={props.selectedSource.rotation_degrees}
+              />
+              <SceneNumberInput
+                label="Opacity"
+                max={1}
+                min={0}
+                onChange={(opacity) =>
+                  props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                    opacity,
+                  })
+                }
+                step={0.05}
+                value={props.selectedSource.opacity}
+              />
+            </div>
+            <SceneNumberInput
+              label="Z Index"
+              onChange={(z_index) =>
+                props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                  z_index,
+                })
+              }
+              step={1}
+              value={props.selectedSource.z_index}
+            />
+            <label className="check-row">
+              <input
+                checked={props.selectedSource.visible}
+                onChange={(event) =>
+                  props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                    visible: event.target.checked,
+                  })
+                }
+                type="checkbox"
+              />
+              Visible
+            </label>
+            <label className="check-row">
+              <input
+                checked={props.selectedSource.locked}
+                onChange={(event) =>
+                  props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
+                    locked: event.target.checked,
+                  })
+                }
+                type="checkbox"
+              />
+              Locked
+            </label>
+            <KeyValue
+              label="Source Kind"
+              value={sceneSourceKindLabels[props.selectedSource.kind]}
+            />
+            <KeyValue
+              label="Config"
+              value={sourceConfigSummary(props.selectedSource)}
+            />
+            {sceneSourceAvailability(props.selectedSource) && (
+              <KeyValue
+                label="Availability"
+                value={`${sceneSourceAvailability(props.selectedSource)?.state}: ${sceneSourceAvailability(props.selectedSource)?.detail}`}
+              />
+            )}
+          </div>
+        ) : (
+          <div className="empty">No source selected</div>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -1852,6 +2363,100 @@ function goLiveChecklist(
         : "Preflight status has not loaded yet.",
     },
   ];
+}
+
+function mergeSceneSourcePatch(
+  source: SceneSource,
+  patch: SceneSourcePatch,
+): SceneSource {
+  return {
+    ...source,
+    ...patch,
+    position: patch.position
+      ? { ...source.position, ...patch.position }
+      : source.position,
+    size: patch.size ? { ...source.size, ...patch.size } : source.size,
+    crop: patch.crop ? { ...source.crop, ...patch.crop } : source.crop,
+  } as SceneSource;
+}
+
+function sortedSceneSources(
+  scene: Scene,
+  direction: "asc" | "desc" = "desc",
+): SceneSource[] {
+  const multiplier = direction === "asc" ? 1 : -1;
+  return [...scene.sources].sort(
+    (left, right) => (left.z_index - right.z_index) * multiplier,
+  );
+}
+
+function sceneSourcePreviewStyle(
+  source: SceneSource,
+  scene: Scene,
+): CSSProperties {
+  const left = (source.position.x / scene.canvas.width) * 100;
+  const top = (source.position.y / scene.canvas.height) * 100;
+  const width = (source.size.width / scene.canvas.width) * 100;
+  const height = (source.size.height / scene.canvas.height) * 100;
+
+  return {
+    left: `${left}%`,
+    top: `${top}%`,
+    width: `${width}%`,
+    height: `${height}%`,
+    opacity: source.visible ? source.opacity : 0.26,
+    transform: `rotate(${source.rotation_degrees}deg)`,
+    zIndex: source.z_index,
+  };
+}
+
+function sourceConfigSummary(source: SceneSource): string {
+  switch (source.kind) {
+    case "display":
+      return source.config.resolution
+        ? `${source.config.resolution.width}x${source.config.resolution.height}`
+        : "Display pending";
+    case "window":
+      return source.config.title ?? source.config.application_name ?? "Window pending";
+    case "camera":
+      return source.config.resolution
+        ? `${source.config.resolution.width}x${source.config.resolution.height} @ ${source.config.framerate ?? "auto"} fps`
+        : "Camera pending";
+    case "audio_meter":
+      return `${source.config.channel} ${source.config.meter_style}`;
+    case "image_media":
+      return source.config.asset_uri ?? `No ${source.config.media_type} selected`;
+    case "browser_overlay":
+      return source.config.url ?? `${source.config.viewport.width}x${source.config.viewport.height} overlay`;
+    case "text":
+      return source.config.text;
+    case "group":
+      return `${source.config.child_source_ids.length} children`;
+  }
+}
+
+function sceneSourceAvailability(source: SceneSource) {
+  return "availability" in source.config ? source.config.availability : null;
+}
+
+function SourceKindIcon(props: { kind: SceneSourceKind }) {
+  switch (props.kind) {
+    case "display":
+    case "window":
+      return <Monitor size={15} />;
+    case "camera":
+      return <Video size={15} />;
+    case "audio_meter":
+      return <Mic size={15} />;
+    case "image_media":
+      return <ImageIcon size={15} />;
+    case "browser_overlay":
+      return <Globe size={15} />;
+    case "text":
+      return <Type size={15} />;
+    case "group":
+      return <Group size={15} />;
+  }
 }
 
 function recordStudioMediaEvent(event: StudioEvent) {
@@ -2920,6 +3525,29 @@ function NumberInput(props: {
   );
 }
 
+function SceneNumberInput(props: {
+  label: string;
+  max?: number;
+  min?: number;
+  onChange: (value: number) => void;
+  step?: number;
+  value: number;
+}) {
+  return (
+    <label>
+      {props.label}
+      <input
+        max={props.max}
+        min={props.min}
+        step={props.step ?? 1}
+        type="number"
+        value={props.value}
+        onChange={(event) => props.onChange(Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
 function isSection(value: unknown): value is Section {
   return typeof value === "string" && sectionIds.includes(value as Section);
 }
@@ -2933,6 +3561,8 @@ function sectionTitle(section: Section): string {
   switch (section) {
     case "dashboard":
       return "Control Room";
+    case "designer":
+      return "Designer";
     case "destinations":
       return "Broadcast Destinations";
     case "profiles":
@@ -2950,6 +3580,8 @@ function sectionHeading(section: Section): string {
   switch (section) {
     case "dashboard":
       return "Studio Control Room";
+    case "designer":
+      return "Scene Designer";
     case "destinations":
       return "Broadcast Destinations";
     case "profiles":

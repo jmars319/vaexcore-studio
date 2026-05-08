@@ -9,6 +9,184 @@ export interface Resolution {
   height: number;
 }
 
+export interface ScenePoint {
+  x: number;
+  y: number;
+}
+
+export interface SceneSize {
+  width: number;
+  height: number;
+}
+
+export interface SceneCrop {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export type SceneSourceKind =
+  | "display"
+  | "window"
+  | "camera"
+  | "audio_meter"
+  | "image_media"
+  | "browser_overlay"
+  | "text"
+  | "group";
+
+export type SceneSourceAvailabilityState =
+  | "available"
+  | "permission_required"
+  | "unavailable"
+  | "unknown";
+
+export interface SceneSourceAvailability {
+  state: SceneSourceAvailabilityState;
+  detail: string;
+}
+
+export interface DisplaySceneSourceConfig {
+  display_id: string | null;
+  resolution: Resolution | null;
+  capture_cursor: boolean;
+  availability: SceneSourceAvailability;
+}
+
+export interface WindowSceneSourceConfig {
+  window_id: string | null;
+  application_name: string | null;
+  title: string | null;
+  resolution: Resolution | null;
+  availability: SceneSourceAvailability;
+}
+
+export interface CameraSceneSourceConfig {
+  device_id: string | null;
+  resolution: Resolution | null;
+  framerate: number | null;
+  availability: SceneSourceAvailability;
+}
+
+export interface AudioMeterSceneSourceConfig {
+  device_id: string | null;
+  channel: "microphone" | "system" | "mixed";
+  meter_style: "bar" | "waveform";
+  availability: SceneSourceAvailability;
+}
+
+export interface ImageMediaSceneSourceConfig {
+  asset_uri: string | null;
+  media_type: "image" | "video";
+  loop: boolean;
+  availability: SceneSourceAvailability;
+}
+
+export interface BrowserOverlaySceneSourceConfig {
+  url: string | null;
+  viewport: Resolution;
+  custom_css: string | null;
+  availability: SceneSourceAvailability;
+}
+
+export interface TextSceneSourceConfig {
+  text: string;
+  font_family: string;
+  font_size: number;
+  color: string;
+  align: "left" | "center" | "right";
+}
+
+export interface GroupSceneSourceConfig {
+  child_source_ids: string[];
+}
+
+export type SceneSourceConfig =
+  | DisplaySceneSourceConfig
+  | WindowSceneSourceConfig
+  | CameraSceneSourceConfig
+  | AudioMeterSceneSourceConfig
+  | ImageMediaSceneSourceConfig
+  | BrowserOverlaySceneSourceConfig
+  | TextSceneSourceConfig
+  | GroupSceneSourceConfig;
+
+export interface SceneSourceBase<
+  Kind extends SceneSourceKind,
+  Config extends SceneSourceConfig,
+> {
+  id: string;
+  name: string;
+  kind: Kind;
+  position: ScenePoint;
+  size: SceneSize;
+  crop: SceneCrop;
+  rotation_degrees: number;
+  opacity: number;
+  visible: boolean;
+  locked: boolean;
+  z_index: number;
+  config: Config;
+}
+
+export type SceneSource =
+  | SceneSourceBase<"display", DisplaySceneSourceConfig>
+  | SceneSourceBase<"window", WindowSceneSourceConfig>
+  | SceneSourceBase<"camera", CameraSceneSourceConfig>
+  | SceneSourceBase<"audio_meter", AudioMeterSceneSourceConfig>
+  | SceneSourceBase<"image_media", ImageMediaSceneSourceConfig>
+  | SceneSourceBase<"browser_overlay", BrowserOverlaySceneSourceConfig>
+  | SceneSourceBase<"text", TextSceneSourceConfig>
+  | SceneSourceBase<"group", GroupSceneSourceConfig>;
+
+export interface SceneCanvas {
+  width: number;
+  height: number;
+  background_color: string;
+}
+
+export interface Scene {
+  id: string;
+  name: string;
+  canvas: SceneCanvas;
+  sources: SceneSource[];
+}
+
+export interface SceneCollection {
+  id: string;
+  name: string;
+  version: number;
+  active_scene_id: string;
+  scenes: Scene[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SceneValidationIssue {
+  path: string;
+  message: string;
+}
+
+export interface SceneValidationResult {
+  ok: boolean;
+  issues: SceneValidationIssue[];
+}
+
+export interface SceneSourceDefaults {
+  id?: string;
+  name?: string;
+  position?: Partial<ScenePoint>;
+  size?: Partial<SceneSize>;
+  crop?: Partial<SceneCrop>;
+  rotation_degrees?: number;
+  opacity?: number;
+  visible?: boolean;
+  locked?: boolean;
+  z_index?: number;
+  config?: Partial<SceneSourceConfig>;
+}
+
 export interface SecretRef {
   provider: string;
   id: string;
@@ -375,3 +553,367 @@ export const platformLabels: Record<PlatformKind, string> = {
   kick: "Kick",
   custom_rtmp: "Custom RTMP",
 };
+
+export const sceneSourceKindLabels: Record<SceneSourceKind, string> = {
+  display: "Display",
+  window: "Window",
+  camera: "Camera",
+  audio_meter: "Microphone / Audio Meter",
+  image_media: "Image / Media",
+  browser_overlay: "Browser Overlay",
+  text: "Text",
+  group: "Group",
+};
+
+export const defaultSceneCanvas: SceneCanvas = {
+  width: 1920,
+  height: 1080,
+  background_color: "#050711",
+};
+
+const emptyCrop: SceneCrop = {
+  top: 0,
+  right: 0,
+  bottom: 0,
+  left: 0,
+};
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function defaultAvailability(
+  state: SceneSourceAvailabilityState,
+  detail: string,
+): SceneSourceAvailability {
+  return { state, detail };
+}
+
+export function defaultSceneSourceConfig(
+  kind: SceneSourceKind,
+): SceneSourceConfig {
+  switch (kind) {
+    case "display":
+      return {
+        display_id: null,
+        resolution: { width: 1920, height: 1080 },
+        capture_cursor: true,
+        availability: defaultAvailability(
+          "permission_required",
+          "Screen Recording permission has not been verified.",
+        ),
+      };
+    case "window":
+      return {
+        window_id: null,
+        application_name: null,
+        title: null,
+        resolution: null,
+        availability: defaultAvailability(
+          "unknown",
+          "Window inventory has not been loaded.",
+        ),
+      };
+    case "camera":
+      return {
+        device_id: null,
+        resolution: { width: 1280, height: 720 },
+        framerate: 30,
+        availability: defaultAvailability(
+          "permission_required",
+          "Camera permission has not been verified.",
+        ),
+      };
+    case "audio_meter":
+      return {
+        device_id: null,
+        channel: "microphone",
+        meter_style: "bar",
+        availability: defaultAvailability(
+          "permission_required",
+          "Microphone permission has not been verified.",
+        ),
+      };
+    case "image_media":
+      return {
+        asset_uri: null,
+        media_type: "image",
+        loop: true,
+        availability: defaultAvailability(
+          "unavailable",
+          "No local media asset has been selected.",
+        ),
+      };
+    case "browser_overlay":
+      return {
+        url: null,
+        viewport: { width: 1280, height: 720 },
+        custom_css: null,
+        availability: defaultAvailability(
+          "unavailable",
+          "No browser overlay URL has been configured.",
+        ),
+      };
+    case "text":
+      return {
+        text: "Starting Soon",
+        font_family: "Inter",
+        font_size: 72,
+        color: "#f4f8ff",
+        align: "center",
+      };
+    case "group":
+      return {
+        child_source_ids: [],
+      };
+  }
+}
+
+export function createDefaultSceneSource(
+  kind: SceneSourceKind,
+  defaults: SceneSourceDefaults = {},
+): SceneSource {
+  const config = {
+    ...(defaultSceneSourceConfig(kind) as object),
+    ...((defaults.config ?? {}) as object),
+  } as SceneSourceConfig;
+
+  return {
+    id: defaults.id ?? `source-${kind}-${Date.now()}`,
+    name: defaults.name ?? sceneSourceKindLabels[kind],
+    kind,
+    position: { x: 0, y: 0, ...defaults.position },
+    size: { width: 640, height: 360, ...defaults.size },
+    crop: { ...emptyCrop, ...defaults.crop },
+    rotation_degrees: defaults.rotation_degrees ?? 0,
+    opacity: defaults.opacity ?? 1,
+    visible: defaults.visible ?? true,
+    locked: defaults.locked ?? false,
+    z_index: defaults.z_index ?? 0,
+    config,
+  } as SceneSource;
+}
+
+export function createDefaultSceneCollection(now = new Date().toISOString()): SceneCollection {
+  const scene: Scene = {
+    id: "scene-main",
+    name: "Main Scene",
+    canvas: { ...defaultSceneCanvas },
+    sources: [
+      createDefaultSceneSource("display", {
+        id: "source-main-display",
+        name: "Main Display Placeholder",
+        position: { x: 0, y: 0 },
+        size: { width: 1920, height: 1080 },
+        z_index: 0,
+        config: {
+          display_id: "display:main",
+          resolution: { width: 1920, height: 1080 },
+        },
+      }),
+      createDefaultSceneSource("camera", {
+        id: "source-camera-placeholder",
+        name: "Camera Placeholder",
+        position: { x: 1460, y: 700 },
+        size: { width: 380, height: 214 },
+        z_index: 10,
+      }),
+      createDefaultSceneSource("audio_meter", {
+        id: "source-mic-meter",
+        name: "Microphone Meter",
+        position: { x: 80, y: 900 },
+        size: { width: 420, height: 72 },
+        z_index: 20,
+      }),
+      createDefaultSceneSource("browser_overlay", {
+        id: "source-alert-overlay",
+        name: "Alerts Browser Overlay",
+        position: { x: 1240, y: 72 },
+        size: { width: 560, height: 170 },
+        z_index: 30,
+      }),
+      createDefaultSceneSource("text", {
+        id: "source-title-text",
+        name: "Scene Title",
+        position: { x: 640, y: 84 },
+        size: { width: 640, height: 110 },
+        z_index: 40,
+        config: {
+          text: "vaexcore studio",
+          font_size: 64,
+        },
+      }),
+    ],
+  };
+
+  return {
+    id: "collection-default",
+    name: "Default Studio Scenes",
+    version: 1,
+    active_scene_id: scene.id,
+    scenes: [scene],
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+export function normalizeSceneCollection(
+  collection: Partial<SceneCollection> | null | undefined,
+): SceneCollection {
+  if (!collection) {
+    return createDefaultSceneCollection();
+  }
+
+  const fallback = createDefaultSceneCollection(collection.updated_at);
+  const scenes = (collection.scenes?.length ? collection.scenes : fallback.scenes).map(
+    (scene, sceneIndex) => ({
+      id: scene.id || `scene-${sceneIndex + 1}`,
+      name: scene.name || `Scene ${sceneIndex + 1}`,
+      canvas: {
+        ...defaultSceneCanvas,
+        ...scene.canvas,
+      },
+      sources: (scene.sources ?? []).map((source, sourceIndex) =>
+        createDefaultSceneSource(source.kind, {
+          ...source,
+          id: source.id || `source-${sceneIndex + 1}-${sourceIndex + 1}`,
+          name: source.name || sceneSourceKindLabels[source.kind],
+          config: source.config,
+        }),
+      ),
+    }),
+  );
+
+  const activeSceneId =
+    collection.active_scene_id && scenes.some((scene) => scene.id === collection.active_scene_id)
+      ? collection.active_scene_id
+      : scenes[0].id;
+
+  return {
+    id: collection.id || fallback.id,
+    name: collection.name || fallback.name,
+    version: collection.version || fallback.version,
+    active_scene_id: activeSceneId,
+    scenes,
+    created_at: collection.created_at || fallback.created_at,
+    updated_at: collection.updated_at || fallback.updated_at,
+  };
+}
+
+export function validateSceneCollection(
+  collection: SceneCollection,
+): SceneValidationResult {
+  const issues: SceneValidationIssue[] = [];
+  const sceneIds = new Set<string>();
+
+  if (!collection.id.trim()) {
+    issues.push({ path: "id", message: "Scene collection id is required." });
+  }
+  if (!collection.name.trim()) {
+    issues.push({ path: "name", message: "Scene collection name is required." });
+  }
+  if (!Number.isInteger(collection.version) || collection.version < 1) {
+    issues.push({ path: "version", message: "Scene collection version must be a positive integer." });
+  }
+  if (collection.scenes.length === 0) {
+    issues.push({ path: "scenes", message: "At least one scene is required." });
+  }
+
+  collection.scenes.forEach((scene, sceneIndex) => {
+    const scenePath = `scenes[${sceneIndex}]`;
+    if (sceneIds.has(scene.id)) {
+      issues.push({ path: `${scenePath}.id`, message: `Duplicate scene id "${scene.id}".` });
+    }
+    sceneIds.add(scene.id);
+    if (!scene.name.trim()) {
+      issues.push({ path: `${scenePath}.name`, message: "Scene name is required." });
+    }
+    validatePositiveNumber(scene.canvas.width, `${scenePath}.canvas.width`, issues);
+    validatePositiveNumber(scene.canvas.height, `${scenePath}.canvas.height`, issues);
+    validateSceneSources(scene.sources, scenePath, issues);
+  });
+
+  if (collection.scenes.length > 0 && !sceneIds.has(collection.active_scene_id)) {
+    issues.push({
+      path: "active_scene_id",
+      message: "Active scene id must match a scene in the collection.",
+    });
+  }
+
+  return {
+    ok: issues.length === 0,
+    issues,
+  };
+}
+
+function validateSceneSources(
+  sources: SceneSource[],
+  scenePath: string,
+  issues: SceneValidationIssue[],
+) {
+  const sourceIds = new Set<string>();
+
+  sources.forEach((source, sourceIndex) => {
+    const sourcePath = `${scenePath}.sources[${sourceIndex}]`;
+    if (sourceIds.has(source.id)) {
+      issues.push({
+        path: `${sourcePath}.id`,
+        message: `Duplicate source id "${source.id}".`,
+      });
+    }
+    sourceIds.add(source.id);
+    if (!source.name.trim()) {
+      issues.push({ path: `${sourcePath}.name`, message: "Source name is required." });
+    }
+    validateFiniteNumber(source.position.x, `${sourcePath}.position.x`, issues);
+    validateFiniteNumber(source.position.y, `${sourcePath}.position.y`, issues);
+    validatePositiveNumber(source.size.width, `${sourcePath}.size.width`, issues);
+    validatePositiveNumber(source.size.height, `${sourcePath}.size.height`, issues);
+    validateNonNegativeNumber(source.crop.top, `${sourcePath}.crop.top`, issues);
+    validateNonNegativeNumber(source.crop.right, `${sourcePath}.crop.right`, issues);
+    validateNonNegativeNumber(source.crop.bottom, `${sourcePath}.crop.bottom`, issues);
+    validateNonNegativeNumber(source.crop.left, `${sourcePath}.crop.left`, issues);
+    validateFiniteNumber(source.rotation_degrees, `${sourcePath}.rotation_degrees`, issues);
+    validateFiniteNumber(source.z_index, `${sourcePath}.z_index`, issues);
+    if (!Number.isFinite(source.opacity) || source.opacity < 0 || source.opacity > 1) {
+      issues.push({
+        path: `${sourcePath}.opacity`,
+        message: "Source opacity must be between 0 and 1.",
+      });
+    }
+  });
+}
+
+function validateFiniteNumber(
+  value: number,
+  path: string,
+  issues: SceneValidationIssue[],
+) {
+  if (!Number.isFinite(value)) {
+    issues.push({ path, message: "Value must be a finite number." });
+  }
+}
+
+function validatePositiveNumber(
+  value: number,
+  path: string,
+  issues: SceneValidationIssue[],
+) {
+  if (!Number.isFinite(value) || value <= 0) {
+    issues.push({ path, message: "Value must be greater than 0." });
+  }
+}
+
+function validateNonNegativeNumber(
+  value: number,
+  path: string,
+  issues: SceneValidationIssue[],
+) {
+  if (!Number.isFinite(value) || value < 0) {
+    issues.push({ path, message: "Value must be 0 or greater." });
+  }
+}
+
+export function cloneSceneCollection(collection: SceneCollection): SceneCollection {
+  return cloneJson(collection);
+}
