@@ -97,6 +97,7 @@ import type {
 import {
   bindSceneCollectionCaptureInventory,
   buildCompositorGraph,
+  buildSceneTransitionPreviewPlan,
   createDefaultSceneCollection,
   createDefaultSceneSource,
   platformLabels,
@@ -1753,6 +1754,12 @@ function DesignerPage(props: {
     props.collection.transitions.find(
       (transition) => transition.id === props.collection.active_transition_id,
     ) ?? props.collection.transitions[0];
+  const transitionPreviewPlan = buildSceneTransitionPreviewPlan(
+    props.collection,
+    props.scene.id,
+    props.scene.id,
+    60,
+  );
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const renderCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [dragState, setDragState] = useState<DesignerDragState | null>(null);
@@ -2066,6 +2073,18 @@ function DesignerPage(props: {
                   <option value="ease_in_out">Ease In Out</option>
                 </select>
               </label>
+              <div className="designer-preview-meta transition-preview-meta">
+                <KeyValue
+                  label="Frames"
+                  value={`${transitionPreviewPlan.frame_count} @ ${transitionPreviewPlan.framerate} fps`}
+                />
+                <KeyValue
+                  label="Midpoint"
+                  value={`${Math.round(
+                    (transitionPreviewPlan.sample_frames[1]?.eased_progress ?? 1) * 100,
+                  )}% eased`}
+                />
+              </div>
             </div>
           )}
         </section>

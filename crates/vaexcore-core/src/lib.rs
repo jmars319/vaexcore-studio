@@ -53,10 +53,12 @@ pub use responses::{
     StreamDestinationBundleItem, StudioStatus,
 };
 pub use scenes::{
-    scene_capture_sources, scene_resolution, validate_scene_collection, Scene, SceneCanvas,
+    build_scene_transition_preview_plan, scene_capture_sources, scene_resolution,
+    validate_scene_collection, validate_scene_transition_preview_plan, Scene, SceneCanvas,
     SceneCollection, SceneCollectionBundle, SceneCollectionImportResult, SceneCrop, ScenePoint,
     SceneSize, SceneSource, SceneSourceFilter, SceneSourceFilterKind, SceneSourceKind,
-    SceneTransition, SceneTransitionEasing, SceneTransitionKind, SceneValidationIssue,
+    SceneTransition, SceneTransitionEasing, SceneTransitionKind, SceneTransitionPreviewPlan,
+    SceneTransitionPreviewSample, SceneTransitionPreviewValidation, SceneValidationIssue,
     SceneValidationResult,
 };
 pub use security::{

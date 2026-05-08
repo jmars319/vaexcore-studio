@@ -28,6 +28,8 @@ When a scene is active, the generated pipeline config includes
 `compositor_render_plan`, and `performance_telemetry_plan`.
 Scene sources may include a serializable `filters` chain; the compositor graph
 preserves that chain for future video/audio filter execution.
+Scene transition helpers expose frame-count and easing sample plans for preview
+and future renderer handoff.
 Desktop scene bundle imports create timestamped backups under `scene-backups`
 in the app data directory before replacing the active collection.
 

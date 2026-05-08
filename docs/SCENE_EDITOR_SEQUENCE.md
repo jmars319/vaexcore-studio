@@ -56,8 +56,8 @@ foundation to OBS-class scene editing and output.
     propagation plus first-pass Designer filter chain editing. Real video/audio
     filter rendering and detailed per-filter controls are not started.
 23. Scene transitions and transition preview: started with persisted transition
-    contracts, validation, and Designer controls; live transition preview and
-    renderer application are not started.
+    contracts, validation, Designer controls, and frame/easing preview plans;
+    live pixel transition playback and renderer application are not started.
 24. Scene collection import/export/backup: started with versioned bundle
     contracts, local API export/import routes, SDK helpers, desktop bridge
     commands, store validation, and Designer import/export actions against the

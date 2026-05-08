@@ -153,6 +153,36 @@ pub struct SceneCollectionImportResult {
     pub collection: SceneCollection,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SceneTransitionPreviewSample {
+    pub frame_index: u32,
+    pub elapsed_ms: u32,
+    pub linear_progress: f64,
+    pub eased_progress: f64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SceneTransitionPreviewPlan {
+    pub version: u32,
+    pub transition: SceneTransition,
+    pub from_scene_id: String,
+    pub from_scene_name: String,
+    pub to_scene_id: String,
+    pub to_scene_name: String,
+    pub framerate: u32,
+    pub duration_ms: u32,
+    pub frame_count: u32,
+    pub sample_frames: Vec<SceneTransitionPreviewSample>,
+    pub validation: SceneTransitionPreviewValidation,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct SceneTransitionPreviewValidation {
+    pub ready: bool,
+    pub warnings: Vec<String>,
+    pub errors: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct SceneValidationIssue {
     pub path: String,
@@ -486,6 +516,152 @@ pub fn validate_scene_collection(collection: &SceneCollection) -> SceneValidatio
     }
 }
 
+pub fn build_scene_transition_preview_plan(
+    collection: &SceneCollection,
+    from_scene_id: Option<&str>,
+    to_scene_id: Option<&str>,
+    framerate: u32,
+) -> SceneTransitionPreviewPlan {
+    let fallback_scene = collection
+        .active_scene()
+        .or_else(|| collection.scenes.first());
+    let from_scene = from_scene_id
+        .and_then(|id| collection.scenes.iter().find(|scene| scene.id == id))
+        .or(fallback_scene);
+    let to_scene = to_scene_id
+        .and_then(|id| collection.scenes.iter().find(|scene| scene.id == id))
+        .or(fallback_scene);
+    let transition = collection
+        .active_transition()
+        .cloned()
+        .unwrap_or_else(|| default_scene_transitions().into_iter().next().unwrap());
+    let frame_count = transition_frame_count(transition.duration_ms, framerate);
+    let mut plan = SceneTransitionPreviewPlan {
+        version: 1,
+        from_scene_id: from_scene.map(|scene| scene.id.clone()).unwrap_or_default(),
+        from_scene_name: from_scene
+            .map(|scene| scene.name.clone())
+            .unwrap_or_default(),
+        to_scene_id: to_scene.map(|scene| scene.id.clone()).unwrap_or_default(),
+        to_scene_name: to_scene.map(|scene| scene.name.clone()).unwrap_or_default(),
+        framerate,
+        duration_ms: transition.duration_ms,
+        frame_count,
+        sample_frames: transition_sample_frames(&transition, frame_count, framerate),
+        transition,
+        validation: SceneTransitionPreviewValidation {
+            ready: true,
+            warnings: Vec::new(),
+            errors: Vec::new(),
+        },
+    };
+    plan.validation = validate_scene_transition_preview_plan(&plan);
+    plan
+}
+
+pub fn validate_scene_transition_preview_plan(
+    plan: &SceneTransitionPreviewPlan,
+) -> SceneTransitionPreviewValidation {
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+
+    if plan.version == 0 {
+        errors.push("transition preview plan version must be greater than zero".to_string());
+    }
+    if plan.transition.id.trim().is_empty() {
+        errors.push("transition preview transition id is required".to_string());
+    }
+    if plan.from_scene_id.trim().is_empty() {
+        errors.push("transition preview from scene id is required".to_string());
+    }
+    if plan.to_scene_id.trim().is_empty() {
+        errors.push("transition preview to scene id is required".to_string());
+    }
+    if plan.framerate == 0 {
+        errors.push("transition preview framerate must be greater than zero".to_string());
+    }
+    if plan.frame_count == 0 {
+        errors.push("transition preview frame count must be greater than zero".to_string());
+    }
+    if plan.duration_ms > 60_000 {
+        errors.push("transition preview duration must be 60 seconds or less".to_string());
+    }
+    if plan.transition.kind == SceneTransitionKind::Cut && plan.duration_ms != 0 {
+        errors.push("cut transition preview duration must be zero".to_string());
+    }
+    if plan.from_scene_id == plan.to_scene_id {
+        warnings.push("transition preview uses the same from and to scene".to_string());
+    }
+
+    for sample in &plan.sample_frames {
+        if sample.linear_progress < 0.0 || sample.linear_progress > 1.0 {
+            errors.push("transition preview linear progress must be 0-1".to_string());
+        }
+        if sample.eased_progress < 0.0 || sample.eased_progress > 1.0 {
+            errors.push("transition preview eased progress must be 0-1".to_string());
+        }
+    }
+
+    SceneTransitionPreviewValidation {
+        ready: errors.is_empty(),
+        warnings,
+        errors,
+    }
+}
+
+fn transition_frame_count(duration_ms: u32, framerate: u32) -> u32 {
+    if duration_ms == 0 || framerate == 0 {
+        return 1;
+    }
+    (u64::from(duration_ms) * u64::from(framerate)).div_ceil(1_000) as u32
+}
+
+fn transition_sample_frames(
+    transition: &SceneTransition,
+    frame_count: u32,
+    framerate: u32,
+) -> Vec<SceneTransitionPreviewSample> {
+    let mut indices = vec![0, frame_count / 2, frame_count.saturating_sub(1)];
+    indices.sort_unstable();
+    indices.dedup();
+    indices
+        .into_iter()
+        .map(|frame_index| {
+            let linear_progress = if frame_count <= 1 {
+                1.0
+            } else {
+                f64::from(frame_index) / f64::from(frame_count - 1)
+            };
+            SceneTransitionPreviewSample {
+                frame_index,
+                elapsed_ms: if framerate == 0 {
+                    0
+                } else {
+                    ((u64::from(frame_index) * 1_000) / u64::from(framerate)) as u32
+                },
+                linear_progress,
+                eased_progress: transition_eased_progress(linear_progress, &transition.easing),
+            }
+        })
+        .collect()
+}
+
+fn transition_eased_progress(progress: f64, easing: &SceneTransitionEasing) -> f64 {
+    let progress = progress.clamp(0.0, 1.0);
+    match easing {
+        SceneTransitionEasing::Linear => progress,
+        SceneTransitionEasing::EaseIn => progress * progress,
+        SceneTransitionEasing::EaseOut => 1.0 - (1.0 - progress) * (1.0 - progress),
+        SceneTransitionEasing::EaseInOut => {
+            if progress < 0.5 {
+                2.0 * progress * progress
+            } else {
+                1.0 - (-2.0 * progress + 2.0).powi(2) / 2.0
+            }
+        }
+    }
+}
+
 fn validate_scene_sources(scene: &Scene, scene_path: &str, issues: &mut Vec<SceneValidationIssue>) {
     let mut source_ids = HashSet::new();
     let visible_sources = scene.sources.iter().filter(|source| source.visible).count();
@@ -800,5 +976,25 @@ mod tests {
             .issues
             .iter()
             .any(|issue| issue.message.contains("Cut transitions")));
+    }
+
+    #[test]
+    fn transition_preview_plan_samples_easing_curve() {
+        let collection = SceneCollection::default_collection(crate::now_utc());
+        let plan = build_scene_transition_preview_plan(&collection, None, None, 60);
+
+        assert!(plan.validation.ready, "{:?}", plan.validation.errors);
+        assert_eq!(plan.transition.id, "transition-fade");
+        assert_eq!(plan.duration_ms, 300);
+        assert_eq!(plan.frame_count, 18);
+        assert_eq!(plan.sample_frames.len(), 3);
+        assert_eq!(plan.sample_frames[0].linear_progress, 0.0);
+        assert_eq!(plan.sample_frames[2].linear_progress, 1.0);
+        assert!(plan.sample_frames[1].eased_progress > 0.0);
+        assert!(plan
+            .validation
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("same from and to scene")));
     }
 }

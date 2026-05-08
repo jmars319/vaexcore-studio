@@ -193,6 +193,33 @@ export interface SceneTransition {
   config: Record<string, unknown>;
 }
 
+export interface SceneTransitionPreviewSample {
+  frame_index: number;
+  elapsed_ms: number;
+  linear_progress: number;
+  eased_progress: number;
+}
+
+export interface SceneTransitionPreviewPlan {
+  version: number;
+  transition: SceneTransition;
+  from_scene_id: string;
+  from_scene_name: string;
+  to_scene_id: string;
+  to_scene_name: string;
+  framerate: number;
+  duration_ms: number;
+  frame_count: number;
+  sample_frames: SceneTransitionPreviewSample[];
+  validation: SceneTransitionPreviewValidation;
+}
+
+export interface SceneTransitionPreviewValidation {
+  ready: boolean;
+  warnings: string[];
+  errors: string[];
+}
+
 export interface SceneCollection {
   id: string;
   name: string;
@@ -1195,6 +1222,138 @@ export function normalizeSceneCollectionBundle(
     exported_at: bundle?.exported_at || new Date().toISOString(),
     collection: normalizeSceneCollection(bundle?.collection),
   };
+}
+
+export function buildSceneTransitionPreviewPlan(
+  collection: SceneCollection,
+  fromSceneId: string | null = null,
+  toSceneId: string | null = null,
+  framerate = 60,
+): SceneTransitionPreviewPlan {
+  const fallbackScene =
+    collection.scenes.find((scene) => scene.id === collection.active_scene_id) ??
+    collection.scenes[0];
+  const fromScene =
+    collection.scenes.find((scene) => scene.id === fromSceneId) ?? fallbackScene;
+  const toScene =
+    collection.scenes.find((scene) => scene.id === toSceneId) ?? fallbackScene;
+  const transition =
+    collection.transitions.find(
+      (item) => item.id === collection.active_transition_id,
+    ) ?? collection.transitions[0] ?? defaultSceneTransitions[0];
+  const frameCount = transitionFrameCount(transition.duration_ms, framerate);
+  const plan: SceneTransitionPreviewPlan = {
+    version: 1,
+    transition: cloneJson(transition),
+    from_scene_id: fromScene?.id ?? "",
+    from_scene_name: fromScene?.name ?? "",
+    to_scene_id: toScene?.id ?? "",
+    to_scene_name: toScene?.name ?? "",
+    framerate,
+    duration_ms: transition.duration_ms,
+    frame_count: frameCount,
+    sample_frames: transitionSampleFrames(transition, frameCount, framerate),
+    validation: {
+      ready: true,
+      warnings: [],
+      errors: [],
+    },
+  };
+  plan.validation = validateSceneTransitionPreviewPlan(plan);
+  return plan;
+}
+
+export function validateSceneTransitionPreviewPlan(
+  plan: SceneTransitionPreviewPlan,
+): SceneTransitionPreviewValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+
+  if (!Number.isInteger(plan.version) || plan.version < 1) {
+    errors.push("Transition preview plan version must be a positive integer.");
+  }
+  if (!plan.transition.id.trim()) {
+    errors.push("Transition preview transition id is required.");
+  }
+  if (!plan.from_scene_id.trim()) {
+    errors.push("Transition preview from scene id is required.");
+  }
+  if (!plan.to_scene_id.trim()) {
+    errors.push("Transition preview to scene id is required.");
+  }
+  if (!Number.isInteger(plan.framerate) || plan.framerate < 1) {
+    errors.push("Transition preview framerate must be greater than zero.");
+  }
+  if (!Number.isInteger(plan.frame_count) || plan.frame_count < 1) {
+    errors.push("Transition preview frame count must be greater than zero.");
+  }
+  if (plan.duration_ms > 60_000) {
+    errors.push("Transition preview duration must be 60 seconds or less.");
+  }
+  if (plan.transition.kind === "cut" && plan.duration_ms !== 0) {
+    errors.push("Cut transition preview duration must be zero.");
+  }
+  if (plan.from_scene_id === plan.to_scene_id) {
+    warnings.push("Transition preview uses the same from and to scene.");
+  }
+
+  for (const sample of plan.sample_frames) {
+    if (sample.linear_progress < 0 || sample.linear_progress > 1) {
+      errors.push("Transition preview linear progress must be 0-1.");
+    }
+    if (sample.eased_progress < 0 || sample.eased_progress > 1) {
+      errors.push("Transition preview eased progress must be 0-1.");
+    }
+  }
+
+  return {
+    ready: errors.length === 0,
+    warnings,
+    errors,
+  };
+}
+
+function transitionFrameCount(durationMs: number, framerate: number): number {
+  if (durationMs === 0 || framerate <= 0) return 1;
+  return Math.max(1, Math.ceil((durationMs * framerate) / 1000));
+}
+
+function transitionSampleFrames(
+  transition: SceneTransition,
+  frameCount: number,
+  framerate: number,
+): SceneTransitionPreviewSample[] {
+  const indices = [
+    ...new Set([0, Math.floor(frameCount / 2), Math.max(0, frameCount - 1)]),
+  ].sort((left, right) => left - right);
+  return indices.map((frameIndex) => {
+    const linearProgress = frameCount <= 1 ? 1 : frameIndex / (frameCount - 1);
+    return {
+      frame_index: frameIndex,
+      elapsed_ms: framerate <= 0 ? 0 : Math.floor((frameIndex * 1000) / framerate),
+      linear_progress: linearProgress,
+      eased_progress: transitionEasedProgress(linearProgress, transition.easing),
+    };
+  });
+}
+
+function transitionEasedProgress(
+  progress: number,
+  easing: SceneTransitionEasing,
+): number {
+  const value = Math.min(1, Math.max(0, progress));
+  switch (easing) {
+    case "linear":
+      return value;
+    case "ease_in":
+      return value * value;
+    case "ease_out":
+      return 1 - (1 - value) * (1 - value);
+    case "ease_in_out":
+      return value < 0.5
+        ? 2 * value * value
+        : 1 - Math.pow(-2 * value + 2, 2) / 2;
+  }
 }
 
 export function bindSceneCollectionCaptureInventory(

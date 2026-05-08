@@ -25,14 +25,22 @@ const sharedTypes = loadSharedTypesRuntime();
 
 test("default scene collection is serializable and valid", async () => {
   const {
+    buildSceneTransitionPreviewPlan,
     createDefaultSceneCollection,
     createSceneCollectionBundle,
     normalizeSceneCollectionBundle,
+    validateSceneTransitionPreviewPlan,
     validateSceneCollection,
   } = await sharedTypes;
   const collection = createDefaultSceneCollection("2026-05-08T12:00:00.000Z");
   const scene = collection.scenes[0];
   const bundle = createSceneCollectionBundle(collection, "2026-05-08T13:00:00.000Z");
+  const transitionPreview = buildSceneTransitionPreviewPlan(
+    collection,
+    scene.id,
+    scene.id,
+    60,
+  );
   const normalizedBundle = normalizeSceneCollectionBundle({
     collection: {
       name: "Imported Scenes",
@@ -61,6 +69,10 @@ test("default scene collection is serializable and valid", async () => {
   assert.equal(normalizedBundle.version, 1);
   assert.equal(normalizedBundle.collection.name, "Imported Scenes");
   assert.equal(validateSceneCollection(normalizedBundle.collection).ok, true);
+  assert.equal(transitionPreview.transition.id, "transition-fade");
+  assert.equal(transitionPreview.frame_count, 18);
+  assert.equal(transitionPreview.sample_frames.length, 3);
+  assert.equal(validateSceneTransitionPreviewPlan(transitionPreview).ready, true);
 });
 
 test("scene source defaults cover supported source kinds", async () => {
