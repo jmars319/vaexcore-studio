@@ -3320,6 +3320,8 @@ function drawCompositorNode(
     }
   }
 
+  drawCompositorNodeContent(context, node, width, height);
+
   const labelInset = Math.max(14, Math.min(28, width * 0.04));
   const labelSize = Math.max(22, Math.min(46, height * 0.12));
   context.globalAlpha = 1;
@@ -3341,6 +3343,126 @@ function drawCompositorNode(
     Math.max(48, width - labelInset * 2),
   );
   context.restore();
+}
+
+function drawCompositorNodeContent(
+  context: CanvasRenderingContext2D,
+  node: CompositorNode,
+  width: number,
+  height: number,
+) {
+  switch (node.source_kind) {
+    case "text":
+      drawTextSourceContent(context, node, width, height);
+      break;
+    case "audio_meter":
+      drawAudioMeterContent(context, width, height);
+      break;
+    case "browser_overlay":
+      drawBrowserOverlayContent(context, node, width, height);
+      break;
+    case "image_media":
+      drawMediaSourceContent(context, node, width, height);
+      break;
+    case "group":
+      drawGroupSourceContent(context, width, height);
+      break;
+    default:
+      break;
+  }
+}
+
+function drawTextSourceContent(
+  context: CanvasRenderingContext2D,
+  node: CompositorNode,
+  width: number,
+  height: number,
+) {
+  const config = node.config as { text?: string; font_size?: number; color?: string; align?: string };
+  const text = config.text?.trim() || node.name;
+  const fontSize = clamp(Number(config.font_size ?? height * 0.48), 18, Math.max(18, height * 0.72));
+  context.fillStyle = config.color || "#f4f8ff";
+  context.font = `700 ${fontSize}px Inter, system-ui, sans-serif`;
+  context.textAlign =
+    config.align === "left" ? "left" : config.align === "right" ? "right" : "center";
+  context.textBaseline = "middle";
+  const x = config.align === "left" ? -width / 2 + 24 : config.align === "right" ? width / 2 - 24 : 0;
+  context.fillText(text, x, 0, Math.max(32, width - 48));
+  context.textAlign = "left";
+}
+
+function drawAudioMeterContent(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+) {
+  const inset = Math.max(10, Math.min(24, height * 0.2));
+  const barCount = 18;
+  const gap = 5;
+  const barWidth = Math.max(4, (width - inset * 2 - gap * (barCount - 1)) / barCount);
+  for (let index = 0; index < barCount; index += 1) {
+    const level = 0.18 + ((index * 37) % 83) / 100;
+    const barHeight = Math.max(4, (height - inset * 2) * Math.min(1, level));
+    context.fillStyle = index > barCount * 0.78 ? "#ff6b7f" : index > barCount * 0.58 ? "#ffd27a" : "#75f0cf";
+    context.fillRect(
+      -width / 2 + inset + index * (barWidth + gap),
+      height / 2 - inset - barHeight,
+      barWidth,
+      barHeight,
+    );
+  }
+}
+
+function drawBrowserOverlayContent(
+  context: CanvasRenderingContext2D,
+  node: CompositorNode,
+  width: number,
+  height: number,
+) {
+  const config = node.config as { url?: string | null; viewport?: { width: number; height: number } };
+  const title = config.url || `${config.viewport?.width ?? 1280}x${config.viewport?.height ?? 720} web overlay`;
+  context.fillStyle = "rgba(255, 255, 255, 0.1)";
+  context.fillRect(-width / 2 + 18, -height / 2 + 18, width - 36, 34);
+  context.fillStyle = "rgba(244, 248, 255, 0.78)";
+  context.font = `600 ${Math.max(14, Math.min(24, height * 0.16))}px Inter, system-ui, sans-serif`;
+  context.textBaseline = "middle";
+  context.fillText(title, -width / 2 + 34, -height / 2 + 35, Math.max(32, width - 68));
+}
+
+function drawMediaSourceContent(
+  context: CanvasRenderingContext2D,
+  node: CompositorNode,
+  width: number,
+  height: number,
+) {
+  const config = node.config as { asset_uri?: string | null; media_type?: string };
+  const label = config.asset_uri || `No ${config.media_type ?? "media"} selected`;
+  const tile = 28;
+  for (let y = -height / 2; y < height / 2; y += tile) {
+    for (let x = -width / 2; x < width / 2; x += tile) {
+      context.fillStyle =
+        Math.floor((x + width / 2) / tile + (y + height / 2) / tile) % 2 === 0
+          ? "rgba(255, 255, 255, 0.08)"
+          : "rgba(0, 0, 0, 0.08)";
+      context.fillRect(x, y, tile, tile);
+    }
+  }
+  context.fillStyle = "rgba(244, 248, 255, 0.78)";
+  context.font = `700 ${Math.max(16, Math.min(34, height * 0.14))}px Inter, system-ui, sans-serif`;
+  context.textBaseline = "middle";
+  context.fillText(label, -width / 2 + 24, 0, Math.max(32, width - 48));
+}
+
+function drawGroupSourceContent(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+) {
+  context.strokeStyle = "rgba(244, 248, 255, 0.35)";
+  context.lineWidth = 2;
+  context.setLineDash([14, 12]);
+  context.strokeRect(-width / 2 + 14, -height / 2 + 14, width - 28, height - 28);
+  context.setLineDash([]);
 }
 
 function compositorNodeFill(node: CompositorNode): string {

@@ -28,10 +28,14 @@ foundation to OBS-class scene editing and output.
 14. Microphone and system audio capture: started with inventory-backed source
     availability in Designer; real audio capture is not started.
 15. Audio mixer model, meters, and routing: not started.
-16. Image and media source engine: not started.
-17. Browser/web overlay source engine: not started.
-18. Text render engine with font controls: not started.
-19. Groups, nesting, and parent transforms: not started.
+16. Image and media source engine: started with source-specific preview
+    rendering; real media decode/playback is not started.
+17. Browser/web overlay source engine: started with source-specific preview
+    rendering; real browser capture is not started.
+18. Text render engine with font controls: started with canvas preview text
+    rendering; backend text rasterization is not started.
+19. Groups, nesting, and parent transforms: started with group preview rendering;
+    nested transform evaluation is not started.
 20. Full editor interactions: multi-select, snapping, rotate, align, copy/paste,
     undo/redo: not started.
 21. Crop, bounds modes, fit/fill/stretch/center controls: not started.
