@@ -30,6 +30,8 @@ import {
   Trash2,
   Type,
   Unlock,
+  Redo2,
+  Undo2,
   Video,
   WifiOff,
   X,
@@ -167,6 +169,13 @@ type DesignerDragState = {
   startSize: SceneSize;
 };
 
+type SceneHistory = {
+  past: SceneCollection[];
+  future: SceneCollection[];
+};
+
+const designerHistoryLimit = 50;
+
 const sectionIds: readonly Section[] = [
   "dashboard",
   "designer",
@@ -296,6 +305,10 @@ function App() {
   );
   const [sceneSaveStatus, setSceneSaveStatus] = useState<string | null>(null);
   const [sceneDirty, setSceneDirty] = useState(false);
+  const [sceneHistory, setSceneHistory] = useState<SceneHistory>({
+    past: [],
+    future: [],
+  });
 
   useEffect(() => {
     loadRuntimeConfig().then(setConfig).catch((error: Error) => {
@@ -446,6 +459,7 @@ function App() {
         setSelectedSceneSourceId(scene?.sources[0]?.id ?? "");
         setSceneDirty(false);
         setSceneSaveStatus(null);
+        setSceneHistory({ past: [], future: [] });
       })
       .catch((error: Error) => {
         if (!cancelled) {
@@ -948,10 +962,53 @@ function App() {
   function updateDesignerCollection(
     updater: (current: SceneCollection) => SceneCollection,
   ) {
-    setSceneCollection((current) => ({
-      ...updater(current),
-      updated_at: new Date().toISOString(),
-    }));
+    setSceneCollection((current) => {
+      const next = {
+        ...updater(current),
+        updated_at: new Date().toISOString(),
+      };
+      setSceneHistory((history) => ({
+        past: [...history.past, current].slice(-designerHistoryLimit),
+        future: [],
+      }));
+      return next;
+    });
+    setSceneDirty(true);
+    setSceneSaveStatus("Unsaved scene changes");
+  }
+
+  function handleUndoDesignerChange() {
+    if (sceneHistory.past.length === 0) return;
+    const previous = sceneHistory.past[sceneHistory.past.length - 1];
+    setSceneCollection((current) => {
+      setSceneHistory({
+        past: sceneHistory.past.slice(0, -1),
+        future: [current, ...sceneHistory.future].slice(0, designerHistoryLimit),
+      });
+      return previous;
+    });
+    setSelectedSceneSourceId((current) =>
+      sceneCollectionContainsSource(previous, current)
+        ? current
+        : firstSceneSourceId(previous),
+    );
+    setSceneDirty(true);
+    setSceneSaveStatus("Unsaved scene changes");
+  }
+
+  function handleRedoDesignerChange() {
+    if (sceneHistory.future.length === 0) return;
+    const next = sceneHistory.future[0];
+    setSceneCollection((current) => {
+      setSceneHistory({
+        past: [...sceneHistory.past, current].slice(-designerHistoryLimit),
+        future: sceneHistory.future.slice(1),
+      });
+      return next;
+    });
+    setSelectedSceneSourceId((current) =>
+      sceneCollectionContainsSource(next, current) ? current : firstSceneSourceId(next),
+    );
     setSceneDirty(true);
     setSceneSaveStatus("Unsaved scene changes");
   }
@@ -1195,15 +1252,19 @@ function App() {
             onDuplicateScene={handleDuplicateDesignerScene}
             onDuplicateSource={handleDuplicateDesignerSource}
             onRenameScene={handleRenameDesignerScene}
+            canRedo={sceneHistory.future.length > 0}
+            canUndo={sceneHistory.past.length > 0}
             scene={activeDesignerScene}
             graph={activeCompositorGraph}
             saveStatus={sceneSaveStatus}
             selectedSource={selectedDesignerSource}
             selectedSourceId={selectedSceneSourceId}
             onReorderSource={handleReorderDesignerSource}
+            onRedo={handleRedoDesignerChange}
             onSave={handleSaveDesignerScenes}
             onSelectScene={handleSelectDesignerScene}
             onSelectSource={setSelectedSceneSourceId}
+            onUndo={handleUndoDesignerChange}
             onUpdateSource={handleUpdateDesignerSource}
           />
         );
@@ -1354,6 +1415,7 @@ function App() {
     designerSceneCollection,
     sceneCollection,
     sceneDirty,
+    sceneHistory,
     sceneSaveStatus,
     selectedDesignerSource,
     selectedSceneSourceId,
@@ -1490,6 +1552,8 @@ function App() {
 }
 
 function DesignerPage(props: {
+  canRedo: boolean;
+  canUndo: boolean;
   captureInventory: CaptureSourceInventory | null;
   collection: SceneCollection;
   dirty: boolean;
@@ -1510,9 +1574,11 @@ function DesignerPage(props: {
     sourceId: string,
     direction: "up" | "down",
   ) => void;
+  onRedo: () => void;
   onSelectScene: (sceneId: string) => void;
   onSelectSource: (sourceId: string) => void;
   onSave: () => void;
+  onUndo: () => void;
   onUpdateSource: (
     sceneId: string,
     sourceId: string,
@@ -1804,6 +1870,26 @@ function DesignerPage(props: {
                   {props.saveStatus}
                 </Pill>
               )}
+              <button
+                aria-label="Undo scene edit"
+                className="icon-button compact"
+                disabled={!props.canUndo}
+                onClick={props.onUndo}
+                title="Undo scene edit"
+                type="button"
+              >
+                <Undo2 size={14} />
+              </button>
+              <button
+                aria-label="Redo scene edit"
+                className="icon-button compact"
+                disabled={!props.canRedo}
+                onClick={props.onRedo}
+                title="Redo scene edit"
+                type="button"
+              >
+                <Redo2 size={14} />
+              </button>
               <button
                 className="secondary-button compact"
                 disabled={!validation.ok || !props.dirty}
@@ -3236,6 +3322,23 @@ function designerId(prefix: string): string {
       ? crypto.randomUUID()
       : Math.random().toString(36).slice(2);
   return `${prefix}-${random}`;
+}
+
+function firstSceneSourceId(collection: SceneCollection): string {
+  const scene =
+    collection.scenes.find((item) => item.id === collection.active_scene_id) ??
+    collection.scenes[0];
+  return scene?.sources[0]?.id ?? "";
+}
+
+function sceneCollectionContainsSource(
+  collection: SceneCollection,
+  sourceId: string,
+): boolean {
+  if (!sourceId) return false;
+  return collection.scenes.some((scene) =>
+    scene.sources.some((source) => source.id === sourceId),
+  );
 }
 
 function sortedSceneSources(
