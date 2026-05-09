@@ -200,8 +200,22 @@ pub struct SoftwareCompositorFrame {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SoftwareCompositorInputFrame {
+    pub source_id: String,
+    pub source_kind: SceneSourceKind,
+    pub width: u32,
+    pub height: u32,
+    pub frame_format: CompositorFrameFormat,
+    pub status: CompositorNodeStatus,
+    pub status_detail: String,
+    pub checksum: u64,
+    pub pixels: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SoftwareCompositorRenderResult {
     pub frame: CompositorRenderedFrame,
+    pub input_frames: Vec<SoftwareCompositorInputFrame>,
     pub pixel_frames: Vec<SoftwareCompositorFrame>,
 }
 
@@ -525,16 +539,33 @@ pub fn render_software_compositor_frame(
     let mut frame = evaluate_compositor_frame(plan, frame_index);
     frame.renderer = CompositorRendererKind::Software;
     let background = parse_background_color(&plan.graph.output.background_color);
+    let input_frames = build_software_compositor_input_frames(&plan.graph);
+    let input_frame_by_source = input_frames
+        .iter()
+        .map(|input| (input.source_id.as_str(), input))
+        .collect::<HashMap<_, _>>();
     let pixel_frames = frame
         .targets
         .iter()
-        .map(|target| render_software_target(target, background))
+        .map(|target| render_software_target(target, background, &input_frame_by_source))
         .collect();
 
     SoftwareCompositorRenderResult {
         frame,
+        input_frames,
         pixel_frames,
     }
+}
+
+pub fn build_software_compositor_input_frames(
+    graph: &CompositorGraph,
+) -> Vec<SoftwareCompositorInputFrame> {
+    graph
+        .nodes
+        .iter()
+        .filter(|node| node.visible)
+        .map(software_input_frame_for_node)
+        .collect()
 }
 
 fn evaluate_node_for_target(
@@ -724,6 +755,7 @@ fn target_mapping(
 fn render_software_target(
     target: &CompositorRenderedTarget,
     background: [u8; 4],
+    input_frames: &HashMap<&str, &SoftwareCompositorInputFrame>,
 ) -> SoftwareCompositorFrame {
     let width = target.width.max(1) as usize;
     let height = target.height.max(1) as usize;
@@ -732,7 +764,9 @@ fn render_software_target(
     fill_background(&mut pixels, background);
 
     for node in &target.nodes {
-        draw_node(&mut pixels, width, height, node);
+        if let Some(input_frame) = input_frames.get(node.source_id.as_str()) {
+            draw_node(&mut pixels, width, height, node, input_frame);
+        }
     }
 
     let checksum = checksum_pixels(&pixels);
@@ -759,34 +793,222 @@ fn draw_node(
     target_width: usize,
     target_height: usize,
     node: &CompositorEvaluatedNode,
+    input_frame: &SoftwareCompositorInputFrame,
 ) {
     let Some(rect) = drawable_rect(node) else {
         return;
     };
-    let left = rect.x.floor().max(0.0) as usize;
-    let top = rect.y.floor().max(0.0) as usize;
-    let right = (rect.x + rect.width).ceil().min(target_width as f64) as usize;
-    let bottom = (rect.y + rect.height).ceil().min(target_height as f64) as usize;
 
-    if left >= right || top >= bottom {
+    if node.opacity <= 0.0 {
         return;
     }
-
-    let alpha = (node.opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
-    if alpha == 0 {
-        return;
-    }
-    let color = node_color(node, alpha);
+    let bounds = rotated_bounds(&rect, node.rotation_degrees);
+    let left = bounds.x.floor().max(0.0) as usize;
+    let top = bounds.y.floor().max(0.0) as usize;
+    let right = (bounds.x + bounds.width).ceil().min(target_width as f64) as usize;
+    let bottom = (bounds.y + bounds.height).ceil().min(target_height as f64) as usize;
 
     for y in top..bottom {
         let row_offset = y * target_width * 4;
         for x in left..right {
+            let Some((source_x, source_y)) =
+                source_sample_for_target_pixel(x, y, &rect, node.rotation_degrees, input_frame)
+            else {
+                continue;
+            };
+            let mut color = input_frame_pixel(input_frame, source_x, source_y);
+            color[3] = ((f64::from(color[3]) * node.opacity.clamp(0.0, 1.0)).round())
+                .clamp(0.0, 255.0) as u8;
+            if color[3] == 0 {
+                continue;
+            }
             blend_pixel(
                 &mut pixels[row_offset + x * 4..row_offset + x * 4 + 4],
                 color,
             );
         }
     }
+}
+
+fn software_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFrame {
+    let size = input_frame_size(node);
+    let width = size.width.max(1.0).round().min(3840.0) as u32;
+    let height = size.height.max(1.0).round().min(2160.0) as u32;
+    let mut pixels = vec![0; width as usize * height as usize * 4];
+    let base = node_base_color(node);
+    let accent = node_accent_color(node);
+    let id_tint = stable_source_tint(&node.source_id);
+
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let checker = ((x / 24 + y / 24) % 2) as u8;
+            let diagonal = ((x + y + id_tint as usize) / 18) % 7 == 0;
+            let mut color = if checker == 0 {
+                base
+            } else {
+                mix_color(base, accent, 0.22)
+            };
+            if diagonal {
+                color = mix_color(color, [244, 248, 255, 255], 0.16);
+            }
+            if node.status != CompositorNodeStatus::Ready {
+                color = mix_color(color, [140, 148, 166, 255], 0.34);
+            }
+            let offset = (y * width as usize + x) * 4;
+            pixels[offset] = color[0].saturating_add(id_tint / 9);
+            pixels[offset + 1] = color[1].saturating_add(id_tint / 13);
+            pixels[offset + 2] = color[2].saturating_add(id_tint / 17);
+            pixels[offset + 3] = color[3];
+        }
+    }
+
+    let checksum = checksum_pixels(&pixels);
+    SoftwareCompositorInputFrame {
+        source_id: node.source_id.clone(),
+        source_kind: node.source_kind.clone(),
+        width,
+        height,
+        frame_format: CompositorFrameFormat::Rgba8,
+        status: node.status.clone(),
+        status_detail: node.status_detail.clone(),
+        checksum,
+        pixels,
+    }
+}
+
+fn input_frame_size(node: &CompositorNode) -> SceneSize {
+    match node.role {
+        CompositorNodeRole::Audio => SceneSize {
+            width: 512.0,
+            height: 128.0,
+        },
+        CompositorNodeRole::Group => SceneSize {
+            width: node.transform.size.width.max(64.0),
+            height: node.transform.size.height.max(64.0),
+        },
+        _ => node_native_size(node, &node.transform),
+    }
+}
+
+fn input_frame_pixel(
+    input_frame: &SoftwareCompositorInputFrame,
+    source_x: usize,
+    source_y: usize,
+) -> [u8; 4] {
+    let width = input_frame.width.max(1) as usize;
+    let height = input_frame.height.max(1) as usize;
+    let x = source_x.min(width - 1);
+    let y = source_y.min(height - 1);
+    let offset = (y * width + x) * 4;
+    [
+        input_frame.pixels[offset],
+        input_frame.pixels[offset + 1],
+        input_frame.pixels[offset + 2],
+        input_frame.pixels[offset + 3],
+    ]
+}
+
+fn source_sample_for_target_pixel(
+    x: usize,
+    y: usize,
+    rect: &CompositorRect,
+    rotation_degrees: f64,
+    input_frame: &SoftwareCompositorInputFrame,
+) -> Option<(usize, usize)> {
+    let point_x = x as f64 + 0.5;
+    let point_y = y as f64 + 0.5;
+    let center_x = rect.x + rect.width / 2.0;
+    let center_y = rect.y + rect.height / 2.0;
+    let (local_x, local_y) = if rotation_degrees.abs() > f64::EPSILON {
+        rotate_point(point_x, point_y, center_x, center_y, -rotation_degrees)
+    } else {
+        (point_x, point_y)
+    };
+
+    if local_x < rect.x
+        || local_x >= rect.x + rect.width
+        || local_y < rect.y
+        || local_y >= rect.y + rect.height
+    {
+        return None;
+    }
+
+    let u = ((local_x - rect.x) / rect.width).clamp(0.0, 0.999_999);
+    let v = ((local_y - rect.y) / rect.height).clamp(0.0, 0.999_999);
+    let source_x = (u * f64::from(input_frame.width.max(1))).floor() as usize;
+    let source_y = (v * f64::from(input_frame.height.max(1))).floor() as usize;
+    Some((
+        source_x.min(input_frame.width.saturating_sub(1) as usize),
+        source_y.min(input_frame.height.saturating_sub(1) as usize),
+    ))
+}
+
+fn rotated_bounds(rect: &CompositorRect, rotation_degrees: f64) -> CompositorRect {
+    if rotation_degrees.abs() <= f64::EPSILON {
+        return rect.clone();
+    }
+
+    let center_x = rect.x + rect.width / 2.0;
+    let center_y = rect.y + rect.height / 2.0;
+    let corners = [
+        rotate_point(rect.x, rect.y, center_x, center_y, rotation_degrees),
+        rotate_point(
+            rect.x + rect.width,
+            rect.y,
+            center_x,
+            center_y,
+            rotation_degrees,
+        ),
+        rotate_point(
+            rect.x + rect.width,
+            rect.y + rect.height,
+            center_x,
+            center_y,
+            rotation_degrees,
+        ),
+        rotate_point(
+            rect.x,
+            rect.y + rect.height,
+            center_x,
+            center_y,
+            rotation_degrees,
+        ),
+    ];
+    let min_x = corners
+        .iter()
+        .map(|(x, _)| *x)
+        .fold(f64::INFINITY, f64::min);
+    let max_x = corners
+        .iter()
+        .map(|(x, _)| *x)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let min_y = corners
+        .iter()
+        .map(|(_, y)| *y)
+        .fold(f64::INFINITY, f64::min);
+    let max_y = corners
+        .iter()
+        .map(|(_, y)| *y)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    CompositorRect {
+        x: min_x,
+        y: min_y,
+        width: max_x - min_x,
+        height: max_y - min_y,
+    }
+}
+
+fn rotate_point(x: f64, y: f64, center_x: f64, center_y: f64, rotation_degrees: f64) -> (f64, f64) {
+    let radians = rotation_degrees.to_radians();
+    let sin = radians.sin();
+    let cos = radians.cos();
+    let translated_x = x - center_x;
+    let translated_y = y - center_y;
+    (
+        center_x + translated_x * cos - translated_y * sin,
+        center_y + translated_x * sin + translated_y * cos,
+    )
 }
 
 fn drawable_rect(node: &CompositorEvaluatedNode) -> Option<CompositorRect> {
@@ -833,7 +1055,7 @@ fn blend_channel(source: u8, destination: u8, alpha: u16, inverse_alpha: u16) ->
     ((u16::from(source) * alpha + u16::from(destination) * inverse_alpha + 127) / 255) as u8
 }
 
-fn node_color(node: &CompositorEvaluatedNode, alpha: u8) -> [u8; 4] {
+fn node_base_color(node: &CompositorNode) -> [u8; 4] {
     let [red, green, blue] = match node.status {
         CompositorNodeStatus::Unavailable => [133, 55, 71],
         CompositorNodeStatus::PermissionRequired => [202, 126, 46],
@@ -846,7 +1068,43 @@ fn node_color(node: &CompositorEvaluatedNode, alpha: u8) -> [u8; 4] {
             CompositorNodeRole::Group => [123, 139, 163],
         },
     };
-    [red, green, blue, alpha]
+    [red, green, blue, 255]
+}
+
+fn node_accent_color(node: &CompositorNode) -> [u8; 4] {
+    match node.source_kind {
+        SceneSourceKind::Display => [45, 151, 230, 255],
+        SceneSourceKind::Window => [82, 118, 232, 255],
+        SceneSourceKind::Camera => [77, 205, 189, 255],
+        SceneSourceKind::AudioMeter => [66, 214, 139, 255],
+        SceneSourceKind::ImageMedia => [224, 146, 58, 255],
+        SceneSourceKind::BrowserOverlay => [209, 99, 191, 255],
+        SceneSourceKind::Text => [196, 114, 230, 255],
+        SceneSourceKind::Group => [148, 163, 184, 255],
+    }
+}
+
+fn mix_color(left: [u8; 4], right: [u8; 4], amount: f64) -> [u8; 4] {
+    let amount = amount.clamp(0.0, 1.0);
+    [
+        mix_channel(left[0], right[0], amount),
+        mix_channel(left[1], right[1], amount),
+        mix_channel(left[2], right[2], amount),
+        mix_channel(left[3], right[3], amount),
+    ]
+}
+
+fn mix_channel(left: u8, right: u8, amount: f64) -> u8 {
+    (f64::from(left) + (f64::from(right) - f64::from(left)) * amount)
+        .round()
+        .clamp(0.0, 255.0) as u8
+}
+
+fn stable_source_tint(value: &str) -> u8 {
+    value
+        .bytes()
+        .fold(0_u8, |hash, byte| hash.wrapping_mul(31).wrapping_add(byte))
+        % 48
 }
 
 fn parse_background_color(value: &str) -> [u8; 4] {
@@ -1396,6 +1654,11 @@ mod tests {
             result.frame.validation.errors
         );
         assert_eq!(result.frame.renderer, CompositorRendererKind::Software);
+        assert_eq!(result.input_frames.len(), graph.nodes.len());
+        assert!(result
+            .input_frames
+            .iter()
+            .all(|input| input.frame_format == CompositorFrameFormat::Rgba8));
         assert_eq!(result.pixel_frames.len(), 1);
         let target = &result.pixel_frames[0];
         assert_eq!(target.frame_format, CompositorFrameFormat::Rgba8);
@@ -1403,5 +1666,85 @@ mod tests {
         assert_eq!(target.pixels.len(), 1280 * 720 * 4);
         assert_ne!(target.checksum, 0);
         assert_ne!(&target.pixels[0..4], &[5, 7, 17, 255]);
+    }
+
+    #[test]
+    fn software_compositor_applies_crop_opacity_rotation_and_z_order() {
+        let mut collection = crate::SceneCollection::default_collection(crate::now_utc());
+        let scene = collection.scenes.first_mut().unwrap();
+        scene.canvas.width = 64;
+        scene.canvas.height = 64;
+        scene.sources.retain(|source| {
+            source.id == "source-main-display" || source.id == "source-camera-placeholder"
+        });
+
+        let display = scene
+            .sources
+            .iter_mut()
+            .find(|source| source.id == "source-main-display")
+            .unwrap();
+        display.position = ScenePoint { x: 0.0, y: 0.0 };
+        display.size = SceneSize {
+            width: 64.0,
+            height: 64.0,
+        };
+        display.z_index = 0;
+        display.config["availability"] =
+            serde_json::json!({ "state": "available", "detail": "Display ready." });
+
+        let camera = scene
+            .sources
+            .iter_mut()
+            .find(|source| source.id == "source-camera-placeholder")
+            .unwrap();
+        camera.position = ScenePoint { x: 0.0, y: 0.0 };
+        camera.size = SceneSize {
+            width: 64.0,
+            height: 64.0,
+        };
+        camera.crop.left = 32.0;
+        camera.rotation_degrees = 12.0;
+        camera.opacity = 0.7;
+        camera.z_index = 20;
+        camera.config["availability"] =
+            serde_json::json!({ "state": "available", "detail": "Camera ready." });
+
+        let graph = build_compositor_graph(scene);
+        let plan = build_compositor_render_plan(
+            &graph,
+            vec![compositor_render_target(
+                "preview",
+                "Preview",
+                CompositorRenderTargetKind::Preview,
+                64,
+                64,
+                30,
+            )],
+        );
+
+        let result = render_software_compositor_frame(&plan, 3);
+        let target = &result.pixel_frames[0];
+        let left_pixel = software_test_pixel(target, 12, 32);
+        let right_pixel = software_test_pixel(target, 52, 32);
+
+        assert_eq!(result.input_frames.len(), 2);
+        assert_ne!(left_pixel, right_pixel);
+        assert_ne!(target.checksum, 0);
+        assert!(result.frame.targets[0]
+            .nodes
+            .iter()
+            .any(|node| node.source_id == "source-camera-placeholder"
+                && node.rotation_degrees == 12.0
+                && (node.opacity - 0.7).abs() < f64::EPSILON));
+    }
+
+    fn software_test_pixel(frame: &SoftwareCompositorFrame, x: usize, y: usize) -> [u8; 4] {
+        let offset = (y * frame.width as usize + x) * 4;
+        [
+            frame.pixels[offset],
+            frame.pixels[offset + 1],
+            frame.pixels[offset + 2],
+            frame.pixels[offset + 3],
+        ]
     }
 }

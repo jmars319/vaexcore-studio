@@ -431,6 +431,35 @@ export interface CompositorRenderedFrame {
   validation: CompositorValidation;
 }
 
+export interface SoftwareCompositorInputFrame {
+  source_id: string;
+  source_kind: SceneSourceKind;
+  width: number;
+  height: number;
+  frame_format: CompositorFrameFormat;
+  status: CompositorNodeStatus;
+  status_detail: string;
+  checksum: number;
+  pixels: number[];
+}
+
+export interface SoftwareCompositorFrame {
+  target_id: string;
+  target_kind: CompositorRenderTargetKind;
+  width: number;
+  height: number;
+  frame_format: CompositorFrameFormat;
+  bytes_per_row: number;
+  checksum: number;
+  pixels: number[];
+}
+
+export interface SoftwareCompositorRenderResult {
+  frame: CompositorRenderedFrame;
+  input_frames: SoftwareCompositorInputFrame[];
+  pixel_frames: SoftwareCompositorFrame[];
+}
+
 export interface SceneRuntimeContractValidation {
   ready: boolean;
   warnings: string[];
