@@ -117,6 +117,18 @@ media shape, candidate availability, refresh, and auto-bind controls. This still
 does not start real capture; it prepares the saved scene graph and runtime
 contracts for capture-backed frames in later phases.
 
+Phase F software compositor, covering steps 51-60, now has serializable input
+frame contracts, per-source placeholder providers, crop/opacity/rotation-aware
+software drawing, z-order compositing, and compositor tests. The inputs are still
+deterministic placeholders, not real capture frames.
+
+Phase G live preview, covering steps 61-70, now returns encoded software preview
+image data through the runtime preview API and Designer draws it as the preview
+base frame. Designer also has preview pause/resume, quality selection, FPS limit
+metadata, dropped-frame accounting, render timing, transport size, and visual
+smoke coverage. It remains a software placeholder preview until real capture
+providers are connected.
+
 ## Validation Contract
 
 Every chunk from step 4 onward must keep these gates green unless a platform

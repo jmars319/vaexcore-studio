@@ -2063,11 +2063,16 @@ mod tests {
         assert!(preview["data"]["checksum"]
             .as_str()
             .unwrap()
-            .starts_with("contract:"));
+            .starts_with("software:"));
+        assert!(preview["data"]["image_data"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/bmp;base64,"));
         assert_eq!(
             preview["data"]["rendered_frame"]["targets"][0]["target_id"],
             "target-runtime-preview"
         );
+        assert_eq!(preview["data"]["rendered_frame"]["renderer"], "software");
 
         let (status, bindings) = request_json(
             app.clone(),

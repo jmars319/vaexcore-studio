@@ -1,15 +1,17 @@
 use std::collections::HashSet;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
     build_audio_mixer_plan, build_capture_frame_plan, build_compositor_graph,
     build_compositor_render_plan, build_scene_transition_preview_plan, evaluate_compositor_frame,
-    validate_compositor_render_plan, validate_scene_collection, AudioMixBus, AudioMixBusKind,
-    AudioMixSourceStatus, CaptureFrameBindingStatus, CaptureFrameFormat, CaptureFrameMediaKind,
-    CaptureSourceKind, CompositorFrameClock, CompositorFrameFormat, CompositorRenderPlan,
-    CompositorRenderTarget, CompositorRenderedFrame, CompositorRendererKind, CompositorScaleMode,
-    Scene, SceneCollection, SceneSourceKind, SceneTransitionPreviewPlan,
+    render_software_compositor_frame, validate_compositor_render_plan, validate_scene_collection,
+    AudioMixBus, AudioMixBusKind, AudioMixSourceStatus, CaptureFrameBindingStatus,
+    CaptureFrameFormat, CaptureFrameMediaKind, CaptureSourceKind, CompositorFrameClock,
+    CompositorFrameFormat, CompositorRenderPlan, CompositorRenderTarget, CompositorRenderedFrame,
+    CompositorRendererKind, CompositorScaleMode, Scene, SceneCollection, SceneSourceKind,
+    SceneTransitionPreviewPlan, SoftwareCompositorFrame, SoftwareCompositorRenderResult,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -561,6 +563,7 @@ pub fn create_preview_frame_response(
     collection: &SceneCollection,
     frame_index: u64,
 ) -> PreviewFrameResponse {
+    let started_at = Instant::now();
     let mut validation = validate_preview_frame_request(request, collection);
     let scene = collection
         .scenes
@@ -568,7 +571,8 @@ pub fn create_preview_frame_response(
         .find(|scene| scene.id == request.scene_id)
         .or_else(|| collection.active_scene())
         .or_else(|| collection.scenes.first());
-    let rendered_frame = scene.map(|scene| preview_rendered_frame(scene, request, frame_index));
+    let render_result = scene.map(|scene| preview_render_result(scene, request, frame_index));
+    let rendered_frame = render_result.as_ref().map(|result| result.frame.clone());
 
     if let Some(frame) = &rendered_frame {
         validation
@@ -578,9 +582,17 @@ pub fn create_preview_frame_response(
         validation.ready = validation.errors.is_empty();
     }
 
-    let checksum = rendered_frame
+    let pixel_frame = render_result
         .as_ref()
-        .map(|frame| preview_frame_checksum(frame, request));
+        .and_then(|result| result.pixel_frames.first());
+    let checksum = pixel_frame
+        .map(|frame| format!("software:{:016x}", frame.checksum))
+        .or_else(|| {
+            rendered_frame
+                .as_ref()
+                .map(|frame| preview_frame_checksum(frame, request))
+        });
+    let image_data = pixel_frame.and_then(|frame| preview_image_data(frame, &request.encoding));
 
     PreviewFrameResponse {
         version: 1,
@@ -592,9 +604,9 @@ pub fn create_preview_frame_response(
         height: request.height,
         frame_format: request.frame_format.clone(),
         encoding: request.encoding.clone(),
-        image_data: None,
+        image_data,
         checksum,
-        render_time_ms: 0.0,
+        render_time_ms: started_at.elapsed().as_secs_f64() * 1000.0,
         generated_at: crate::now_utc(),
         rendered_frame,
         validation,
@@ -986,11 +998,11 @@ pub fn create_transition_execution_response(
     }
 }
 
-fn preview_rendered_frame(
+fn preview_render_result(
     scene: &Scene,
     request: &PreviewFrameRequest,
     frame_index: u64,
-) -> CompositorRenderedFrame {
+) -> SoftwareCompositorRenderResult {
     let graph = build_compositor_graph(scene);
     let target = CompositorRenderTarget {
         id: "target-runtime-preview".to_string(),
@@ -1004,7 +1016,7 @@ fn preview_rendered_frame(
         enabled: true,
     };
     let plan = build_compositor_render_plan(&graph, vec![target]);
-    evaluate_compositor_frame(&plan, frame_index)
+    render_software_compositor_frame(&plan, frame_index)
 }
 
 fn preview_frame_checksum(
@@ -1020,6 +1032,83 @@ fn preview_frame_checksum(
         "contract:{}:{}:{}x{}:{}",
         frame.scene_id, frame.clock.frame_index, request.width, request.height, visible_nodes
     )
+}
+
+fn preview_image_data(
+    frame: &SoftwareCompositorFrame,
+    encoding: &PreviewFrameEncoding,
+) -> Option<String> {
+    match encoding {
+        PreviewFrameEncoding::None => None,
+        PreviewFrameEncoding::Base64 => Some(base64_encode(&frame.pixels)),
+        PreviewFrameEncoding::DataUrl => {
+            let bytes = bmp_bytes(frame);
+            Some(format!("data:image/bmp;base64,{}", base64_encode(&bytes)))
+        }
+    }
+}
+
+fn bmp_bytes(frame: &SoftwareCompositorFrame) -> Vec<u8> {
+    let width = frame.width.max(1);
+    let height = frame.height.max(1);
+    let pixel_bytes = width as usize * height as usize * 4;
+    let file_size = 14 + 40 + pixel_bytes;
+    let mut bytes = Vec::with_capacity(file_size);
+
+    bytes.extend_from_slice(b"BM");
+    bytes.extend_from_slice(&(file_size as u32).to_le_bytes());
+    bytes.extend_from_slice(&[0, 0, 0, 0]);
+    bytes.extend_from_slice(&(54_u32).to_le_bytes());
+    bytes.extend_from_slice(&(40_u32).to_le_bytes());
+    bytes.extend_from_slice(&(width as i32).to_le_bytes());
+    bytes.extend_from_slice(&(-(height as i32)).to_le_bytes());
+    bytes.extend_from_slice(&(1_u16).to_le_bytes());
+    bytes.extend_from_slice(&(32_u16).to_le_bytes());
+    bytes.extend_from_slice(&(0_u32).to_le_bytes());
+    bytes.extend_from_slice(&(pixel_bytes as u32).to_le_bytes());
+    bytes.extend_from_slice(&(2835_i32).to_le_bytes());
+    bytes.extend_from_slice(&(2835_i32).to_le_bytes());
+    bytes.extend_from_slice(&(0_u32).to_le_bytes());
+    bytes.extend_from_slice(&(0_u32).to_le_bytes());
+
+    for pixel in frame.pixels.chunks_exact(4) {
+        bytes.push(pixel[2]);
+        bytes.push(pixel[1]);
+        bytes.push(pixel[0]);
+        bytes.push(pixel[3]);
+    }
+
+    bytes
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    let mut index = 0;
+
+    while index < bytes.len() {
+        let first = bytes[index];
+        let second = bytes.get(index + 1).copied().unwrap_or(0);
+        let third = bytes.get(index + 2).copied().unwrap_or(0);
+        let triple = ((u32::from(first)) << 16) | ((u32::from(second)) << 8) | u32::from(third);
+
+        encoded.push(TABLE[((triple >> 18) & 0x3f) as usize] as char);
+        encoded.push(TABLE[((triple >> 12) & 0x3f) as usize] as char);
+        if index + 1 < bytes.len() {
+            encoded.push(TABLE[((triple >> 6) & 0x3f) as usize] as char);
+        } else {
+            encoded.push('=');
+        }
+        if index + 2 < bytes.len() {
+            encoded.push(TABLE[(triple & 0x3f) as usize] as char);
+        } else {
+            encoded.push('=');
+        }
+
+        index += 3;
+    }
+
+    encoded
 }
 
 fn validate_scene_runtime_collection(
@@ -1113,7 +1202,13 @@ mod tests {
         assert_eq!(response.scene_id, "scene-main");
         assert_eq!(response.frame_index, 3);
         assert!(response.checksum.is_some());
-        assert!(response.rendered_frame.is_some());
+        assert!(response
+            .image_data
+            .as_deref()
+            .is_some_and(|data| data.starts_with("data:image/bmp;base64,")));
+        let rendered_frame = response.rendered_frame.as_ref().unwrap();
+        assert_eq!(rendered_frame.renderer, CompositorRendererKind::Software);
+        assert!(response.render_time_ms.is_finite());
         assert!(
             response.validation.ready,
             "{:?}",

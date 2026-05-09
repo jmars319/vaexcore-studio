@@ -38,6 +38,7 @@ import {
   PanelLeft,
   PanelRight,
   PanelTop,
+  Pause,
   Play,
   Plus,
   Radio,
@@ -177,6 +178,18 @@ type Section =
   | "apps"
   | "logs";
 
+type PreviewQuality = "draft" | "balanced" | "full";
+
+type PreviewStats = {
+  averageRenderTimeMs: number;
+  droppedFrames: number;
+  fpsLimit: number;
+  lastFrameIndex: number | null;
+  lastImageDataBytes: number;
+  lastRequestMs: number;
+  renderedFrames: number;
+};
+
 type SuiteTimelineItem = {
   id: string;
   kind: "presence" | "recording" | "marker" | "event";
@@ -232,6 +245,22 @@ const sceneTransitionKindLabels: Record<SceneTransition["kind"], string> = {
   fade: "Fade",
   swipe: "Swipe",
   stinger: "Stinger",
+};
+
+const previewQualityLabels: Record<PreviewQuality, string> = {
+  draft: "Draft",
+  balanced: "Balanced",
+  full: "Full",
+};
+
+const initialPreviewStats: PreviewStats = {
+  averageRenderTimeMs: 0,
+  droppedFrames: 0,
+  fpsLimit: 1,
+  lastFrameIndex: null,
+  lastImageDataBytes: 0,
+  lastRequestMs: 0,
+  renderedFrames: 0,
 };
 
 type SceneRect = ScenePoint & SceneSize;
@@ -787,18 +816,71 @@ function designerShortcutMatches(
   return [shortcuts[action], ...(definition?.alternateCombos ?? [])].includes(combo);
 }
 
-function previewFrameRequestForScene(scene: Scene) {
+function previewFrameRequestForScene(scene: Scene, quality: PreviewQuality) {
+  const size = previewRequestSize(scene, quality);
   return createPreviewFrameRequest(scene, {
     request_id: `designer-preview-${Date.now()}`,
-    width: scene.canvas.width,
-    height: scene.canvas.height,
-    framerate: 30,
+    width: size.width,
+    height: size.height,
+    framerate: previewQualityFps(quality),
     frame_format: "rgba8",
     scale_mode: "fit",
-    encoding: "none",
+    encoding: "data_url",
     include_debug_overlay: true,
     requested_at: new Date().toISOString(),
   });
+}
+
+function previewRequestSize(scene: Scene, quality: PreviewQuality) {
+  const maxWidth =
+    quality === "draft" ? 640 : quality === "balanced" ? 960 : scene.canvas.width;
+  const scale = Math.min(1, maxWidth / Math.max(1, scene.canvas.width));
+  return {
+    width: Math.max(1, Math.round(scene.canvas.width * scale)),
+    height: Math.max(1, Math.round(scene.canvas.height * scale)),
+  };
+}
+
+function previewPollIntervalMs(quality: PreviewQuality) {
+  switch (quality) {
+    case "draft":
+      return 500;
+    case "full":
+      return 1000;
+    case "balanced":
+      return 750;
+  }
+}
+
+function previewQualityFps(quality: PreviewQuality) {
+  return Math.max(1, Math.round(1000 / previewPollIntervalMs(quality)));
+}
+
+function updatePreviewStats(
+  current: PreviewStats,
+  response: PreviewFrameResponse,
+  requestMs: number,
+  quality: PreviewQuality,
+): PreviewStats {
+  const skippedFrames =
+    current.lastFrameIndex === null
+      ? 0
+      : Math.max(0, response.frame_index - current.lastFrameIndex - 1);
+  const renderedFrames = current.renderedFrames + 1;
+  const averageRenderTimeMs =
+    current.averageRenderTimeMs === 0
+      ? response.render_time_ms
+      : current.averageRenderTimeMs * 0.85 + response.render_time_ms * 0.15;
+
+  return {
+    averageRenderTimeMs,
+    droppedFrames: current.droppedFrames + skippedFrames,
+    fpsLimit: previewQualityFps(quality),
+    lastFrameIndex: response.frame_index,
+    lastImageDataBytes: response.image_data?.length ?? 0,
+    lastRequestMs: requestMs,
+    renderedFrames,
+  };
 }
 
 function sourceCaptureCandidateKinds(source: SceneSource): CaptureSourceKind[] {
@@ -1012,6 +1094,10 @@ function App() {
     useState<SceneRuntimeBindingsSnapshot | null>(null);
   const [previewFrame, setPreviewFrame] = useState<PreviewFrameResponse | null>(null);
   const [previewPolling, setPreviewPolling] = useState(true);
+  const [previewQuality, setPreviewQuality] =
+    useState<PreviewQuality>("balanced");
+  const [previewStats, setPreviewStats] =
+    useState<PreviewStats>(initialPreviewStats);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [captureBindingRefreshing, setCaptureBindingRefreshing] = useState(false);
@@ -1042,6 +1128,7 @@ function App() {
   const [designerSourceClipboard, setDesignerSourceClipboard] =
     useState<SceneSource | null>(null);
   const designerHistoryGroupRef = useRef<string | null>(null);
+  const previewRequestInFlightRef = useRef(false);
 
   useEffect(() => {
     loadRuntimeConfig().then(setConfig).catch((error: Error) => {
@@ -1287,62 +1374,32 @@ function App() {
       )
     : [];
 
-  useEffect(() => {
-    if (!config || !activeDesignerScene || section !== "designer" || !previewPolling) {
+  async function fetchDesignerPreviewFrame() {
+    if (!config || !activeDesignerScene) return;
+    if (previewRequestInFlightRef.current) {
+      setPreviewStats((current) => ({
+        ...current,
+        droppedFrames: current.droppedFrames + 1,
+      }));
       return;
     }
-
-    let cancelled = false;
-    const runtimeConfig = config;
-    const previewScene = activeDesignerScene;
-
-    async function refreshPreviewFrame() {
-      setPreviewLoading(true);
-      try {
-        const response = await StudioApi.previewFrame(
-          runtimeConfig,
-          previewFrameRequestForScene(previewScene),
-        );
-        if (cancelled) return;
-        setPreviewFrame(response);
-        setPreviewError(
-          response.validation.ready
-            ? null
-            : response.validation.errors.join("; ") || "Runtime preview not ready",
-        );
-      } catch (error) {
-        if (!cancelled) {
-          setPreviewError(
-            error instanceof Error ? error.message : "Runtime preview unavailable",
-          );
-        }
-      } finally {
-        if (!cancelled) setPreviewLoading(false);
-      }
-    }
-
-    refreshPreviewFrame();
-    const interval = window.setInterval(refreshPreviewFrame, 1000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [
-    activeDesignerScene,
-    config,
-    previewPolling,
-    section,
-  ]);
-
-  async function requestDesignerPreviewFrame() {
-    if (!config || !activeDesignerScene) return;
+    previewRequestInFlightRef.current = true;
     setPreviewLoading(true);
+    const startedAt = performance.now();
     try {
       const response = await StudioApi.previewFrame(
         config,
-        previewFrameRequestForScene(activeDesignerScene),
+        previewFrameRequestForScene(activeDesignerScene, previewQuality),
       );
       setPreviewFrame(response);
+      setPreviewStats((current) =>
+        updatePreviewStats(
+          current,
+          response,
+          performance.now() - startedAt,
+          previewQuality,
+        ),
+      );
       setPreviewError(
         response.validation.ready
           ? null
@@ -1353,8 +1410,39 @@ function App() {
         error instanceof Error ? error.message : "Runtime preview unavailable",
       );
     } finally {
+      previewRequestInFlightRef.current = false;
       setPreviewLoading(false);
     }
+  }
+
+  useEffect(() => {
+    setPreviewStats({
+      ...initialPreviewStats,
+      fpsLimit: previewQualityFps(previewQuality),
+    });
+  }, [activeDesignerScene?.id, previewQuality]);
+
+  useEffect(() => {
+    if (!config || !activeDesignerScene || section !== "designer" || !previewPolling) {
+      return;
+    }
+
+    void fetchDesignerPreviewFrame();
+    const interval = window.setInterval(
+      () => void fetchDesignerPreviewFrame(),
+      previewPollIntervalMs(previewQuality),
+    );
+    return () => window.clearInterval(interval);
+  }, [
+    activeDesignerScene,
+    config,
+    previewPolling,
+    previewQuality,
+    section,
+  ]);
+
+  async function requestDesignerPreviewFrame() {
+    await fetchDesignerPreviewFrame();
   }
 
   async function refreshProfiles() {
@@ -2723,6 +2811,8 @@ function App() {
             previewFrame={previewFrame}
             previewLoading={previewLoading}
             previewPolling={previewPolling}
+            previewQuality={previewQuality}
+            previewStats={previewStats}
             runtime={sceneRuntime}
             runtimeBindings={sceneRuntimeBindings}
             onCopySource={handleCopyDesignerSource}
@@ -2743,6 +2833,7 @@ function App() {
             onImportCollection={handleImportSceneCollectionBundle}
             onPasteSource={handlePasteDesignerSource}
             onPreviewPollingChange={setPreviewPolling}
+            onPreviewQualityChange={setPreviewQuality}
             onRequestPreviewFrame={requestDesignerPreviewFrame}
             onRefreshCaptureBindings={refreshDesignerRuntimeBindings}
             onRebindSource={handleRebindDesignerSource}
@@ -2926,6 +3017,8 @@ function App() {
     previewFrame,
     previewLoading,
     previewPolling,
+    previewQuality,
+    previewStats,
     sceneCollection,
     sceneDirty,
     sceneHistory,
@@ -3080,6 +3173,8 @@ function DesignerPage(props: {
   previewFrame: PreviewFrameResponse | null;
   previewLoading: boolean;
   previewPolling: boolean;
+  previewQuality: PreviewQuality;
+  previewStats: PreviewStats;
   runtime: SceneRuntimeSnapshot | null;
   runtimeBindings: SceneRuntimeBindingsSnapshot | null;
   onCopySource: (sceneId: string, sourceId: string) => void;
@@ -3108,6 +3203,7 @@ function DesignerPage(props: {
   onImportCollection: () => void;
   onPasteSource: (sceneId: string) => void;
   onPreviewPollingChange: (enabled: boolean) => void;
+  onPreviewQualityChange: (quality: PreviewQuality) => void;
   onRequestPreviewFrame: () => void;
   onRefreshCaptureBindings: () => void;
   onRebindSource: (sceneId: string, sourceId: string) => void;
@@ -3443,6 +3539,19 @@ function DesignerPage(props: {
   ]);
 
   useEffect(() => {
+    if (
+      props.previewFrame?.image_data &&
+      props.previewFrame.rendered_frame &&
+      props.previewFrame.image_data.startsWith("data:")
+    ) {
+      drawRuntimePreviewImage(
+        renderCanvasRef.current,
+        props.previewFrame.image_data,
+        props.previewFrame.rendered_frame,
+        props.selectedSourceId,
+      );
+      return;
+    }
     if (props.previewFrame?.rendered_frame) {
       drawRuntimePreviewFrame(
         renderCanvasRef.current,
@@ -4691,13 +4800,28 @@ function DesignerPage(props: {
               />
               Safe
             </label>
-            <label className="check-row preview-toggle">
-              <input
-                checked={props.previewPolling}
-                onChange={(event) => props.onPreviewPollingChange(event.target.checked)}
-                type="checkbox"
-              />
-              Runtime
+            <button
+              className="secondary-button compact"
+              onClick={() => props.onPreviewPollingChange(!props.previewPolling)}
+              type="button"
+            >
+              {props.previewPolling ? <Pause size={14} /> : <Play size={14} />}
+              {props.previewPolling ? "Pause" : "Resume"}
+            </button>
+            <label className="preview-quality-control">
+              Quality
+              <select
+                value={props.previewQuality}
+                onChange={(event) =>
+                  props.onPreviewQualityChange(event.target.value as PreviewQuality)
+                }
+              >
+                {Object.entries(previewQualityLabels).map(([quality, label]) => (
+                  <option key={quality} value={quality}>
+                    {label}
+                  </option>
+                ))}
+              </select>
             </label>
             <button
               aria-label="Request runtime preview frame"
@@ -4710,6 +4834,9 @@ function DesignerPage(props: {
               <RefreshCw size={14} />
             </button>
             {props.previewLoading && <Pill tone="amber">Loading</Pill>}
+            <Pill tone={props.previewFrame?.image_data ? "green" : "muted"}>
+              {props.previewStats.fpsLimit} fps cap
+            </Pill>
           </div>
           <div className="designer-preview-viewport">
           <div
@@ -4999,11 +5126,17 @@ function DesignerPage(props: {
             label="Preview Frame"
             value={
               props.previewFrame
-                ? `${props.previewFrame.frame_index} / ${props.previewFrame.checksum ?? "no checksum"}`
+                ? `${props.previewFrame.frame_index} / ${
+                    props.previewFrame.image_data ? "image" : "metadata"
+                  }`
                 : props.previewPolling
                   ? "polling"
                   : "paused"
             }
+          />
+          <KeyValue
+            label="Preview Stats"
+            value={`${props.previewStats.renderedFrames} frames / ${props.previewStats.droppedFrames} dropped`}
           />
         </div>
         <div className="designer-command-bar" data-testid="designer-command-bar">
@@ -5169,6 +5302,26 @@ function DesignerPage(props: {
               <KeyValue
                 label="Format"
                 value={`${props.previewFrame.frame_format} / ${props.previewFrame.encoding}`}
+              />
+              <KeyValue
+                label="Render"
+                value={`${props.previewFrame.render_time_ms.toFixed(2)} ms server / ${props.previewStats.lastRequestMs.toFixed(1)} ms request`}
+              />
+              <KeyValue
+                label="Transport"
+                value={
+                  props.previewFrame.image_data
+                    ? `${Math.round(props.previewStats.lastImageDataBytes / 1024)} KB image`
+                    : "metadata only"
+                }
+              />
+              <KeyValue
+                label="Limiter"
+                value={`${previewQualityLabels[props.previewQuality]} / ${props.previewStats.fpsLimit} fps cap`}
+              />
+              <KeyValue
+                label="Dropped"
+                value={`${props.previewStats.droppedFrames} skipped frame(s)`}
               />
               <KeyValue
                 label="Targets"
@@ -8427,6 +8580,50 @@ function drawRuntimePreviewFrame(
   target.nodes.forEach((node) =>
     drawRuntimePreviewNode(context, node, selectedSourceId),
   );
+}
+
+function drawRuntimePreviewImage(
+  canvas: HTMLCanvasElement | null,
+  imageData: string,
+  frame: CompositorRenderedFrame,
+  selectedSourceId: string,
+) {
+  if (!canvas) return;
+  const context = canvas.getContext("2d");
+  const target = frame.targets[0];
+  if (!context || !target) return;
+
+  canvas.width = Math.max(1, target.width);
+  canvas.height = Math.max(1, target.height);
+  const image = new Image();
+  image.decoding = "async";
+  image.onload = () => {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    drawRuntimeSelectionOutlines(context, target.nodes, selectedSourceId);
+  };
+  image.onerror = () => drawRuntimePreviewFrame(canvas, frame, selectedSourceId);
+  image.src = imageData;
+}
+
+function drawRuntimeSelectionOutlines(
+  context: CanvasRenderingContext2D,
+  nodes: CompositorRenderedFrame["targets"][number]["nodes"],
+  selectedSourceId: string,
+) {
+  nodes
+    .filter((node) => node.source_id === selectedSourceId)
+    .forEach((node) => {
+      const width = Math.max(1, node.rect.width);
+      const height = Math.max(1, node.rect.height);
+      context.save();
+      context.translate(node.rect.x + width / 2, node.rect.y + height / 2);
+      context.rotate((node.rotation_degrees * Math.PI) / 180);
+      context.strokeStyle = "#39d9ff";
+      context.lineWidth = 5;
+      context.strokeRect(-width / 2, -height / 2, width, height);
+      context.restore();
+    });
 }
 
 function drawRuntimePreviewNode(
