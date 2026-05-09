@@ -73,6 +73,8 @@ import {
 } from "react";
 import type {
   AppSettings,
+  AudioGraphRuntimeSnapshot,
+  AudioGraphRuntimeSource,
   AuditLogEntry,
   CaptureSourceCandidate,
   CaptureSourceInventory,
@@ -1049,6 +1051,22 @@ function runtimeBindingShape(binding: SelectedRuntimeBinding | null): string {
   return `${binding.binding.bus_ids.length} buses / ${binding.binding.gain_db} dB`;
 }
 
+function audioGraphSourceForSource(
+  audioGraph: AudioGraphRuntimeSnapshot | null,
+  sourceId: string,
+): AudioGraphRuntimeSource | null {
+  return (
+    audioGraph?.sources.find((source) => source.scene_source_id === sourceId) ?? null
+  );
+}
+
+function formatAudioLevel(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "-90.0 dB";
+  }
+  return `${value.toFixed(1)} dB`;
+}
+
 function App() {
   const isSettingsWindow = useMemo(
     () => new URLSearchParams(window.location.search).get("window") === "settings",
@@ -1092,6 +1110,8 @@ function App() {
   const [sceneRuntime, setSceneRuntime] = useState<SceneRuntimeSnapshot | null>(null);
   const [sceneRuntimeBindings, setSceneRuntimeBindings] =
     useState<SceneRuntimeBindingsSnapshot | null>(null);
+  const [audioGraphRuntime, setAudioGraphRuntime] =
+    useState<AudioGraphRuntimeSnapshot | null>(null);
   const [previewFrame, setPreviewFrame] = useState<PreviewFrameResponse | null>(null);
   const [previewPolling, setPreviewPolling] = useState(true);
   const [previewQuality, setPreviewQuality] =
@@ -1196,6 +1216,7 @@ function App() {
           nextPipelinePlan,
           nextSceneRuntime,
           nextSceneRuntimeBindings,
+          nextAudioGraphRuntime,
           nextSuiteStatus,
           nextSuiteSession,
           nextSuiteTimeline,
@@ -1212,6 +1233,7 @@ function App() {
           StudioApi.mediaPlan(runtimeConfig),
           StudioApi.sceneRuntime(runtimeConfig),
           StudioApi.sceneRuntimeBindings(runtimeConfig),
+          StudioApi.sceneRuntimeAudioGraph(runtimeConfig),
           loadSuiteStatus(),
           loadSuiteSession(),
           loadSuiteTimeline(50),
@@ -1229,6 +1251,7 @@ function App() {
         setPipelinePlan(nextPipelinePlan);
         setSceneRuntime(nextSceneRuntime);
         setSceneRuntimeBindings(nextSceneRuntimeBindings);
+        setAudioGraphRuntime(nextAudioGraphRuntime);
         setSuiteStatus(nextSuiteStatus);
         setSuiteSession(nextSuiteSession);
         setPersistedSuiteTimeline(nextSuiteTimeline);
@@ -1441,6 +1464,28 @@ function App() {
     section,
   ]);
 
+  useEffect(() => {
+    if (!config || section !== "designer") return;
+    let cancelled = false;
+    const runtimeConfig = config;
+
+    async function refreshAudioGraph() {
+      try {
+        const snapshot = await StudioApi.sceneRuntimeAudioGraph(runtimeConfig);
+        if (!cancelled) setAudioGraphRuntime(snapshot);
+      } catch {
+        // Audio graph telemetry is best-effort in the Designer shell.
+      }
+    }
+
+    void refreshAudioGraph();
+    const interval = window.setInterval(refreshAudioGraph, 500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [config, section]);
+
   async function requestDesignerPreviewFrame() {
     await fetchDesignerPreviewFrame();
   }
@@ -1494,12 +1539,14 @@ function App() {
     try {
       await refreshCaptureContext();
       if (config) {
-        const [runtime, bindings] = await Promise.all([
+        const [runtime, bindings, audioGraph] = await Promise.all([
           StudioApi.sceneRuntime(config),
           StudioApi.sceneRuntimeBindings(config),
+          StudioApi.sceneRuntimeAudioGraph(config),
         ]);
         setSceneRuntime(runtime);
         setSceneRuntimeBindings(bindings);
+        setAudioGraphRuntime(audioGraph);
       }
       setSceneSaveStatus("Capture bindings refreshed");
       setError(null);
@@ -2770,11 +2817,13 @@ function App() {
         StudioApi.mediaPlan(config),
         StudioApi.sceneRuntime(config),
         StudioApi.sceneRuntimeBindings(config),
+        StudioApi.sceneRuntimeAudioGraph(config),
       ])
-        .then(([plan, runtime, bindings]) => {
+        .then(([plan, runtime, bindings, audioGraph]) => {
           setPipelinePlan(plan);
           setSceneRuntime(runtime);
           setSceneRuntimeBindings(bindings);
+          setAudioGraphRuntime(audioGraph);
         })
         .catch(() => undefined);
     } catch (error) {
@@ -2802,6 +2851,7 @@ function App() {
       case "designer":
         return (
           <DesignerPage
+            audioGraphRuntime={audioGraphRuntime}
             captureInventory={captureInventory}
             collection={designerSceneCollection}
             clipboardSource={designerSourceClipboard}
@@ -2982,6 +3032,7 @@ function App() {
     activeStatus?.mode,
     activeStatus?.recording_active,
     activeStatus?.stream_active,
+    audioGraphRuntime,
     auditEntries,
     clients,
     config,
@@ -3162,6 +3213,7 @@ function App() {
 }
 
 function DesignerPage(props: {
+  audioGraphRuntime: AudioGraphRuntimeSnapshot | null;
   canRedo: boolean;
   canUndo: boolean;
   captureBindingRefreshing: boolean;
@@ -3319,6 +3371,9 @@ function DesignerPage(props: {
     : null;
   const selectedRuntimeBinding = props.selectedSource
     ? runtimeBindingForSource(props.runtimeBindings, props.selectedSource)
+    : null;
+  const selectedAudioGraphSource = props.selectedSource
+    ? audioGraphSourceForSource(props.audioGraphRuntime, props.selectedSource.id)
     : null;
   const selectedCaptureCandidates = props.selectedSource
     ? captureCandidatesForSource(props.selectedSource, props.captureInventory)
@@ -4898,6 +4953,10 @@ function DesignerPage(props: {
             )}
             {sortedSceneSources(props.scene, "asc").map((source) => {
               const effectiveState = sourceEffectiveState(props.scene, source.id);
+              const audioGraphSource =
+                source.kind === "audio_meter"
+                  ? audioGraphSourceForSource(props.audioGraphRuntime, source.id)
+                  : null;
               return (
                 <div
                   className={[
@@ -4986,6 +5045,15 @@ function DesignerPage(props: {
                   <span>{sourceConfigSummary(source)}</span>
                   {sceneSourceAvailability(source) && (
                     <small>{sceneSourceAvailability(source)?.detail}</small>
+                  )}
+                  {audioGraphSource && (
+                    <div className="designer-audio-meter">
+                      <span
+                        style={{
+                          width: `${Math.round(audioGraphSource.linear_level * 100)}%`,
+                        }}
+                      />
+                    </div>
                   )}
                   {!effectiveState.locked && (
                     <>
@@ -5329,6 +5397,16 @@ function DesignerPage(props: {
                   props.previewFrame.rendered_frame?.targets
                     .map((target) => `${target.target_kind}:${target.width}x${target.height}`)
                     .join(", ") ?? "none"
+                }
+              />
+              <KeyValue
+                label="Audio Graph"
+                value={
+                  props.audioGraphRuntime
+                    ? `${props.audioGraphRuntime.sources.length} source(s), ${formatSuiteTimestamp(
+                        props.audioGraphRuntime.generated_at,
+                      )}`
+                    : "pending"
                 }
               />
             </div>
@@ -5912,6 +5990,7 @@ function DesignerPage(props: {
               />
             </div>
             <RuntimeBindingPanel
+              audioGraphSource={selectedAudioGraphSource}
               binding={selectedRuntimeBinding}
               candidates={selectedCaptureCandidates}
               onRebind={() =>
@@ -5954,6 +6033,7 @@ function DesignerPage(props: {
 }
 
 function RuntimeBindingPanel(props: {
+  audioGraphSource: AudioGraphRuntimeSource | null;
   binding: SelectedRuntimeBinding | null;
   candidates: CaptureSourceCandidate[];
   onRebind: () => void;
@@ -5985,11 +6065,36 @@ function RuntimeBindingPanel(props: {
         <KeyValue label="Target" value={runtimeBindingTarget(props.binding)} />
         <KeyValue label="Media" value={runtimeBindingMedia(props.binding)} />
         <KeyValue label="Shape" value={runtimeBindingShape(props.binding)} />
+        {props.audioGraphSource && (
+          <>
+            <KeyValue
+              label="Level"
+              value={formatAudioLevel(props.audioGraphSource.level_db)}
+            />
+            <KeyValue
+              label="Peak"
+              value={formatAudioLevel(props.audioGraphSource.peak_db)}
+            />
+            <KeyValue
+              label="Sync"
+              value={`${props.audioGraphSource.sync_offset_ms} ms`}
+            />
+          </>
+        )}
         <KeyValue
           label="Candidates"
           value={`${availableCandidates.length}/${props.candidates.length} available`}
         />
       </div>
+      {props.audioGraphSource && (
+        <div className="designer-audio-meter runtime-meter">
+          <span
+            style={{
+              width: `${Math.round(props.audioGraphSource.linear_level * 100)}%`,
+            }}
+          />
+        </div>
+      )}
       {status !== "ready" && (
         <div className="validation-issue warning">
           <strong>{status.replace("_", " ")}</strong>

@@ -234,7 +234,7 @@ Accepts a `SceneRuntimeStateUpdateRequest`, applies active-scene, active-transit
 
 ### `POST /scene-runtime/preview-frame`
 
-Accepts a `PreviewFrameRequest` and returns a `PreviewFrameResponse` with deterministic contract-frame metadata and checksum. The response does not contain real capture pixels.
+Accepts a `PreviewFrameRequest` and returns a `PreviewFrameResponse` with deterministic software placeholder pixels, frame metadata, checksum, and optional encoded image data. The response does not contain real capture pixels.
 
 ### `POST /scene-runtime/validate-graph`
 
@@ -243,6 +243,10 @@ Accepts a `CompositorRenderRequest`, evaluates the render graph contract, and re
 ### `GET /scene-runtime/bindings`
 
 Returns capture and audio binding contracts for the active saved scene.
+
+### `GET /scene-runtime/audio-graph`
+
+Returns the active scene audio graph runtime snapshot with simulated meter levels, gain, mute, monitor, sync offset, bus state, and validation metadata.
 
 ### `GET /media/plan`
 

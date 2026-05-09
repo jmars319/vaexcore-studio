@@ -1,6 +1,7 @@
 import type {
   ApiResponse,
   AppSettings,
+  AudioGraphRuntimeSnapshot,
   AuditLogSnapshot,
   CaptureSourceInventory,
   CommandStatus,
@@ -556,6 +557,8 @@ export const StudioApi = {
     }),
   sceneRuntimeBindings: (config: RuntimeApiConfig) =>
     apiRequest<SceneRuntimeBindingsSnapshot>(config, "/scene-runtime/bindings"),
+  sceneRuntimeAudioGraph: (config: RuntimeApiConfig) =>
+    apiRequest<AudioGraphRuntimeSnapshot>(config, "/scene-runtime/audio-graph"),
   createProfile: (config: RuntimeApiConfig, request: CreateProfileRequest) =>
     apiRequest<CreatedProfile>(config, "/profiles", {
       method: "POST",

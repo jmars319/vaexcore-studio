@@ -1099,6 +1099,52 @@ export interface AudioMixerValidation {
   errors: string[];
 }
 
+export interface AudioGraphRuntimeSource {
+  scene_source_id: string;
+  name: string;
+  capture_source_id: string | null;
+  capture_kind: CaptureSourceKind;
+  gain_db: number;
+  muted: boolean;
+  monitor_enabled: boolean;
+  meter_enabled: boolean;
+  sync_offset_ms: number;
+  level_db: number;
+  peak_db: number;
+  linear_level: number;
+  status: AudioMixSourceStatus;
+  status_detail: string;
+}
+
+export interface AudioGraphRuntimeBus {
+  id: string;
+  name: string;
+  kind: AudioMixBusKind;
+  gain_db: number;
+  muted: boolean;
+  level_db: number;
+  peak_db: number;
+  linear_level: number;
+}
+
+export interface AudioGraphRuntimeValidation {
+  ready: boolean;
+  warnings: string[];
+  errors: string[];
+}
+
+export interface AudioGraphRuntimeSnapshot {
+  version: number;
+  scene_id: string;
+  scene_name: string;
+  sample_rate: number;
+  channels: number;
+  sources: AudioGraphRuntimeSource[];
+  buses: AudioGraphRuntimeBus[];
+  generated_at: string;
+  validation: AudioGraphRuntimeValidation;
+}
+
 export type PreflightStatus =
   | "ready"
   | "warning"

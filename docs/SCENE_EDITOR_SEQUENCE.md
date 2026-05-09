@@ -129,6 +129,12 @@ metadata, dropped-frame accounting, render timing, transport size, and visual
 smoke coverage. It remains a software placeholder preview until real capture
 providers are connected.
 
+Phase H audio foundation, covering steps 71-80, now has an audio graph runtime
+snapshot, simulated meter levels, gain/mute/monitor/sync metadata, runtime
+validation, API/SDK/Desktop client access, and Designer meter displays in the
+preview and Inspector. The meters are deterministic simulation, not live device
+audio capture.
+
 ## Validation Contract
 
 Every chunk from step 4 onward must keep these gates green unless a platform
