@@ -1047,6 +1047,17 @@ nav {
   margin-top: 12px;
 }
 
+.designer-command-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.designer-command-bar .secondary-button {
+  min-width: 0;
+}
+
 .designer-preview-meta .key-value,
 .designer-inspector .key-value {
   margin-bottom: 0;

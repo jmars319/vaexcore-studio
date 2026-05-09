@@ -23,11 +23,13 @@ import {
   Image as ImageIcon,
   Layers,
   Link2,
+  ListChecks,
   Lock,
   MapPin,
   Mic,
   Monitor,
   Maximize2,
+  MousePointer2,
   Pencil,
   PanelBottom,
   PanelLeft,
@@ -2562,9 +2564,21 @@ function DesignerPage(props: {
         return;
       }
 
+      if (commandKey && key === "a") {
+        event.preventDefault();
+        props.onSelectSources(sourceTree.map((item) => item.source.id));
+        return;
+      }
+
       if (commandKey && key === "d" && props.selectedSource) {
         event.preventDefault();
         props.onDuplicateSource(props.scene.id, props.selectedSource.id);
+        return;
+      }
+
+      if (event.key === "Escape" && selectedSourceIds.length > 0) {
+        event.preventDefault();
+        props.onSelectSources([]);
         return;
       }
 
@@ -2622,6 +2636,7 @@ function DesignerPage(props: {
     props.scene.id,
     props.selectedSource,
     selectedSourceIds,
+    sourceTree,
     validation.ok,
   ]);
 
@@ -2705,6 +2720,53 @@ function DesignerPage(props: {
         },
       })),
       { historyGroup },
+    );
+  }
+
+  function setSelectionVisibility(visible: boolean) {
+    applyDesignerSourcePatches(
+      selectedSceneSources.map((source) => ({
+        sourceId: source.id,
+        patch: { visible },
+      })),
+    );
+  }
+
+  function setSelectionLock(locked: boolean) {
+    applyDesignerSourcePatches(
+      selectedSceneSources.map((source) => ({
+        sourceId: source.id,
+        patch: { locked },
+      })),
+    );
+  }
+
+  function setSelectionZOrder(mode: "front" | "back") {
+    if (selectedSceneSources.length === 0) return;
+    const selectedIds = new Set(selectedSceneSources.map((source) => source.id));
+    const selectedOrdered = sortedSceneSources(props.scene, "asc").filter((source) =>
+      selectedIds.has(source.id),
+    );
+    const unselected = props.scene.sources.filter((source) => !selectedIds.has(source.id));
+    const base =
+      mode === "front"
+        ? unselected.reduce(
+            (highest, source) => Math.max(highest, source.z_index),
+            0,
+          )
+        : unselected.reduce(
+            (lowest, source) => Math.min(lowest, source.z_index),
+            0,
+          ) -
+          selectedOrdered.length * 10 -
+          10;
+    applyDesignerSourcePatches(
+      selectedOrdered.map((source, index) => ({
+        sourceId: source.id,
+        patch: {
+          z_index: base + (index + 1) * 10,
+        },
+      })),
     );
   }
 
@@ -3946,6 +4008,79 @@ function DesignerPage(props: {
                 : `${graphValidation.errors.length} errors`
             }
           />
+        </div>
+        <div className="designer-command-bar" data-testid="designer-command-bar">
+          <button
+            className="secondary-button compact"
+            onClick={() => props.onSelectSources(sourceTree.map((item) => item.source.id))}
+            type="button"
+          >
+            <ListChecks size={14} />
+            Select All
+          </button>
+          <button
+            className="secondary-button compact"
+            disabled={selectedSourceIds.length === 0}
+            onClick={() => props.onSelectSources([])}
+            type="button"
+          >
+            <MousePointer2 size={14} />
+            Clear
+          </button>
+          <button
+            className="secondary-button compact"
+            disabled={selectedSourceIds.length === 0}
+            onClick={() => setSelectionVisibility(true)}
+            type="button"
+          >
+            <Eye size={14} />
+            Show
+          </button>
+          <button
+            className="secondary-button compact"
+            disabled={selectedSourceIds.length === 0}
+            onClick={() => setSelectionVisibility(false)}
+            type="button"
+          >
+            <EyeOff size={14} />
+            Hide
+          </button>
+          <button
+            className="secondary-button compact"
+            disabled={selectedSourceIds.length === 0}
+            onClick={() => setSelectionLock(true)}
+            type="button"
+          >
+            <Lock size={14} />
+            Lock
+          </button>
+          <button
+            className="secondary-button compact"
+            disabled={selectedSourceIds.length === 0}
+            onClick={() => setSelectionLock(false)}
+            type="button"
+          >
+            <Unlock size={14} />
+            Unlock
+          </button>
+          <button
+            className="secondary-button compact"
+            disabled={selectedSourceIds.length === 0}
+            onClick={() => setSelectionZOrder("front")}
+            type="button"
+          >
+            <PanelTop size={14} />
+            Front
+          </button>
+          <button
+            className="secondary-button compact"
+            disabled={selectedSourceIds.length === 0}
+            onClick={() => setSelectionZOrder("back")}
+            type="button"
+          >
+            <PanelBottom size={14} />
+            Back
+          </button>
         </div>
       </section>
 
