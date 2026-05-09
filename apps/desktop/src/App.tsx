@@ -28,6 +28,7 @@ import {
   Lock,
   MapPin,
   Mic,
+  Minus,
   Monitor,
   Maximize2,
   MousePointer2,
@@ -2520,6 +2521,9 @@ function DesignerPage(props: {
     useState<SceneTransition["kind"]>("fade");
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [snapStrength, setSnapStrength] = useState(designerSnapThreshold);
+  const [previewZoom, setPreviewZoom] = useState(1);
+  const [showPreviewGrid, setShowPreviewGrid] = useState(true);
+  const [showSafeAreas, setShowSafeAreas] = useState(true);
   const [aspectRatioLocked, setAspectRatioLocked] = useState(false);
   const [transformPivot, setTransformPivot] = useState<"selection" | "individual">(
     "selection",
@@ -3121,6 +3125,10 @@ function DesignerPage(props: {
   function updateSelectedSource(patch: SceneSourcePatch) {
     if (!props.selectedSource) return;
     props.onUpdateSource(props.scene.id, props.selectedSource.id, patch);
+  }
+
+  function updatePreviewZoom(nextZoom: number) {
+    setPreviewZoom(clamp(nextZoom, 0.35, 2));
   }
 
   function beginMarquee(event: ReactPointerEvent<HTMLDivElement>) {
@@ -3808,7 +3816,59 @@ function DesignerPage(props: {
           }
           title="Preview"
         />
-        <div className="designer-preview-shell">
+        <div
+          className={
+            showPreviewGrid
+              ? "designer-preview-shell"
+              : "designer-preview-shell grid-disabled"
+          }
+        >
+          <div className="designer-preview-toolbar">
+            <button
+              aria-label="Zoom preview out"
+              className="icon-button compact"
+              onClick={() => updatePreviewZoom(previewZoom - 0.1)}
+              title="Zoom preview out"
+              type="button"
+            >
+              <Minus size={14} />
+            </button>
+            <Pill tone="muted">{Math.round(previewZoom * 100)}%</Pill>
+            <button
+              aria-label="Zoom preview in"
+              className="icon-button compact"
+              onClick={() => updatePreviewZoom(previewZoom + 0.1)}
+              title="Zoom preview in"
+              type="button"
+            >
+              <Plus size={14} />
+            </button>
+            <button
+              className="secondary-button compact"
+              onClick={() => updatePreviewZoom(1)}
+              type="button"
+            >
+              <Maximize2 size={14} />
+              Fit
+            </button>
+            <label className="check-row preview-toggle">
+              <input
+                checked={showPreviewGrid}
+                onChange={(event) => setShowPreviewGrid(event.target.checked)}
+                type="checkbox"
+              />
+              Grid
+            </label>
+            <label className="check-row preview-toggle">
+              <input
+                checked={showSafeAreas}
+                onChange={(event) => setShowSafeAreas(event.target.checked)}
+                type="checkbox"
+              />
+              Safe
+            </label>
+          </div>
+          <div className="designer-preview-viewport">
           <div
             className="designer-preview-canvas"
             onPointerDown={beginMarquee}
@@ -3828,8 +3888,22 @@ function DesignerPage(props: {
             style={{
               aspectRatio: `${props.scene.canvas.width} / ${props.scene.canvas.height}`,
               backgroundColor: props.scene.canvas.background_color,
+              minWidth: `${previewZoom * 100}%`,
+              width: `${previewZoom * 100}%`,
             }}
           >
+            {showSafeAreas && (
+              <>
+                <div
+                  aria-hidden="true"
+                  className="designer-safe-area action-safe"
+                />
+                <div
+                  aria-hidden="true"
+                  className="designer-safe-area title-safe"
+                />
+              </>
+            )}
             <canvas
               aria-label="Compositor preview render"
               className="designer-preview-render-canvas"
@@ -4024,6 +4098,16 @@ function DesignerPage(props: {
                 />
               </div>
             )}
+            <div className="designer-preview-status">
+              <Pill tone={graphValidation.ready ? "green" : "amber"}>
+                {graphValidation.ready ? "Preview shell" : "Placeholder graph"}
+              </Pill>
+              <span>
+                {props.graph.nodes.filter((node) => node.visible).length} visible /{" "}
+                {props.graph.nodes.length} source nodes
+              </span>
+            </div>
+          </div>
           </div>
         </div>
         <div className="designer-preview-meta">
