@@ -2141,6 +2141,9 @@ function DesignerPage(props: {
   );
   const [snapGuides, setSnapGuides] = useState<DesignerSnapGuide[]>([]);
   const [newSourceKind, setNewSourceKind] = useState<SceneSourceKind>("display");
+  const [transitionPreviewPlaying, setTransitionPreviewPlaying] =
+    useState(false);
+  const [transitionPreviewProgress, setTransitionPreviewProgress] = useState(0);
   const selectedSourceIds = props.selectedSourceIds.filter((sourceId) =>
     props.scene.sources.some((source) => source.id === sourceId),
   );
@@ -2241,6 +2244,27 @@ function DesignerPage(props: {
       props.selectedSourceId,
     );
   }, [props.graph, props.selectedSourceId]);
+
+  useEffect(() => {
+    if (!transitionPreviewPlaying) return;
+    const duration = Math.max(activeTransition?.duration_ms ?? 0, 250);
+    const startedAt = performance.now();
+    const interval = window.setInterval(() => {
+      const progress = clamp((performance.now() - startedAt) / duration, 0, 1);
+      setTransitionPreviewProgress(progress);
+      if (progress >= 1) {
+        setTransitionPreviewPlaying(false);
+        window.clearInterval(interval);
+      }
+    }, 33);
+
+    return () => window.clearInterval(interval);
+  }, [activeTransition?.duration_ms, transitionPreviewPlaying]);
+
+  useEffect(() => {
+    setTransitionPreviewPlaying(false);
+    setTransitionPreviewProgress(0);
+  }, [activeTransition?.id]);
 
   function beginSourceDrag(
     event: ReactPointerEvent,
@@ -2591,6 +2615,38 @@ function DesignerPage(props: {
                     (transitionPreviewPlan.sample_frames[1]?.eased_progress ?? 1) * 100,
                   )}% eased`}
                 />
+              </div>
+              <div className="transition-preview-player">
+                <button
+                  className="secondary-button compact"
+                  onClick={() => {
+                    if (transitionPreviewPlaying) {
+                      setTransitionPreviewPlaying(false);
+                      return;
+                    }
+                    setTransitionPreviewProgress(0);
+                    setTransitionPreviewPlaying(true);
+                  }}
+                  type="button"
+                >
+                  {transitionPreviewPlaying ? <Square size={14} /> : <Play size={14} />}
+                  {transitionPreviewPlaying ? "Stop" : "Preview"}
+                </button>
+                <div
+                  aria-label="Transition preview progress"
+                  className="transition-preview-track"
+                  role="progressbar"
+                  aria-valuemax={100}
+                  aria-valuemin={0}
+                  aria-valuenow={Math.round(transitionPreviewProgress * 100)}
+                >
+                  <span
+                    style={{ width: `${Math.round(transitionPreviewProgress * 100)}%` }}
+                  />
+                </div>
+                <Pill tone={transitionPreviewPlaying ? "green" : "muted"}>
+                  {Math.round(transitionPreviewProgress * 100)}%
+                </Pill>
               </div>
             </div>
           )}
