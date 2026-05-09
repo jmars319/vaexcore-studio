@@ -3,16 +3,22 @@ import { spawnSync } from "node:child_process";
 const steps = [
   ["npm", ["run", "test:scripts"]],
   ["npm", ["run", "typecheck", "--workspaces", "--if-present"]],
+  ["npm", ["run", "smoke:visual"]],
   ["cargo", ["fmt", "--all", "--", "--check"]],
   ["cargo", ["clippy", "--all-targets", "--", "-D", "warnings"]],
   ["cargo", ["test", "--workspace"], { windowsNoRunFallback: true }],
-  ["npm", ["run", "app:build:windows"]],
+  ["npm", ["run", "app:build:windows"], { windowsOnly: true }],
 ];
 
 let failed = false;
 
 for (const [command, args, options = {}] of steps) {
   const label = [command, ...args].join(" ");
+  if (options.windowsOnly && process.platform !== "win32") {
+    console.log(`\n==> ${label}`);
+    console.log("Skipped: run this packaging step on a Windows machine.");
+    continue;
+  }
   console.log(`\n==> ${label}`);
   const result = run(command, args);
   if (result.status === 0) continue;

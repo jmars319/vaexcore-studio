@@ -47,9 +47,10 @@ foundation to OBS-class scene editing and output.
     first-pass nested position/rotation/opacity evaluation. Full group
     clipping, scaling inheritance, and group editor actions are not started.
 20. Full editor interactions: started with drag/resize, keyboard nudging,
-    undo/redo, transform command buttons, align-to-canvas controls, and
-    edge/center snapping guides, source duplicate, and source copy/paste;
-    multi-select, rotate handles, and distribute are not started.
+    undo/redo, transform command buttons, align-to-canvas controls,
+    edge/center snapping guides, multi-select, rotate handles, distribute,
+    source duplicate, and multi-source copy/paste. Advanced constraints,
+    guides, and layer operations remain future polish.
 21. Crop, bounds modes, fit/fill/stretch/center controls: started with numeric
     crop fields, reset crop, fit-to-canvas, center controls, serializable source
     bounds modes, Designer bounds controls, and first-pass compositor
@@ -72,8 +73,8 @@ foundation to OBS-class scene editing and output.
 25. Hotkeys and workflow shortcuts: started with Designer-level save,
     undo/redo, selected-source delete, copy, paste, duplicate, grouping,
     visibility/lock, z-order, nudge, and rotate shortcuts. Designer shortcuts
-    now have a local configurable shortcut panel; app-wide shortcut routing is
-    not started.
+    now have a local configurable shortcut panel and an external committed
+    shortcut reference; app-wide shortcut routing is not started.
 26. Active-scene recording and streaming integration: started with API launch
     requests carrying the active scene into recording/streaming engines and
     start events reporting active scene identity. Real capture-backed
@@ -140,6 +141,13 @@ profiles, recording target contracts, streaming target contracts, dry-run
 encoder/output-path/destination readiness checks, and a Designer runtime
 preflight panel. It prepares outputs but still does not start real recording,
 streaming, capture, or encoder work.
+
+Phase J editor polish, covering steps 91-100, now has a searchable/filterable
+Add Source modal, inline source-stack renaming, multi-source copy/paste and
+duplicate actions, grouped command-bar history for selection visibility/lock
+commands, an external Designer shortcut reference, scene import runtime refresh,
+and an updated Windows validation runner. This cuts the runtime-preview-ready
+milestone; it is still not a real capture, recording, or streaming backend.
 
 ## Validation Contract
 

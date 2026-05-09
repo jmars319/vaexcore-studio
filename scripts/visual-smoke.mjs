@@ -46,6 +46,11 @@ const targets = [
       },
       {
         type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-output-preflight\\"]"))',
+        message: "Designer output preflight panel did not render.",
+      },
+      {
+        type: "assert",
         expression:
           'Boolean(document.querySelector("[data-testid=\\"designer-shortcuts-panel\\"]"))',
         message: "Designer shortcuts panel did not render.",
@@ -72,6 +77,15 @@ const targets = [
         type: "assert",
         expression: 'Number.parseFloat(document.querySelector(".designer-preview-canvas")?.style.width ?? "0") > 100',
         message: "Designer preview zoom control did not enlarge the canvas.",
+      },
+      {
+        type: "click",
+        selector: '[data-testid="designer-open-source-modal"]',
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-source-add-modal\\"]"))',
+        message: "Designer source add modal did not render.",
       },
       {
         type: "click",

@@ -2667,7 +2667,7 @@ export function buildOutputPreflightPlan(
   const renderTargets =
     renderPlan?.targets.map((target) =>
       renderTargetProfile(target, recordingProfile),
-    ) ?? [];
+    ) ?? fallbackRenderTargetProfiles(intent, recordingProfile, streamDestinations);
   const recordingTarget =
     intent === "recording" || intent === "recording_and_stream"
       ? recordingProfile
@@ -2803,6 +2803,109 @@ function renderTargetProfile(
     encoder_preference: recordingProfile?.encoder_preference ?? "auto",
     bitrate_kbps:
       target.kind === "recording" || target.kind === "stream"
+        ? (recordingProfile?.bitrate_kbps ?? 6000)
+        : null,
+  };
+}
+
+function fallbackRenderTargetProfiles(
+  intent: PipelineIntent,
+  recordingProfile: MediaProfile | null | undefined,
+  streamDestinations: StreamDestination[],
+): RenderTargetProfile[] {
+  const width = recordingProfile?.resolution.width ?? 1920;
+  const height = recordingProfile?.resolution.height ?? 1080;
+  const framerate = recordingProfile?.framerate ?? 60;
+  const targets = [
+    fallbackRenderTargetProfile(
+      "target-preview",
+      "Preview",
+      "preview",
+      width,
+      height,
+      framerate,
+      recordingProfile,
+    ),
+    fallbackRenderTargetProfile(
+      "target-program",
+      "Program",
+      "program",
+      width,
+      height,
+      framerate,
+      recordingProfile,
+    ),
+  ];
+
+  if (intent === "recording" || intent === "recording_and_stream") {
+    targets.push(
+      fallbackRenderTargetProfile(
+        "target-recording",
+        "Recording Output",
+        "recording",
+        width,
+        height,
+        framerate,
+        recordingProfile,
+      ),
+    );
+  }
+
+  if (intent === "stream" || intent === "recording_and_stream") {
+    if (streamDestinations.length === 0) {
+      targets.push(
+        fallbackRenderTargetProfile(
+          "target-stream",
+          "Stream Output",
+          "stream",
+          width,
+          height,
+          framerate,
+          recordingProfile,
+        ),
+      );
+    } else {
+      targets.push(
+        ...streamDestinations.map((destination) =>
+          fallbackRenderTargetProfile(
+            `target-stream-${destination.id}`,
+            `Stream Output: ${destination.name}`,
+            "stream",
+            width,
+            height,
+            framerate,
+            recordingProfile,
+          ),
+        ),
+      );
+    }
+  }
+
+  return targets;
+}
+
+function fallbackRenderTargetProfile(
+  id: string,
+  name: string,
+  kind: CompositorRenderTargetKind,
+  width: number,
+  height: number,
+  framerate: number,
+  recordingProfile: MediaProfile | null | undefined,
+): RenderTargetProfile {
+  return {
+    id,
+    name,
+    kind,
+    width,
+    height,
+    framerate,
+    frame_format: "bgra8",
+    scale_mode: "fit",
+    enabled: true,
+    encoder_preference: recordingProfile?.encoder_preference ?? "auto",
+    bitrate_kbps:
+      kind === "recording" || kind === "stream"
         ? (recordingProfile?.bitrate_kbps ?? 6000)
         : null,
   };

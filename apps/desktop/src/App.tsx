@@ -400,14 +400,14 @@ const designerShortcutDefinitions: DesignerShortcutDefinition[] = [
   },
   {
     action: "copy",
-    label: "Copy source",
-    description: "Copy the selected source into Designer clipboard.",
+    label: "Copy selection",
+    description: "Copy selected sources into Designer clipboard.",
     defaultCombo: "mod+c",
   },
   {
     action: "paste",
-    label: "Paste source",
-    description: "Paste the copied source into the active scene.",
+    label: "Paste sources",
+    description: "Paste copied sources into the active scene.",
     defaultCombo: "mod+v",
   },
   {
@@ -418,8 +418,8 @@ const designerShortcutDefinitions: DesignerShortcutDefinition[] = [
   },
   {
     action: "duplicate",
-    label: "Duplicate selected source",
-    description: "Duplicate the primary selected source.",
+    label: "Duplicate selection",
+    description: "Duplicate selected unlocked sources.",
     defaultCombo: "mod+d",
   },
   {
@@ -1145,8 +1145,9 @@ function App() {
     past: [],
     future: [],
   });
-  const [designerSourceClipboard, setDesignerSourceClipboard] =
-    useState<SceneSource | null>(null);
+  const [designerSourceClipboard, setDesignerSourceClipboard] = useState<
+    SceneSource[]
+  >([]);
   const designerHistoryGroupRef = useRef<string | null>(null);
   const previewRequestInFlightRef = useRef(false);
 
@@ -1981,7 +1982,19 @@ function App() {
             (item) => item.id === collection.active_scene_id,
           ) ?? collection.scenes[0];
         selectDesignerSources([scene?.sources[0]?.id ?? ""]);
-        StudioApi.mediaPlan(config).then(setPipelinePlan).catch(() => undefined);
+        Promise.all([
+          StudioApi.mediaPlan(config),
+          StudioApi.sceneRuntime(config),
+          StudioApi.sceneRuntimeBindings(config),
+          StudioApi.sceneRuntimeAudioGraph(config),
+        ])
+          .then(([plan, runtime, bindings, audioGraph]) => {
+            setPipelinePlan(plan);
+            setSceneRuntime(runtime);
+            setSceneRuntimeBindings(bindings);
+            setAudioGraphRuntime(audioGraph);
+          })
+          .catch(() => undefined);
       }
       setSceneDirty(false);
       setSceneHistory({ past: [], future: [] });
@@ -2492,34 +2505,50 @@ function App() {
   }
 
   function handleDuplicateDesignerSource(sceneId: string, sourceId: string) {
+    handleDuplicateDesignerSources(sceneId, [sourceId]);
+  }
+
+  function handleDuplicateDesignerSources(sceneId: string, sourceIds: string[]) {
     const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
-    const source = scene?.sources.find((item) => item.id === sourceId);
-    if (!scene || !source) return;
-    const duplicate = cloneDesignerSourceForInsert(source, scene, "Copy");
+    if (!scene) return;
+    const sourceIdSet = new Set(sourceIds);
+    const sources = sortedSceneSources(scene, "asc").filter(
+      (source) => sourceIdSet.has(source.id) && !source.locked,
+    );
+    if (sources.length === 0) return;
+    const duplicates = cloneDesignerSourcesForInsert(sources, scene, "Copy");
     updateDesignerCollection((current) => ({
       ...current,
       scenes: current.scenes.map((scene) =>
         scene.id === sceneId
-          ? { ...scene, sources: [...scene.sources, duplicate] }
+          ? { ...scene, sources: [...scene.sources, ...duplicates] }
           : scene,
       ),
     }));
-    selectDesignerSources([duplicate.id]);
+    selectDesignerSources(duplicates.map((source) => source.id));
   }
 
-  function handleCopyDesignerSource(sceneId: string, sourceId: string) {
+  function handleCopyDesignerSources(sceneId: string, sourceIds: string[]) {
     const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
-    const source = scene?.sources.find((item) => item.id === sourceId);
-    if (!source) return;
-    setDesignerSourceClipboard(cloneSceneSource(source));
-    setSceneSaveStatus(`Copied ${source.name}`);
+    if (!scene) return;
+    const sourceIdSet = new Set(sourceIds);
+    const sources = sortedSceneSources(scene, "asc").filter((source) =>
+      sourceIdSet.has(source.id),
+    );
+    if (sources.length === 0) return;
+    setDesignerSourceClipboard(sources.map(cloneSceneSource));
+    setSceneSaveStatus(
+      sources.length === 1
+        ? `Copied ${sources[0].name}`
+        : `Copied ${sources.length} sources`,
+    );
   }
 
   function handlePasteDesignerSource(sceneId: string) {
-    if (!designerSourceClipboard) return;
+    if (designerSourceClipboard.length === 0) return;
     const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
     if (!scene) return;
-    const pasted = cloneDesignerSourceForInsert(
+    const pasted = cloneDesignerSourcesForInsert(
       designerSourceClipboard,
       scene,
       "Pasted",
@@ -2528,11 +2557,11 @@ function App() {
       ...current,
       scenes: current.scenes.map((scene) =>
         scene.id === sceneId
-          ? { ...scene, sources: [...scene.sources, pasted] }
+          ? { ...scene, sources: [...scene.sources, ...pasted] }
           : scene,
       ),
     }));
-    selectDesignerSources([pasted.id]);
+    selectDesignerSources(pasted.map((source) => source.id));
   }
 
   function handleDeleteDesignerSource(sceneId: string, sourceId: string) {
@@ -2854,7 +2883,7 @@ function App() {
             audioGraphRuntime={audioGraphRuntime}
             captureInventory={captureInventory}
             collection={designerSceneCollection}
-            clipboardSource={designerSourceClipboard}
+            clipboardSources={designerSourceClipboard}
             captureBindingRefreshing={captureBindingRefreshing}
             dirty={sceneDirty}
             previewError={previewError}
@@ -2867,7 +2896,7 @@ function App() {
             preflight={preflight}
             runtime={sceneRuntime}
             runtimeBindings={sceneRuntimeBindings}
-            onCopySource={handleCopyDesignerSource}
+            onCopySources={handleCopyDesignerSources}
             onCreateScene={handleCreateDesignerScene}
             onCreateSource={handleCreateDesignerSource}
             onCreateTransition={handleCreateDesignerTransition}
@@ -2878,6 +2907,7 @@ function App() {
             onDropReorderSource={handleDropReorderDesignerSource}
             onDuplicateScene={handleDuplicateDesignerScene}
             onDuplicateSource={handleDuplicateDesignerSource}
+            onDuplicateSources={handleDuplicateDesignerSources}
             onDuplicateTransition={handleDuplicateDesignerTransition}
             onExportCollection={handleExportSceneCollectionBundle}
             onFinishContinuousEdit={handleFinishDesignerContinuousEdit}
@@ -3221,7 +3251,7 @@ function DesignerPage(props: {
   captureBindingRefreshing: boolean;
   captureInventory: CaptureSourceInventory | null;
   collection: SceneCollection;
-  clipboardSource: SceneSource | null;
+  clipboardSources: SceneSource[];
   dirty: boolean;
   previewError: string | null;
   previewFrame: PreviewFrameResponse | null;
@@ -3233,7 +3263,7 @@ function DesignerPage(props: {
   preflight: PreflightSnapshot | null;
   runtime: SceneRuntimeSnapshot | null;
   runtimeBindings: SceneRuntimeBindingsSnapshot | null;
-  onCopySource: (sceneId: string, sourceId: string) => void;
+  onCopySources: (sceneId: string, sourceIds: string[]) => void;
   onCreateScene: () => void;
   onCreateSource: (
     sceneId: string,
@@ -3252,6 +3282,7 @@ function DesignerPage(props: {
   ) => void;
   onDuplicateScene: (sceneId: string) => void;
   onDuplicateSource: (sceneId: string, sourceId: string) => void;
+  onDuplicateSources: (sceneId: string, sourceIds: string[]) => void;
   onDuplicateTransition: (transitionId: string) => void;
   onExportCollection: () => void;
   onFinishContinuousEdit: () => void;
@@ -3364,6 +3395,8 @@ function DesignerPage(props: {
   const [listeningShortcutAction, setListeningShortcutAction] =
     useState<DesignerShortcutAction | null>(null);
   const [shortcutMessage, setShortcutMessage] = useState<string | null>(null);
+  const [renamingSourceId, setRenamingSourceId] = useState<string | null>(null);
+  const [sourceRenameDraft, setSourceRenameDraft] = useState("");
   const selectedSourceIds = props.selectedSourceIds.filter((sourceId) =>
     props.scene.sources.some((source) => source.id === sourceId),
   );
@@ -3434,16 +3467,16 @@ function DesignerPage(props: {
 
       if (
         designerShortcutMatches(event, "copy", shortcutBindings) &&
-        props.selectedSource
+        selectedSourceIds.length > 0
       ) {
         event.preventDefault();
-        props.onCopySource(props.scene.id, props.selectedSource.id);
+        props.onCopySources(props.scene.id, selectedSourceIds);
         return;
       }
 
       if (designerShortcutMatches(event, "paste", shortcutBindings)) {
         event.preventDefault();
-        if (props.clipboardSource) props.onPasteSource(props.scene.id);
+        if (props.clipboardSources.length > 0) props.onPasteSource(props.scene.id);
         return;
       }
 
@@ -3455,10 +3488,10 @@ function DesignerPage(props: {
 
       if (
         designerShortcutMatches(event, "duplicate", shortcutBindings) &&
-        props.selectedSource
+        selectedSourceIds.length > 0
       ) {
         event.preventDefault();
-        props.onDuplicateSource(props.scene.id, props.selectedSource.id);
+        props.onDuplicateSources(props.scene.id, selectedSourceIds);
         return;
       }
 
@@ -3583,7 +3616,7 @@ function DesignerPage(props: {
     props,
     props.canRedo,
     props.canUndo,
-    props.clipboardSource,
+    props.clipboardSources,
     props.dirty,
     props.scene.id,
     props.selectedSource,
@@ -3703,6 +3736,18 @@ function DesignerPage(props: {
     setShortcutMessage("Designer shortcuts reset to defaults.");
   }
 
+  function beginInlineSourceRename(source: SceneSource) {
+    setRenamingSourceId(source.id);
+    setSourceRenameDraft(source.name);
+  }
+
+  function commitInlineSourceRename(source: SceneSource) {
+    const name = sourceRenameDraft.trim();
+    setRenamingSourceId(null);
+    if (!name || name === source.name) return;
+    props.onUpdateSource(props.scene.id, source.id, { name });
+  }
+
   function toggleGroupCollapse(groupId: string) {
     setCollapsedGroupIds((current) =>
       current.includes(groupId)
@@ -3746,21 +3791,29 @@ function DesignerPage(props: {
     );
   }
 
-  function setSelectionVisibility(visible: boolean) {
+  function setSelectionVisibility(
+    visible: boolean,
+    historyGroup = `selection:visibility:${visible}`,
+  ) {
     applyDesignerSourcePatches(
       selectedSceneSources.map((source) => ({
         sourceId: source.id,
         patch: { visible },
       })),
+      { historyGroup },
     );
   }
 
-  function setSelectionLock(locked: boolean) {
+  function setSelectionLock(
+    locked: boolean,
+    historyGroup = `selection:lock:${locked}`,
+  ) {
     applyDesignerSourcePatches(
       selectedSceneSources.map((source) => ({
         sourceId: source.id,
         patch: { locked },
       })),
+      { historyGroup },
     );
   }
 
@@ -4426,12 +4479,14 @@ function DesignerPage(props: {
               <div className="source-add-controls">
                 <button
                   className="secondary-button compact"
-                  disabled={!props.clipboardSource}
+                  disabled={props.clipboardSources.length === 0}
                   onClick={() => props.onPasteSource(props.scene.id)}
                   title={
-                    props.clipboardSource
-                      ? `Paste ${props.clipboardSource.name}`
-                      : "No copied source"
+                    props.clipboardSources.length > 0
+                      ? `Paste ${props.clipboardSources.length} source${
+                          props.clipboardSources.length === 1 ? "" : "s"
+                        }`
+                      : "No copied sources"
                   }
                   type="button"
                 >
@@ -4553,18 +4608,56 @@ function DesignerPage(props: {
                       <span aria-hidden="true" />
                     )}
                   </button>
-                  <button
-                    className="source-stack-select-button"
-                    data-source-id={source.id}
-                    data-testid="designer-source-select"
-                    onClick={(event) =>
-                      props.onSelectSource(
-                        source.id,
-                        event.shiftKey || event.metaKey || event.ctrlKey,
-                      )
-                    }
-                    type="button"
-                  >
+                  {renamingSourceId === source.id ? (
+                    <div
+                      className="source-stack-select-button"
+                      data-source-id={source.id}
+                      data-testid="designer-source-select"
+                    >
+                      <div className="source-stack-main">
+                        <SourceKindIcon kind={source.kind} />
+                        <div>
+                          <input
+                            aria-label={`Rename ${source.name}`}
+                            autoFocus
+                            className="source-stack-rename-input"
+                            onBlur={() => commitInlineSourceRename(source)}
+                            onChange={(event) =>
+                              setSourceRenameDraft(event.target.value)
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                commitInlineSourceRename(source);
+                              } else if (event.key === "Escape") {
+                                event.preventDefault();
+                                setRenamingSourceId(null);
+                              }
+                            }}
+                            value={sourceRenameDraft}
+                          />
+                          <span>
+                            {sceneSourceKindLabels[source.kind]} - z {source.z_index}
+                            {effectiveState.parentId ? " - grouped" : ""}
+                            {effectiveState.inheritedHidden ? " - hidden by parent" : ""}
+                            {effectiveState.inheritedLocked ? " - locked by parent" : ""}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      className="source-stack-select-button"
+                      data-source-id={source.id}
+                      data-testid="designer-source-select"
+                      onClick={(event) =>
+                        props.onSelectSource(
+                          source.id,
+                          event.shiftKey || event.metaKey || event.ctrlKey,
+                        )
+                      }
+                      type="button"
+                    >
                     <div className="source-stack-main">
                       <SourceKindIcon kind={source.kind} />
                       <div>
@@ -4577,7 +4670,8 @@ function DesignerPage(props: {
                         </span>
                       </div>
                     </div>
-                  </button>
+                    </button>
+                  )}
                   <div className="source-stack-actions">
                     {source.kind === "group" && (
                       <button
@@ -4689,11 +4783,20 @@ function DesignerPage(props: {
                     <button
                       aria-label={`Copy ${source.name}`}
                       className="icon-button compact"
-                      onClick={() => props.onCopySource(props.scene.id, source.id)}
+                      onClick={() => props.onCopySources(props.scene.id, [source.id])}
                       title={`Copy ${source.name}`}
                       type="button"
                     >
                       <ClipboardCopy size={14} />
+                    </button>
+                    <button
+                      aria-label={`Rename ${source.name}`}
+                      className="icon-button compact"
+                      onClick={() => beginInlineSourceRename(source)}
+                      title={`Rename ${source.name}`}
+                      type="button"
+                    >
+                      <Pencil size={14} />
                     </button>
                     <button
                       aria-label={`Duplicate ${source.name}`}
@@ -5232,7 +5335,34 @@ function DesignerPage(props: {
           <button
             className="secondary-button compact"
             disabled={selectedSourceIds.length === 0}
-            onClick={() => setSelectionVisibility(true)}
+            onClick={() => props.onCopySources(props.scene.id, selectedSourceIds)}
+            type="button"
+          >
+            <ClipboardCopy size={14} />
+            Copy
+          </button>
+          <button
+            className="secondary-button compact"
+            disabled={props.clipboardSources.length === 0}
+            onClick={() => props.onPasteSource(props.scene.id)}
+            type="button"
+          >
+            <ClipboardPaste size={14} />
+            Paste
+          </button>
+          <button
+            className="secondary-button compact"
+            disabled={unlockedSelectedSources.length === 0}
+            onClick={() => props.onDuplicateSources(props.scene.id, selectedSourceIds)}
+            type="button"
+          >
+            <CopyPlus size={14} />
+            Duplicate
+          </button>
+          <button
+            className="secondary-button compact"
+            disabled={selectedSourceIds.length === 0}
+            onClick={() => setSelectionVisibility(true, "command:show-selection")}
             type="button"
           >
             <Eye size={14} />
@@ -5241,7 +5371,7 @@ function DesignerPage(props: {
           <button
             className="secondary-button compact"
             disabled={selectedSourceIds.length === 0}
-            onClick={() => setSelectionVisibility(false)}
+            onClick={() => setSelectionVisibility(false, "command:hide-selection")}
             type="button"
           >
             <EyeOff size={14} />
@@ -5250,7 +5380,7 @@ function DesignerPage(props: {
           <button
             className="secondary-button compact"
             disabled={selectedSourceIds.length === 0}
-            onClick={() => setSelectionLock(true)}
+            onClick={() => setSelectionLock(true, "command:lock-selection")}
             type="button"
           >
             <Lock size={14} />
@@ -5259,7 +5389,7 @@ function DesignerPage(props: {
           <button
             className="secondary-button compact"
             disabled={selectedSourceIds.length === 0}
-            onClick={() => setSelectionLock(false)}
+            onClick={() => setSelectionLock(false, "command:unlock-selection")}
             type="button"
           >
             <Unlock size={14} />
@@ -6438,104 +6568,203 @@ function SourceCreationPanel(props: {
   onCreateSource: (kind: SceneSourceKind, defaults?: SceneSourceDefaults) => void;
   onNewSourceKindChange: (kind: SceneSourceKind) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [kindFilter, setKindFilter] = useState<SceneSourceKind | "all">("all");
   const captureCandidates = props.captureInventory?.candidates ?? [];
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredPresets = sourceCreatePresets.filter((preset) =>
+    sourceCreatePresetMatches(preset, kindFilter, normalizedSearch),
+  );
+  const filteredCandidates = captureCandidates.filter((candidate) => {
+    const createRequest = sourceCreateRequestFromCaptureCandidate(candidate);
+    if (kindFilter !== "all" && createRequest.kind !== kindFilter) return false;
+    if (!normalizedSearch) return true;
+    return `${candidate.name} ${candidate.kind} ${candidate.notes ?? ""}`
+      .toLowerCase()
+      .includes(normalizedSearch);
+  });
   const createFromPreset = (preset: SourceCreatePreset) => {
     props.onCreateSource(preset.kind, {
       ...preset.defaults,
       name: preset.name,
     });
+    setOpen(false);
+  };
+  const createBlank = () => {
+    props.onCreateSource(props.newSourceKind);
+    setOpen(false);
+  };
+  const createFromCandidate = (candidate: CaptureSourceCandidate) => {
+    const createRequest = sourceCreateRequestFromCaptureCandidate(candidate);
+    props.onCreateSource(createRequest.kind, createRequest.defaults);
+    setOpen(false);
   };
 
   return (
     <div className="source-create-panel" data-testid="designer-source-create-panel">
-      <div className="source-create-manual">
-        <label>
-          Blank Source
-          <select
-            aria-label="New source kind"
-            onChange={(event) =>
-              props.onNewSourceKindChange(event.target.value as SceneSourceKind)
-            }
-            value={props.newSourceKind}
-          >
-            {Object.entries(sceneSourceKindLabels).map(([kind, label]) => (
-              <option key={kind} value={kind}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          className="secondary-button compact"
-          onClick={() => props.onCreateSource(props.newSourceKind)}
-          type="button"
+      <button
+        className="secondary-button full"
+        data-testid="designer-open-source-modal"
+        onClick={() => setOpen(true)}
+        type="button"
+      >
+        <Plus size={14} />
+        Add Source
+      </button>
+
+      {open && (
+        <div
+          aria-modal="true"
+          className="designer-modal-backdrop"
+          data-testid="designer-source-add-modal"
+          role="dialog"
         >
-          <Plus size={14} />
-          Add Blank
-        </button>
-      </div>
-
-      <div className="source-create-grid">
-        {sourceCreatePresets.map((preset) => (
-          <button
-            className="source-create-card"
-            data-testid="designer-source-preset"
-            key={preset.id}
-            onClick={() => createFromPreset(preset)}
-            type="button"
-          >
-            <SourceKindIcon kind={preset.kind} />
-            <span>
-              <strong>{preset.name}</strong>
-              <small>{preset.detail}</small>
-            </span>
-          </button>
-        ))}
-      </div>
-
-      {captureCandidates.length > 0 && (
-        <div className="capture-candidate-list">
-          <div className="source-filter-editor-header compact-header">
-            <div>
-              <strong>Capture Candidates</strong>
-              <span>{captureCandidates.length} detected</span>
-            </div>
-          </div>
-          {captureCandidates.map((candidate) => {
-            const createRequest = sourceCreateRequestFromCaptureCandidate(candidate);
-            return (
+          <div className="designer-modal source-add-modal">
+            <div className="designer-modal-header">
+              <strong>Add Source</strong>
               <button
-                className={
-                  candidate.available
-                    ? "capture-candidate-create"
-                    : "capture-candidate-create unavailable"
-                }
-                data-testid="designer-capture-candidate-create"
-                key={candidate.id}
-                onClick={() =>
-                  props.onCreateSource(createRequest.kind, createRequest.defaults)
-                }
+                aria-label="Close add source"
+                className="icon-button compact"
+                onClick={() => setOpen(false)}
                 type="button"
               >
-                <SourceKindIcon kind={createRequest.kind} />
-                <span>
-                  <strong>{candidate.name}</strong>
-                  <small>
-                    {candidate.available
-                      ? sceneSourceKindLabels[createRequest.kind]
-                      : (candidate.notes ?? "Unavailable")}
-                  </small>
-                </span>
-                <Pill tone={candidate.available ? "green" : "amber"}>
-                  {candidate.available ? "Ready" : "Placeholder"}
-                </Pill>
+                <X size={14} />
               </button>
-            );
-          })}
+            </div>
+            <div className="source-add-search-row">
+              <label>
+                Search
+                <input
+                  autoFocus
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder="display, camera, text"
+                  value={search}
+                />
+              </label>
+              <label>
+                Kind
+                <select
+                  aria-label="Filter source kind"
+                  onChange={(event) =>
+                    setKindFilter(event.target.value as SceneSourceKind | "all")
+                  }
+                  value={kindFilter}
+                >
+                  <option value="all">All</option>
+                  {Object.entries(sceneSourceKindLabels).map(([kind, label]) => (
+                    <option key={kind} value={kind}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="source-create-manual">
+              <label>
+                Blank Source
+                <select
+                  aria-label="New source kind"
+                  onChange={(event) =>
+                    props.onNewSourceKindChange(
+                      event.target.value as SceneSourceKind,
+                    )
+                  }
+                  value={props.newSourceKind}
+                >
+                  {Object.entries(sceneSourceKindLabels).map(([kind, label]) => (
+                    <option key={kind} value={kind}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button className="secondary-button compact" onClick={createBlank} type="button">
+                <Plus size={14} />
+                Blank
+              </button>
+            </div>
+
+            <div className="source-create-grid">
+              {filteredPresets.map((preset) => (
+                <button
+                  className="source-create-card"
+                  data-testid="designer-source-preset"
+                  key={preset.id}
+                  onClick={() => createFromPreset(preset)}
+                  type="button"
+                >
+                  <SourceKindIcon kind={preset.kind} />
+                  <span>
+                    <strong>{preset.name}</strong>
+                    <small>{preset.detail}</small>
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            {filteredCandidates.length > 0 && (
+              <div className="capture-candidate-list">
+                <div className="source-filter-editor-header compact-header">
+                  <div>
+                    <strong>Capture Candidates</strong>
+                    <span>{filteredCandidates.length} matched</span>
+                  </div>
+                </div>
+                {filteredCandidates.map((candidate) => {
+                  const createRequest =
+                    sourceCreateRequestFromCaptureCandidate(candidate);
+                  return (
+                    <button
+                      className={
+                        candidate.available
+                          ? "capture-candidate-create"
+                          : "capture-candidate-create unavailable"
+                      }
+                      data-testid="designer-capture-candidate-create"
+                      key={candidate.id}
+                      onClick={() => createFromCandidate(candidate)}
+                      type="button"
+                    >
+                      <SourceKindIcon kind={createRequest.kind} />
+                      <span>
+                        <strong>{candidate.name}</strong>
+                        <small>
+                          {candidate.available
+                            ? sceneSourceKindLabels[createRequest.kind]
+                            : (candidate.notes ?? "Unavailable")}
+                        </small>
+                      </span>
+                      <Pill tone={candidate.available ? "green" : "amber"}>
+                        {candidate.available ? "Ready" : "Placeholder"}
+                      </Pill>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       )}
+
+      <div className="source-create-summary">
+        <Layers size={14} />
+        <span>
+          {sourceCreatePresets.length} presets / {captureCandidates.length} capture candidates
+        </span>
+      </div>
     </div>
   );
+}
+
+function sourceCreatePresetMatches(
+  preset: SourceCreatePreset,
+  kindFilter: SceneSourceKind | "all",
+  search: string,
+) {
+  if (kindFilter !== "all" && preset.kind !== kindFilter) return false;
+  if (!search) return true;
+  return `${preset.name} ${preset.detail} ${preset.kind}`.toLowerCase().includes(search);
 }
 
 function sourceCreateRequestFromCaptureCandidate(
@@ -8393,24 +8622,35 @@ function cloneSceneSource(source: SceneSource): SceneSource {
   return JSON.parse(JSON.stringify(source)) as SceneSource;
 }
 
-function cloneDesignerSourceForInsert(
-  source: SceneSource,
+function cloneDesignerSourcesForInsert(
+  sources: SceneSource[],
   scene: Scene,
   suffix: string,
-): SceneSource {
-  const clone = cloneSceneSource(source);
-  const position = findAvailableDuplicatePosition(scene, source);
-  return {
-    ...clone,
-    id: designerId("source"),
-    name: `${source.name} ${suffix}`,
-    position,
-    config:
-      clone.kind === "group"
-        ? { ...clone.config, child_source_ids: [] }
-        : clone.config,
-    z_index: nextSceneZIndex(scene),
-  } as SceneSource;
+): SceneSource[] {
+  const sourceIdMap = new Map(
+    sources.map((source) => [source.id, designerId("source")]),
+  );
+  const nextZIndex = nextSceneZIndex(scene);
+  return sources.map((source, index) => {
+    const clone = cloneSceneSource(source);
+    const position = findAvailableDuplicatePosition(scene, source);
+    return {
+      ...clone,
+      id: sourceIdMap.get(source.id) ?? designerId("source"),
+      name: `${source.name} ${suffix}`,
+      position,
+      config:
+        clone.kind === "group"
+          ? {
+              ...clone.config,
+              child_source_ids: clone.config.child_source_ids
+                .map((childId) => sourceIdMap.get(childId))
+                .filter((childId): childId is string => Boolean(childId)),
+            }
+          : clone.config,
+      z_index: nextZIndex + index * 10,
+    } as SceneSource;
+  });
 }
 
 function findAvailableDuplicatePosition(

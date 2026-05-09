@@ -10,10 +10,15 @@ The runner executes:
 
 - `npm run test:scripts`
 - `npm run typecheck --workspaces --if-present`
+- `npm run smoke:visual`
 - `cargo fmt --all -- --check`
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo test --workspace`
 - `npm run app:build:windows`
+
+On non-Windows machines the same runner executes the cross-platform checks and
+skips only the Windows packaging step. Use a real Windows machine for the final
+installer build and launch validation.
 
 If Windows application control blocks Rust test binary execution, the runner
 falls back to `cargo test --workspace --no-run` to confirm the tests still

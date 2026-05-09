@@ -311,7 +311,9 @@ pub fn build_output_preflight_plan(
                 .map(|target| render_target_profile(target, recording_profile))
                 .collect::<Vec<_>>()
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            fallback_render_target_profiles(intent, recording_profile, stream_destinations)
+        });
     let recording_target = if matches!(
         intent,
         PipelineIntent::Recording | PipelineIntent::RecordingAndStream
@@ -480,6 +482,114 @@ fn render_target_profile(
             .map(|profile| profile.encoder_preference.clone())
             .unwrap_or(EncoderPreference::Auto),
         bitrate_kbps: target_bitrate_kbps(target.kind.clone(), recording_profile),
+    }
+}
+
+fn fallback_render_target_profiles(
+    intent: &PipelineIntent,
+    recording_profile: Option<&MediaProfile>,
+    stream_destinations: &[StreamDestination],
+) -> Vec<RenderTargetProfile> {
+    let width = recording_profile
+        .map(|profile| profile.resolution.width)
+        .unwrap_or(1920);
+    let height = recording_profile
+        .map(|profile| profile.resolution.height)
+        .unwrap_or(1080);
+    let framerate = recording_profile
+        .map(|profile| profile.framerate)
+        .unwrap_or(60);
+    let mut targets = vec![
+        fallback_render_target_profile(
+            "target-preview",
+            "Preview",
+            CompositorRenderTargetKind::Preview,
+            width,
+            height,
+            framerate,
+            recording_profile,
+        ),
+        fallback_render_target_profile(
+            "target-program",
+            "Program",
+            CompositorRenderTargetKind::Program,
+            width,
+            height,
+            framerate,
+            recording_profile,
+        ),
+    ];
+
+    if matches!(
+        intent,
+        PipelineIntent::Recording | PipelineIntent::RecordingAndStream
+    ) {
+        targets.push(fallback_render_target_profile(
+            "target-recording",
+            "Recording Output",
+            CompositorRenderTargetKind::Recording,
+            width,
+            height,
+            framerate,
+            recording_profile,
+        ));
+    }
+
+    if matches!(
+        intent,
+        PipelineIntent::Stream | PipelineIntent::RecordingAndStream
+    ) {
+        if stream_destinations.is_empty() {
+            targets.push(fallback_render_target_profile(
+                "target-stream",
+                "Stream Output",
+                CompositorRenderTargetKind::Stream,
+                width,
+                height,
+                framerate,
+                recording_profile,
+            ));
+        } else {
+            targets.extend(stream_destinations.iter().map(|destination| {
+                fallback_render_target_profile(
+                    format!("target-stream-{}", destination.id),
+                    format!("Stream Output: {}", destination.name),
+                    CompositorRenderTargetKind::Stream,
+                    width,
+                    height,
+                    framerate,
+                    recording_profile,
+                )
+            }));
+        }
+    }
+
+    targets
+}
+
+fn fallback_render_target_profile(
+    id: impl Into<String>,
+    name: impl Into<String>,
+    kind: CompositorRenderTargetKind,
+    width: u32,
+    height: u32,
+    framerate: u32,
+    recording_profile: Option<&MediaProfile>,
+) -> RenderTargetProfile {
+    RenderTargetProfile {
+        id: id.into(),
+        name: name.into(),
+        kind: kind.clone(),
+        width,
+        height,
+        framerate,
+        frame_format: CompositorFrameFormat::Bgra8,
+        scale_mode: CompositorScaleMode::Fit,
+        enabled: true,
+        encoder_preference: recording_profile
+            .map(|profile| profile.encoder_preference.clone())
+            .unwrap_or(EncoderPreference::Auto),
+        bitrate_kbps: target_bitrate_kbps(kind, recording_profile),
     }
 }
 
