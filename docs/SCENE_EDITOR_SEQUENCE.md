@@ -104,6 +104,12 @@ validation, capture/audio binding snapshots, SDK helpers, and API smoke coverage
 It still returns contract metadata only; real compositor execution and capture
 frames remain later phases.
 
+Phase D preview plumbing, covering steps 31-40, is now started in Designer with
+runtime preview-frame polling, manual frame refresh, loading/error state, frame
+metadata, diagnostics, and runtime-frame canvas drawing from backend contract
+frames. The preview still uses deterministic contract frames, not real captured
+pixels.
+
 ## Validation Contract
 
 Every chunk from step 4 onward must keep these gates green unless a platform

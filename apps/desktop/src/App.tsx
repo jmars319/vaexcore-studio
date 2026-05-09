@@ -79,6 +79,7 @@ import type {
   CaptureSourceSelection,
   CompositorGraph,
   CompositorNode,
+  CompositorRenderedFrame,
   ConnectedClient,
   HealthResponse,
   Marker,
@@ -91,6 +92,7 @@ import type {
   ProfilesSnapshot,
   RecordingContainer,
   RecordingHistoryEntry,
+  PreviewFrameResponse,
   Scene,
   SceneCollection,
   SceneCrop,
@@ -102,6 +104,8 @@ import type {
   SceneSourceFilter,
   SceneSourceFilterKind,
   SceneSourceKind,
+  SceneRuntimeBindingsSnapshot,
+  SceneRuntimeSnapshot,
   SceneTransition,
   StudioEvent,
   StudioStatus,
@@ -114,6 +118,7 @@ import {
   buildSceneTransitionPreviewPlan,
   createDefaultSceneCollection,
   createDefaultSceneSource,
+  createPreviewFrameRequest,
   platformLabels,
   sceneSourceKindLabels,
   validateCompositorGraph,
@@ -770,6 +775,20 @@ function designerShortcutMatches(
   return [shortcuts[action], ...(definition?.alternateCombos ?? [])].includes(combo);
 }
 
+function previewFrameRequestForScene(scene: Scene) {
+  return createPreviewFrameRequest(scene, {
+    request_id: `designer-preview-${Date.now()}`,
+    width: scene.canvas.width,
+    height: scene.canvas.height,
+    framerate: 30,
+    frame_format: "rgba8",
+    scale_mode: "fit",
+    encoding: "none",
+    include_debug_overlay: true,
+    requested_at: new Date().toISOString(),
+  });
+}
+
 function App() {
   const isSettingsWindow = useMemo(
     () => new URLSearchParams(window.location.search).get("window") === "settings",
@@ -810,6 +829,13 @@ function App() {
     microphone: PermissionStatus | null;
   }>({ camera: null, microphone: null });
   const [pipelinePlan, setPipelinePlan] = useState<MediaPipelinePlan | null>(null);
+  const [sceneRuntime, setSceneRuntime] = useState<SceneRuntimeSnapshot | null>(null);
+  const [sceneRuntimeBindings, setSceneRuntimeBindings] =
+    useState<SceneRuntimeBindingsSnapshot | null>(null);
+  const [previewFrame, setPreviewFrame] = useState<PreviewFrameResponse | null>(null);
+  const [previewPolling, setPreviewPolling] = useState(true);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const [suiteLaunchStatus, setSuiteLaunchStatus] = useState<string | null>(null);
   const [suiteStatus, setSuiteStatus] = useState<SuiteAppStatus[]>([]);
   const [suiteSession, setSuiteSession] = useState<SuiteSession | null>(null);
@@ -902,6 +928,8 @@ function App() {
           nextMarkers,
           nextMediaRunnerInfo,
           nextPipelinePlan,
+          nextSceneRuntime,
+          nextSceneRuntimeBindings,
           nextSuiteStatus,
           nextSuiteSession,
           nextSuiteTimeline,
@@ -916,6 +944,8 @@ function App() {
           StudioApi.markers(runtimeConfig, { limit: 20 }),
           loadMediaRunnerInfo(),
           StudioApi.mediaPlan(runtimeConfig),
+          StudioApi.sceneRuntime(runtimeConfig),
+          StudioApi.sceneRuntimeBindings(runtimeConfig),
           loadSuiteStatus(),
           loadSuiteSession(),
           loadSuiteTimeline(50),
@@ -931,6 +961,8 @@ function App() {
         setRecentMarkers(nextMarkers.markers);
         setMediaRunnerInfo(nextMediaRunnerInfo);
         setPipelinePlan(nextPipelinePlan);
+        setSceneRuntime(nextSceneRuntime);
+        setSceneRuntimeBindings(nextSceneRuntimeBindings);
         setSuiteStatus(nextSuiteStatus);
         setSuiteSession(nextSuiteSession);
         setPersistedSuiteTimeline(nextSuiteTimeline);
@@ -1075,6 +1107,76 @@ function App() {
         selectedSceneSourceIds.includes(source.id),
       )
     : [];
+
+  useEffect(() => {
+    if (!config || !activeDesignerScene || section !== "designer" || !previewPolling) {
+      return;
+    }
+
+    let cancelled = false;
+    const runtimeConfig = config;
+    const previewScene = activeDesignerScene;
+
+    async function refreshPreviewFrame() {
+      setPreviewLoading(true);
+      try {
+        const response = await StudioApi.previewFrame(
+          runtimeConfig,
+          previewFrameRequestForScene(previewScene),
+        );
+        if (cancelled) return;
+        setPreviewFrame(response);
+        setPreviewError(
+          response.validation.ready
+            ? null
+            : response.validation.errors.join("; ") || "Runtime preview not ready",
+        );
+      } catch (error) {
+        if (!cancelled) {
+          setPreviewError(
+            error instanceof Error ? error.message : "Runtime preview unavailable",
+          );
+        }
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    }
+
+    refreshPreviewFrame();
+    const interval = window.setInterval(refreshPreviewFrame, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [
+    activeDesignerScene,
+    config,
+    previewPolling,
+    section,
+  ]);
+
+  async function requestDesignerPreviewFrame() {
+    if (!config || !activeDesignerScene) return;
+    setPreviewLoading(true);
+    try {
+      const response = await StudioApi.previewFrame(
+        config,
+        previewFrameRequestForScene(activeDesignerScene),
+      );
+      setPreviewFrame(response);
+      setPreviewError(
+        response.validation.ready
+          ? null
+          : response.validation.errors.join("; ") || "Runtime preview not ready",
+      );
+    } catch (error) {
+      setPreviewError(
+        error instanceof Error ? error.message : "Runtime preview unavailable",
+      );
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
 
   async function refreshProfiles() {
     if (!config) return;
@@ -2386,6 +2488,12 @@ function App() {
             collection={designerSceneCollection}
             clipboardSource={designerSourceClipboard}
             dirty={sceneDirty}
+            previewError={previewError}
+            previewFrame={previewFrame}
+            previewLoading={previewLoading}
+            previewPolling={previewPolling}
+            runtime={sceneRuntime}
+            runtimeBindings={sceneRuntimeBindings}
             onCopySource={handleCopyDesignerSource}
             onCreateScene={handleCreateDesignerScene}
             onCreateSource={handleCreateDesignerSource}
@@ -2403,6 +2511,8 @@ function App() {
             onGroupSources={handleGroupDesignerSources}
             onImportCollection={handleImportSceneCollectionBundle}
             onPasteSource={handlePasteDesignerSource}
+            onPreviewPollingChange={setPreviewPolling}
+            onRequestPreviewFrame={requestDesignerPreviewFrame}
             onRenameScene={handleRenameDesignerScene}
             onResetCollection={handleResetDesignerCollection}
             onAlignSelection={handleAlignDesignerSelection}
@@ -2723,6 +2833,12 @@ function DesignerPage(props: {
   collection: SceneCollection;
   clipboardSource: SceneSource | null;
   dirty: boolean;
+  previewError: string | null;
+  previewFrame: PreviewFrameResponse | null;
+  previewLoading: boolean;
+  previewPolling: boolean;
+  runtime: SceneRuntimeSnapshot | null;
+  runtimeBindings: SceneRuntimeBindingsSnapshot | null;
   onCopySource: (sceneId: string, sourceId: string) => void;
   onCreateScene: () => void;
   onCreateSource: (
@@ -2748,6 +2864,8 @@ function DesignerPage(props: {
   onGroupSources: (sceneId: string, sourceIds: string[]) => void;
   onImportCollection: () => void;
   onPasteSource: (sceneId: string) => void;
+  onPreviewPollingChange: (enabled: boolean) => void;
+  onRequestPreviewFrame: () => void;
   onRenameScene: (sceneId: string, name: string) => void;
   onResetCollection: () => void;
   onAlignSelection: (
@@ -3074,12 +3192,16 @@ function DesignerPage(props: {
   ]);
 
   useEffect(() => {
-    drawCompositorPreview(
-      renderCanvasRef.current,
-      props.graph,
-      props.selectedSourceId,
-    );
-  }, [props.graph, props.selectedSourceId]);
+    if (props.previewFrame?.rendered_frame) {
+      drawRuntimePreviewFrame(
+        renderCanvasRef.current,
+        props.previewFrame.rendered_frame,
+        props.selectedSourceId,
+      );
+      return;
+    }
+    drawCompositorPreview(renderCanvasRef.current, props.graph, props.selectedSourceId);
+  }, [props.graph, props.previewFrame, props.selectedSourceId]);
 
   useEffect(() => {
     if (!transitionPreviewPlaying) return;
@@ -4318,6 +4440,25 @@ function DesignerPage(props: {
               />
               Safe
             </label>
+            <label className="check-row preview-toggle">
+              <input
+                checked={props.previewPolling}
+                onChange={(event) => props.onPreviewPollingChange(event.target.checked)}
+                type="checkbox"
+              />
+              Runtime
+            </label>
+            <button
+              aria-label="Request runtime preview frame"
+              className="icon-button compact"
+              disabled={props.previewLoading}
+              onClick={props.onRequestPreviewFrame}
+              title="Request runtime preview frame"
+              type="button"
+            >
+              <RefreshCw size={14} />
+            </button>
+            {props.previewLoading && <Pill tone="amber">Loading</Pill>}
           </div>
           <div className="designer-preview-viewport">
           <div
@@ -4550,13 +4691,26 @@ function DesignerPage(props: {
               </div>
             )}
             <div className="designer-preview-status">
-              <Pill tone={graphValidation.ready ? "green" : "amber"}>
-                {graphValidation.ready ? "Preview shell" : "Placeholder graph"}
+              <Pill tone={props.previewFrame?.validation.ready ? "green" : "amber"}>
+                {props.previewFrame ? "Runtime frame" : "Preview shell"}
+              </Pill>
+              <Pill
+                tone={
+                  props.runtime?.status === "active"
+                    ? "green"
+                    : props.runtime?.status === "error"
+                      ? "red"
+                      : "amber"
+                }
+              >
+                {props.runtime?.status ?? "runtime pending"}
               </Pill>
               <span>
-                {props.graph.nodes.filter((node) => node.visible).length} visible /{" "}
-                {props.graph.nodes.length} source nodes
+                {props.previewFrame
+                  ? `${props.previewFrame.width}x${props.previewFrame.height} frame ${props.previewFrame.frame_index}`
+                  : `${props.graph.nodes.filter((node) => node.visible).length} visible / ${props.graph.nodes.length} source nodes`}
               </span>
+              {props.previewError && <span>{props.previewError}</span>}
             </div>
           </div>
           </div>
@@ -4580,6 +4734,24 @@ function DesignerPage(props: {
                   ? `${graphValidation.warnings.length} warnings`
                   : "ready"
                 : `${graphValidation.errors.length} errors`
+            }
+          />
+          <KeyValue
+            label="Runtime"
+            value={
+              props.runtime
+                ? `${props.runtime.status} - ${props.runtime.active_scene_name}`
+                : "pending"
+            }
+          />
+          <KeyValue
+            label="Preview Frame"
+            value={
+              props.previewFrame
+                ? `${props.previewFrame.frame_index} / ${props.previewFrame.checksum ?? "no checksum"}`
+                : props.previewPolling
+                  ? "polling"
+                  : "paused"
             }
           />
         </div>
@@ -4715,6 +4887,71 @@ function DesignerPage(props: {
               ))}
             </div>
           )}
+        </div>
+        <div className="designer-preview-diagnostics">
+          <div className="designer-validation-header">
+            <Activity size={16} />
+            <div>
+              <strong>Runtime Preview Diagnostics</strong>
+              <span>
+                {props.previewFrame
+                  ? `${props.previewFrame.rendered_frame?.targets.length ?? 0} target(s), ${props.previewFrame.render_time_ms} ms`
+                  : props.previewPolling
+                    ? "Waiting for runtime frame"
+                    : "Runtime polling paused"}
+              </span>
+            </div>
+            <Pill tone={props.previewFrame?.validation.ready ? "green" : "amber"}>
+              {props.previewFrame?.validation.ready ? "ready" : "contract"}
+            </Pill>
+          </div>
+          {props.previewFrame ? (
+            <div className="designer-preview-meta">
+              <KeyValue
+                label="Generated"
+                value={formatSuiteTimestamp(props.previewFrame.generated_at)}
+              />
+              <KeyValue
+                label="Checksum"
+                value={props.previewFrame.checksum ?? "none"}
+              />
+              <KeyValue
+                label="Format"
+                value={`${props.previewFrame.frame_format} / ${props.previewFrame.encoding}`}
+              />
+              <KeyValue
+                label="Targets"
+                value={
+                  props.previewFrame.rendered_frame?.targets
+                    .map((target) => `${target.target_kind}:${target.width}x${target.height}`)
+                    .join(", ") ?? "none"
+                }
+              />
+            </div>
+          ) : (
+            <div className="empty compact-empty">No runtime preview frame yet</div>
+          )}
+          {props.previewFrame &&
+            (props.previewFrame.validation.errors.length > 0 ||
+              props.previewFrame.validation.warnings.length > 0) && (
+              <div className="designer-validation-list">
+                {props.previewFrame.validation.errors.map((message) => (
+                  <div className="validation-issue" key={`preview-error-${message}`}>
+                    <code>preview</code>
+                    <span>{message}</span>
+                  </div>
+                ))}
+                {props.previewFrame.validation.warnings.map((message) => (
+                  <div
+                    className="validation-issue warning"
+                    key={`preview-warning-${message}`}
+                  >
+                    <code>preview</code>
+                    <span>{message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
         </div>
       </section>
 
@@ -7813,6 +8050,114 @@ function drawCompositorPreview(
   graph.nodes
     .filter((node) => node.visible)
     .forEach((node) => drawCompositorNode(context, graph, node, selectedSourceId));
+}
+
+function drawRuntimePreviewFrame(
+  canvas: HTMLCanvasElement | null,
+  frame: CompositorRenderedFrame,
+  selectedSourceId: string,
+) {
+  if (!canvas) return;
+  const context = canvas.getContext("2d");
+  const target = frame.targets[0];
+  if (!context || !target) return;
+
+  canvas.width = Math.max(1, target.width);
+  canvas.height = Math.max(1, target.height);
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "#050711";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  context.save();
+  context.strokeStyle = "rgba(255, 255, 255, 0.055)";
+  context.lineWidth = 1;
+  const gridSize = Math.max(64, Math.round(target.width / 24));
+  for (let x = gridSize; x < target.width; x += gridSize) {
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, target.height);
+    context.stroke();
+  }
+  for (let y = gridSize; y < target.height; y += gridSize) {
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(target.width, y);
+    context.stroke();
+  }
+  context.restore();
+
+  target.nodes.forEach((node) =>
+    drawRuntimePreviewNode(context, node, selectedSourceId),
+  );
+}
+
+function drawRuntimePreviewNode(
+  context: CanvasRenderingContext2D,
+  node: CompositorRenderedFrame["targets"][number]["nodes"][number],
+  selectedSourceId: string,
+) {
+  const width = Math.max(1, node.rect.width);
+  const height = Math.max(1, node.rect.height);
+  const selected = node.source_id === selectedSourceId;
+
+  context.save();
+  context.translate(node.rect.x + width / 2, node.rect.y + height / 2);
+  context.rotate((node.rotation_degrees * Math.PI) / 180);
+  context.globalAlpha = clamp(node.opacity, 0, 1);
+  context.fillStyle = runtimeNodeFill(node.role);
+  context.strokeStyle = selected ? "#39d9ff" : runtimeNodeStroke(node.status);
+  context.lineWidth = selected ? 6 : 3;
+  context.fillRect(-width / 2, -height / 2, width, height);
+  context.strokeRect(-width / 2, -height / 2, width, height);
+
+  if (node.status !== "ready") {
+    context.strokeStyle = "rgba(255, 255, 255, 0.16)";
+    context.lineWidth = 2;
+    const spacing = Math.max(24, Math.min(72, width / 8));
+    for (let offset = -height; offset < width; offset += spacing) {
+      context.beginPath();
+      context.moveTo(-width / 2 + offset, height / 2);
+      context.lineTo(-width / 2 + offset + height, -height / 2);
+      context.stroke();
+    }
+  }
+
+  const labelInset = Math.max(12, Math.min(24, width * 0.04));
+  const labelSize = Math.max(18, Math.min(38, height * 0.12));
+  context.globalAlpha = 1;
+  context.fillStyle = "#f4f8ff";
+  context.font = `700 ${labelSize}px Inter, system-ui, sans-serif`;
+  context.textBaseline = "top";
+  context.fillText(
+    node.name,
+    -width / 2 + labelInset,
+    -height / 2 + labelInset,
+    Math.max(48, width - labelInset * 2),
+  );
+  context.font = `500 ${Math.max(14, labelSize * 0.58)}px Inter, system-ui, sans-serif`;
+  context.fillStyle = "rgba(244, 248, 255, 0.72)";
+  context.fillText(
+    `${node.role} - ${node.status}`,
+    -width / 2 + labelInset,
+    -height / 2 + labelInset + labelSize + 8,
+    Math.max(48, width - labelInset * 2),
+  );
+  context.restore();
+}
+
+function runtimeNodeFill(role: string): string {
+  if (role === "video") return "rgba(36, 89, 204, 0.62)";
+  if (role === "audio") return "rgba(33, 180, 145, 0.58)";
+  if (role === "text") return "rgba(188, 78, 230, 0.55)";
+  if (role === "group") return "rgba(130, 145, 175, 0.42)";
+  return "rgba(207, 132, 42, 0.52)";
+}
+
+function runtimeNodeStroke(status: string): string {
+  if (status === "permission_required") return "rgba(255, 210, 122, 0.86)";
+  if (status === "unavailable") return "rgba(255, 105, 128, 0.82)";
+  if (status === "placeholder") return "rgba(170, 188, 214, 0.76)";
+  return "rgba(255, 255, 255, 0.28)";
 }
 
 function drawCompositorNode(

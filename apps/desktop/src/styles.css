@@ -1197,6 +1197,20 @@ nav {
   background: rgba(117, 240, 207, 0.06);
 }
 
+.designer-preview-diagnostics {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid rgba(34, 216, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(34, 216, 255, 0.055);
+}
+
+.designer-preview-diagnostics .designer-preview-meta {
+  margin-top: 0;
+}
+
 .designer-validation-header {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
