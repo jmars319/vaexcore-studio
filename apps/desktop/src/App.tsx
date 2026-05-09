@@ -22,6 +22,7 @@ import {
   Globe,
   Group,
   Image as ImageIcon,
+  Keyboard,
   Layers,
   Link2,
   ListChecks,
@@ -61,6 +62,7 @@ import {
   CSSProperties,
   DragEvent as ReactDragEvent,
   FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
   ReactNode,
   useEffect,
@@ -287,8 +289,209 @@ type SceneUpdateOptions = {
   historyGroup?: string;
 };
 
+type DesignerShortcutAction =
+  | "save"
+  | "undo"
+  | "redo"
+  | "copy"
+  | "paste"
+  | "selectAll"
+  | "duplicate"
+  | "delete"
+  | "clearSelection"
+  | "group"
+  | "ungroup"
+  | "toggleVisible"
+  | "toggleLocked"
+  | "bringToFront"
+  | "sendToBack"
+  | "nudgeLeft"
+  | "nudgeRight"
+  | "nudgeUp"
+  | "nudgeDown"
+  | "nudgeLeftCoarse"
+  | "nudgeRightCoarse"
+  | "nudgeUpCoarse"
+  | "nudgeDownCoarse"
+  | "rotateLeft"
+  | "rotateRight";
+
+type DesignerShortcutDefinition = {
+  action: DesignerShortcutAction;
+  label: string;
+  description: string;
+  defaultCombo: string;
+  alternateCombos?: string[];
+};
+
+type DesignerShortcutMap = Record<DesignerShortcutAction, string>;
+
 const designerHistoryLimit = 50;
 const designerSnapThreshold = 12;
+const designerShortcutStorageKey = "vaexcore.studio.designer.shortcuts.v1";
+
+const designerShortcutDefinitions: DesignerShortcutDefinition[] = [
+  {
+    action: "save",
+    label: "Save scene collection",
+    description: "Persist current scenes through Studio API.",
+    defaultCombo: "mod+s",
+  },
+  {
+    action: "undo",
+    label: "Undo",
+    description: "Step back through Designer edit history.",
+    defaultCombo: "mod+z",
+  },
+  {
+    action: "redo",
+    label: "Redo",
+    description: "Step forward through Designer edit history.",
+    defaultCombo: "mod+shift+z",
+    alternateCombos: ["mod+y"],
+  },
+  {
+    action: "copy",
+    label: "Copy source",
+    description: "Copy the selected source into Designer clipboard.",
+    defaultCombo: "mod+c",
+  },
+  {
+    action: "paste",
+    label: "Paste source",
+    description: "Paste the copied source into the active scene.",
+    defaultCombo: "mod+v",
+  },
+  {
+    action: "selectAll",
+    label: "Select all visible stack sources",
+    description: "Select all sources shown in the current stack view.",
+    defaultCombo: "mod+a",
+  },
+  {
+    action: "duplicate",
+    label: "Duplicate selected source",
+    description: "Duplicate the primary selected source.",
+    defaultCombo: "mod+d",
+  },
+  {
+    action: "delete",
+    label: "Delete selection",
+    description: "Delete selected unlocked sources.",
+    defaultCombo: "delete",
+    alternateCombos: ["backspace"],
+  },
+  {
+    action: "clearSelection",
+    label: "Clear selection",
+    description: "Deselect all selected sources.",
+    defaultCombo: "escape",
+  },
+  {
+    action: "group",
+    label: "Group selection",
+    description: "Create a group from selected unlocked non-group sources.",
+    defaultCombo: "mod+g",
+  },
+  {
+    action: "ungroup",
+    label: "Ungroup selection",
+    description: "Ungroup selected group sources.",
+    defaultCombo: "mod+shift+g",
+  },
+  {
+    action: "toggleVisible",
+    label: "Toggle visibility",
+    description: "Show or hide selected sources.",
+    defaultCombo: "mod+shift+h",
+  },
+  {
+    action: "toggleLocked",
+    label: "Toggle lock",
+    description: "Lock or unlock selected sources.",
+    defaultCombo: "mod+l",
+  },
+  {
+    action: "bringToFront",
+    label: "Bring to front",
+    description: "Move selected sources to the front of the stack.",
+    defaultCombo: "mod+]",
+  },
+  {
+    action: "sendToBack",
+    label: "Send to back",
+    description: "Move selected sources to the back of the stack.",
+    defaultCombo: "mod+[",
+  },
+  {
+    action: "nudgeLeft",
+    label: "Nudge left",
+    description: "Move selected sources left by 1 px.",
+    defaultCombo: "arrowleft",
+  },
+  {
+    action: "nudgeRight",
+    label: "Nudge right",
+    description: "Move selected sources right by 1 px.",
+    defaultCombo: "arrowright",
+  },
+  {
+    action: "nudgeUp",
+    label: "Nudge up",
+    description: "Move selected sources up by 1 px.",
+    defaultCombo: "arrowup",
+  },
+  {
+    action: "nudgeDown",
+    label: "Nudge down",
+    description: "Move selected sources down by 1 px.",
+    defaultCombo: "arrowdown",
+  },
+  {
+    action: "nudgeLeftCoarse",
+    label: "Nudge left 10 px",
+    description: "Move selected sources left by 10 px.",
+    defaultCombo: "shift+arrowleft",
+  },
+  {
+    action: "nudgeRightCoarse",
+    label: "Nudge right 10 px",
+    description: "Move selected sources right by 10 px.",
+    defaultCombo: "shift+arrowright",
+  },
+  {
+    action: "nudgeUpCoarse",
+    label: "Nudge up 10 px",
+    description: "Move selected sources up by 10 px.",
+    defaultCombo: "shift+arrowup",
+  },
+  {
+    action: "nudgeDownCoarse",
+    label: "Nudge down 10 px",
+    description: "Move selected sources down by 10 px.",
+    defaultCombo: "shift+arrowdown",
+  },
+  {
+    action: "rotateLeft",
+    label: "Rotate left",
+    description: "Rotate selected sources counter-clockwise by 1 degree.",
+    defaultCombo: "[",
+  },
+  {
+    action: "rotateRight",
+    label: "Rotate right",
+    description: "Rotate selected sources clockwise by 1 degree.",
+    defaultCombo: "]",
+  },
+];
+
+const defaultDesignerShortcutMap = designerShortcutDefinitions.reduce(
+  (shortcuts, definition) => ({
+    ...shortcuts,
+    [definition.action]: definition.defaultCombo,
+  }),
+  {} as DesignerShortcutMap,
+);
 
 const sourceCreatePresets: SourceCreatePreset[] = [
   {
@@ -455,6 +658,116 @@ function hostFromUrl(url: string, fallback: string): string {
   } catch {
     return fallback;
   }
+}
+
+function loadDesignerShortcutMap(): DesignerShortcutMap {
+  if (typeof window === "undefined") return defaultDesignerShortcutMap;
+
+  try {
+    const raw = window.localStorage.getItem(designerShortcutStorageKey);
+    if (!raw) return defaultDesignerShortcutMap;
+    const parsed = JSON.parse(raw) as Partial<Record<DesignerShortcutAction, string>>;
+    return designerShortcutDefinitions.reduce(
+      (shortcuts, definition) => ({
+        ...shortcuts,
+        [definition.action]:
+          normalizeDesignerShortcutCombo(parsed[definition.action]) ??
+          definition.defaultCombo,
+      }),
+      {} as DesignerShortcutMap,
+    );
+  } catch {
+    return defaultDesignerShortcutMap;
+  }
+}
+
+function saveDesignerShortcutMap(shortcuts: DesignerShortcutMap) {
+  try {
+    window.localStorage.setItem(
+      designerShortcutStorageKey,
+      JSON.stringify(shortcuts),
+    );
+  } catch {
+    // Local shortcut persistence is best-effort and should never block editing.
+  }
+}
+
+function normalizeDesignerShortcutCombo(combo: unknown) {
+  if (typeof combo !== "string") return null;
+  const parts = combo
+    .toLowerCase()
+    .split("+")
+    .map((part) => normalizeDesignerShortcutKey(part.trim()))
+    .filter(Boolean);
+  const key = parts.at(-1);
+  if (!key || ["mod", "shift", "alt"].includes(key)) return null;
+
+  const modifiers = ["mod", "alt", "shift"].filter((modifier) =>
+    parts.includes(modifier),
+  );
+  return [...modifiers, key].join("+");
+}
+
+function designerShortcutComboFromEvent(
+  event: KeyboardEvent | ReactKeyboardEvent,
+) {
+  const key = normalizeDesignerShortcutKey(event.key);
+  if (!key || ["meta", "control", "shift", "alt"].includes(key)) return null;
+
+  return [
+    event.metaKey || event.ctrlKey ? "mod" : "",
+    event.altKey ? "alt" : "",
+    event.shiftKey ? "shift" : "",
+    key,
+  ]
+    .filter(Boolean)
+    .join("+");
+}
+
+function normalizeDesignerShortcutKey(key: string) {
+  const normalized = key.toLowerCase();
+  if (normalized === "cmd" || normalized === "command" || normalized === "ctrl") {
+    return "mod";
+  }
+  if (normalized === "option") return "alt";
+  if (normalized === " ") return "space";
+  if (normalized === "{") return "[";
+  if (normalized === "}") return "]";
+  if (normalized === "esc") return "escape";
+  if (normalized === "del") return "delete";
+  return normalized;
+}
+
+function formatDesignerShortcutCombo(combo: string) {
+  return combo
+    .split("+")
+    .map((part) => {
+      if (part === "mod") return "Cmd/Ctrl";
+      if (part === "alt") return "Alt";
+      if (part === "shift") return "Shift";
+      if (part === "arrowleft") return "Left";
+      if (part === "arrowright") return "Right";
+      if (part === "arrowup") return "Up";
+      if (part === "arrowdown") return "Down";
+      if (part.length === 1) return part.toUpperCase();
+      return part.charAt(0).toUpperCase() + part.slice(1);
+    })
+    .join(" + ");
+}
+
+function designerShortcutDefinition(action: DesignerShortcutAction) {
+  return designerShortcutDefinitions.find((definition) => definition.action === action);
+}
+
+function designerShortcutMatches(
+  event: KeyboardEvent,
+  action: DesignerShortcutAction,
+  shortcuts: DesignerShortcutMap,
+) {
+  const combo = designerShortcutComboFromEvent(event);
+  if (!combo) return false;
+  const definition = designerShortcutDefinition(action);
+  return [shortcuts[action], ...(definition?.alternateCombos ?? [])].includes(combo);
 }
 
 function App() {
@@ -2531,6 +2844,11 @@ function DesignerPage(props: {
   const [transitionPreviewPlaying, setTransitionPreviewPlaying] =
     useState(false);
   const [transitionPreviewProgress, setTransitionPreviewProgress] = useState(0);
+  const [shortcutBindings, setShortcutBindings] =
+    useState<DesignerShortcutMap>(() => loadDesignerShortcutMap());
+  const [listeningShortcutAction, setListeningShortcutAction] =
+    useState<DesignerShortcutAction | null>(null);
+  const [shortcutMessage, setShortcutMessage] = useState<string | null>(null);
   const selectedSourceIds = props.selectedSourceIds.filter((sourceId) =>
     props.scene.sources.some((source) => source.id === sourceId),
   );
@@ -2567,11 +2885,10 @@ function DesignerPage(props: {
 
   useEffect(() => {
     function handleDesignerKeyDown(event: KeyboardEvent) {
+      if (listeningShortcutAction) return;
       if (isEditableEventTarget(event.target)) return;
-      const key = event.key.toLowerCase();
-      const commandKey = event.metaKey || event.ctrlKey;
 
-      if (commandKey && key === "s") {
+      if (designerShortcutMatches(event, "save", shortcutBindings)) {
         event.preventDefault();
         if (validation.ok && props.dirty) {
           props.onSave();
@@ -2579,89 +2896,157 @@ function DesignerPage(props: {
         return;
       }
 
-      if (commandKey && key === "z") {
+      if (designerShortcutMatches(event, "undo", shortcutBindings)) {
         event.preventDefault();
-        if (event.shiftKey) {
-          if (props.canRedo) props.onRedo();
-        } else if (props.canUndo) {
-          props.onUndo();
-        }
+        if (props.canUndo) props.onUndo();
         return;
       }
 
-      if (commandKey && key === "y") {
+      if (designerShortcutMatches(event, "redo", shortcutBindings)) {
         event.preventDefault();
         if (props.canRedo) props.onRedo();
         return;
       }
 
-      if (commandKey && key === "c" && props.selectedSource) {
+      if (
+        designerShortcutMatches(event, "copy", shortcutBindings) &&
+        props.selectedSource
+      ) {
         event.preventDefault();
         props.onCopySource(props.scene.id, props.selectedSource.id);
         return;
       }
 
-      if (commandKey && key === "v") {
+      if (designerShortcutMatches(event, "paste", shortcutBindings)) {
         event.preventDefault();
         if (props.clipboardSource) props.onPasteSource(props.scene.id);
         return;
       }
 
-      if (commandKey && key === "a") {
+      if (designerShortcutMatches(event, "selectAll", shortcutBindings)) {
         event.preventDefault();
         props.onSelectSources(sourceTree.map((item) => item.source.id));
         return;
       }
 
-      if (commandKey && key === "d" && props.selectedSource) {
+      if (
+        designerShortcutMatches(event, "duplicate", shortcutBindings) &&
+        props.selectedSource
+      ) {
         event.preventDefault();
         props.onDuplicateSource(props.scene.id, props.selectedSource.id);
         return;
       }
 
-      if (event.key === "Escape" && selectedSourceIds.length > 0) {
+      if (
+        designerShortcutMatches(event, "group", shortcutBindings) &&
+        canGroupSelection
+      ) {
+        event.preventDefault();
+        props.onGroupSources(props.scene.id, selectedSourceIds);
+        return;
+      }
+
+      if (
+        designerShortcutMatches(event, "ungroup", shortcutBindings) &&
+        hasGroupSelection
+      ) {
+        event.preventDefault();
+        props.onUngroupSources(props.scene.id, selectedSourceIds);
+        return;
+      }
+
+      if (
+        designerShortcutMatches(event, "clearSelection", shortcutBindings) &&
+        selectedSourceIds.length > 0
+      ) {
         event.preventDefault();
         props.onSelectSources([]);
         return;
       }
 
-      if (selectedSourceIds.length > 0 && event.key.startsWith("Arrow")) {
-        const nudge = event.shiftKey ? 10 : 1;
-        const delta =
-          event.key === "ArrowLeft"
-            ? { x: -nudge, y: 0 }
-            : event.key === "ArrowRight"
-              ? { x: nudge, y: 0 }
-              : event.key === "ArrowUp"
-                ? { x: 0, y: -nudge }
-                : event.key === "ArrowDown"
-                  ? { x: 0, y: nudge }
-                  : null;
-        if (delta) {
-          event.preventDefault();
-          nudgeDesignerSelection(
-            delta.x,
-            delta.y,
-            `keyboard:nudge:${event.timeStamp}`,
-          );
-          return;
-        }
-      }
-
-      if (selectedSourceIds.length > 0 && (event.key === "[" || event.key === "]")) {
+      if (
+        selectedSourceIds.length > 0 &&
+        designerShortcutMatches(event, "toggleVisible", shortcutBindings)
+      ) {
         event.preventDefault();
-        const step = event.shiftKey ? 15 : 1;
-        props.onRotateSelection(
-          props.scene.id,
-          selectedSourceIds,
-          event.key === "]" ? step : -step,
+        setSelectionVisibility(
+          selectedSceneSources.some((source) => !source.visible),
         );
         return;
       }
 
       if (
         selectedSourceIds.length > 0 &&
-        (event.key === "Delete" || event.key === "Backspace")
+        designerShortcutMatches(event, "toggleLocked", shortcutBindings)
+      ) {
+        event.preventDefault();
+        setSelectionLock(selectedSceneSources.some((source) => !source.locked));
+        return;
+      }
+
+      if (
+        selectedSourceIds.length > 0 &&
+        designerShortcutMatches(event, "bringToFront", shortcutBindings)
+      ) {
+        event.preventDefault();
+        setSelectionZOrder("front");
+        return;
+      }
+
+      if (
+        selectedSourceIds.length > 0 &&
+        designerShortcutMatches(event, "sendToBack", shortcutBindings)
+      ) {
+        event.preventDefault();
+        setSelectionZOrder("back");
+        return;
+      }
+
+      const nudgeShortcutActions: Array<[DesignerShortcutAction, number, number]> = [
+        ["nudgeLeftCoarse", -10, 0],
+        ["nudgeRightCoarse", 10, 0],
+        ["nudgeUpCoarse", 0, -10],
+        ["nudgeDownCoarse", 0, 10],
+        ["nudgeLeft", -1, 0],
+        ["nudgeRight", 1, 0],
+        ["nudgeUp", 0, -1],
+        ["nudgeDown", 0, 1],
+      ];
+      const nudgeAction = nudgeShortcutActions.find(([action]) =>
+        designerShortcutMatches(event, action, shortcutBindings),
+      );
+      if (selectedSourceIds.length > 0 && nudgeAction) {
+        event.preventDefault();
+        nudgeDesignerSelection(
+          nudgeAction[1],
+          nudgeAction[2],
+          `keyboard:nudge:${event.timeStamp}`,
+        );
+        return;
+      }
+
+      if (
+        selectedSourceIds.length > 0 &&
+        designerShortcutMatches(event, "rotateLeft", shortcutBindings)
+      ) {
+        event.preventDefault();
+        props.onRotateSelection(props.scene.id, selectedSourceIds, -1);
+        return;
+      }
+
+      if (
+        selectedSourceIds.length > 0 &&
+        designerShortcutMatches(event, "rotateRight", shortcutBindings)
+      ) {
+        event.preventDefault();
+        props.onRotateSelection(props.scene.id, selectedSourceIds, 1);
+        return;
+      }
+
+      if (
+        selectedSourceIds.length > 0 &&
+        designerShortcutMatches(event, "delete", shortcutBindings)
       ) {
         event.preventDefault();
         props.onDeleteSources(props.scene.id, selectedSourceIds);
@@ -2678,7 +3063,12 @@ function DesignerPage(props: {
     props.dirty,
     props.scene.id,
     props.selectedSource,
+    canGroupSelection,
+    hasGroupSelection,
+    listeningShortcutAction,
+    selectedSceneSources,
     selectedSourceIds,
+    shortcutBindings,
     sourceTree,
     validation.ok,
   ]);
@@ -2722,6 +3112,55 @@ function DesignerPage(props: {
       setIsolatedGroupId(null);
     }
   }, [isolatedGroupId, props.scene.sources]);
+
+  function handleShortcutRebindKeyDown(
+    event: ReactKeyboardEvent,
+    action: DesignerShortcutAction,
+  ) {
+    if (listeningShortcutAction !== action) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.key === "Escape") {
+      setListeningShortcutAction(null);
+      setShortcutMessage("Shortcut capture cancelled.");
+      return;
+    }
+
+    const combo = designerShortcutComboFromEvent(event);
+    if (!combo) {
+      setShortcutMessage("Press a full shortcut, not only a modifier key.");
+      return;
+    }
+
+    const conflict = designerShortcutDefinitions.find(
+      (definition) =>
+        definition.action !== action &&
+        shortcutBindings[definition.action] === combo,
+    );
+
+    if (conflict) {
+      setShortcutMessage(
+        `${formatDesignerShortcutCombo(combo)} is already assigned to ${conflict.label}.`,
+      );
+      return;
+    }
+
+    const next = { ...shortcutBindings, [action]: combo };
+    setShortcutBindings(next);
+    saveDesignerShortcutMap(next);
+    setListeningShortcutAction(null);
+    setShortcutMessage(
+      `${designerShortcutDefinition(action)?.label ?? "Shortcut"} set to ${formatDesignerShortcutCombo(combo)}.`,
+    );
+  }
+
+  function resetDesignerShortcuts() {
+    setShortcutBindings(defaultDesignerShortcutMap);
+    saveDesignerShortcutMap(defaultDesignerShortcutMap);
+    setListeningShortcutAction(null);
+    setShortcutMessage("Designer shortcuts reset to defaults.");
+  }
 
   function toggleGroupCollapse(groupId: string) {
     setCollapsedGroupIds((current) =>
@@ -3746,6 +4185,18 @@ function DesignerPage(props: {
             )}
           </div>
         </section>
+
+        <DesignerShortcutPanel
+          bindings={shortcutBindings}
+          listeningAction={listeningShortcutAction}
+          message={shortcutMessage}
+          onListen={(action) => {
+            setListeningShortcutAction(action);
+            setShortcutMessage("Press the shortcut to assign, or Escape to cancel.");
+          }}
+          onReset={resetDesignerShortcuts}
+          onShortcutKeyDown={handleShortcutRebindKeyDown}
+        />
       </div>
 
       <section className="panel designer-preview-panel">
@@ -4848,6 +5299,70 @@ function DesignerPage(props: {
         )}
       </section>
     </div>
+  );
+}
+
+function DesignerShortcutPanel(props: {
+  bindings: DesignerShortcutMap;
+  listeningAction: DesignerShortcutAction | null;
+  message: string | null;
+  onListen: (action: DesignerShortcutAction) => void;
+  onReset: () => void;
+  onShortcutKeyDown: (
+    event: ReactKeyboardEvent,
+    action: DesignerShortcutAction,
+  ) => void;
+}) {
+  return (
+    <section
+      className="panel designer-shortcuts-panel"
+      data-testid="designer-shortcuts-panel"
+    >
+      <PanelTitle
+        action={
+          <button
+            className="secondary-button compact"
+            onClick={props.onReset}
+            type="button"
+          >
+            <RotateCcw size={14} />
+            Reset
+          </button>
+        }
+        title="Shortcuts"
+      />
+      <div className="designer-shortcut-list">
+        {designerShortcutDefinitions.map((definition) => {
+          const listening = props.listeningAction === definition.action;
+          return (
+            <div className="designer-shortcut-row" key={definition.action}>
+              <div>
+                <strong>{definition.label}</strong>
+                <span>{definition.description}</span>
+              </div>
+              <button
+                autoFocus={listening}
+                className={listening ? "shortcut-capture active" : "shortcut-capture"}
+                data-shortcut-action={definition.action}
+                onClick={() => props.onListen(definition.action)}
+                onKeyDown={(event) =>
+                  props.onShortcutKeyDown(event, definition.action)
+                }
+                type="button"
+              >
+                <Keyboard size={13} />
+                {listening
+                  ? "Listening"
+                  : formatDesignerShortcutCombo(props.bindings[definition.action])}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {props.message && (
+        <div className="designer-shortcut-message">{props.message}</div>
+      )}
+    </section>
   );
 }
 

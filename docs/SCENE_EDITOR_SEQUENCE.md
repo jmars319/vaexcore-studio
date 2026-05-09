@@ -70,8 +70,10 @@ foundation to OBS-class scene editing and output.
     current scene collection and retain the newest 10 backups. Designer-facing
     file picker UX is not started.
 25. Hotkeys and workflow shortcuts: started with Designer-level save,
-    undo/redo, selected-source delete, copy, paste, and duplicate shortcuts.
-    Full configurable hotkeys and app-wide shortcut routing are not started.
+    undo/redo, selected-source delete, copy, paste, duplicate, grouping,
+    visibility/lock, z-order, nudge, and rotate shortcuts. Designer shortcuts
+    now have a local configurable shortcut panel; app-wide shortcut routing is
+    not started.
 26. Active-scene recording and streaming integration: started with API launch
     requests carrying the active scene into recording/streaming engines and
     start events reporting active scene identity. Real capture-backed

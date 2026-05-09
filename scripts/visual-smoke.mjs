@@ -46,6 +46,12 @@ const targets = [
       },
       {
         type: "assert",
+        expression:
+          'Boolean(document.querySelector("[data-testid=\\"designer-shortcuts-panel\\"]"))',
+        message: "Designer shortcuts panel did not render.",
+      },
+      {
+        type: "assert",
         expression: 'Boolean(document.querySelector(".designer-preview-toolbar"))',
         message: "Designer preview toolbar did not render.",
       },
@@ -366,6 +372,7 @@ async function createCdpClient(webSocketDebuggerUrl) {
       const request = pending.get(message.id);
       if (!request) return;
       pending.delete(message.id);
+      clearTimeout(request.timeout);
       if (message.error) {
         request.reject(new Error(message.error.message));
       } else {
@@ -383,6 +390,11 @@ async function createCdpClient(webSocketDebuggerUrl) {
 
   return {
     close() {
+      for (const request of pending.values()) {
+        clearTimeout(request.timeout);
+        request.reject(new Error("CDP socket closed before a response arrived."));
+      }
+      pending.clear();
       socket.close();
     },
     send(method, params = {}) {
@@ -390,7 +402,11 @@ async function createCdpClient(webSocketDebuggerUrl) {
       nextId += 1;
       socket.send(JSON.stringify({ id, method, params }));
       return new Promise((resolveSend, reject) => {
-        pending.set(id, { resolve: resolveSend, reject });
+        const timeout = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error(`Timed out waiting for CDP response: ${method}`));
+        }, 10_000);
+        pending.set(id, { resolve: resolveSend, reject, timeout });
       });
     },
     waitForEvent(method, timeoutMs) {

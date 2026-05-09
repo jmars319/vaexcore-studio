@@ -533,6 +533,66 @@ nav {
   white-space: nowrap;
 }
 
+.designer-shortcuts-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.designer-shortcut-list {
+  display: grid;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.designer-shortcut-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #0b0c13;
+}
+
+.designer-shortcut-row strong,
+.designer-shortcut-row span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.designer-shortcut-row span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.shortcut-capture {
+  gap: 6px;
+  min-width: 104px;
+  min-height: 30px;
+  padding: 6px 8px;
+  background: rgba(34, 216, 255, 0.08);
+  color: var(--cyan);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
+.shortcut-capture.active {
+  border-color: rgba(117, 240, 207, 0.78);
+  background: rgba(117, 240, 207, 0.12);
+  color: var(--green);
+}
+
+.designer-shortcut-message {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .source-create-card small,
 .capture-candidate-create small {
   color: var(--muted);
