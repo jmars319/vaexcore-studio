@@ -416,8 +416,51 @@ nav {
 }
 
 .source-stack-item {
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: stretch;
+}
+
+.source-stack-item .source-stack-actions {
+  grid-column: 2;
+}
+
+.source-stack-root-drop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px dashed rgba(34, 216, 255, 0.32);
+  border-radius: 8px;
+  background: rgba(34, 216, 255, 0.06);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.source-stack-root-drop svg {
+  color: var(--cyan);
+}
+
+.source-stack-root-drop .secondary-button {
+  margin-left: auto;
+}
+
+.source-stack-tree-toggle {
+  align-self: start;
+  margin-top: 1px;
+}
+
+.source-stack-tree-toggle:disabled {
+  opacity: 0.2;
+}
+
+.source-stack-item.nested-source-stack-item {
+  border-color: rgba(148, 163, 184, 0.16);
+}
+
+.source-stack-item.inherited-hidden,
+.source-stack-item.inherited-locked {
+  background: #090a11;
 }
 
 .source-add-controls {

@@ -6,6 +6,8 @@ import {
   ArrowUp,
   Cable,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   ClipboardCopy,
   ClipboardPaste,
   Copy,
@@ -202,6 +204,21 @@ const sceneSourceBoundsModeLabels: Record<SceneSourceBoundsMode, string> = {
 };
 
 type SceneRect = ScenePoint & SceneSize;
+
+type SourceStackTreeItem = {
+  children: SourceStackTreeItem[];
+  depth: number;
+  parentId: string | null;
+  source: SceneSource;
+};
+
+type SourceEffectiveState = {
+  locked: boolean;
+  visible: boolean;
+  inheritedLocked: boolean;
+  inheritedHidden: boolean;
+  parentId: string | null;
+};
 
 type DesignerDragSourceState = {
   id: string;
@@ -1304,6 +1321,89 @@ function App() {
     }));
   }
 
+  function handleSetDesignerSourceParent(
+    sceneId: string,
+    sourceId: string,
+    parentGroupId: string | null,
+  ) {
+    updateDesignerCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) => {
+        if (scene.id !== sceneId) return scene;
+        const source = scene.sources.find((item) => item.id === sourceId);
+        const nextParent = parentGroupId
+          ? scene.sources.find((item) => item.id === parentGroupId)
+          : null;
+        if (!source || source.locked) return scene;
+        if (parentGroupId && (!nextParent || nextParent.kind !== "group" || nextParent.locked)) {
+          return scene;
+        }
+        if (parentGroupId === sourceId || groupWouldCreateCycle(scene, sourceId, parentGroupId)) {
+          return scene;
+        }
+        const worldPosition = sceneSourceWorldPosition(scene, sourceId);
+        const parentWorldPosition = parentGroupId
+          ? sceneSourceWorldPosition(scene, parentGroupId)
+          : { x: 0, y: 0 };
+
+        return {
+          ...scene,
+          sources: scene.sources.map((item) => {
+            const withoutPreviousParent = removeGroupChildRefs(item, new Set([sourceId]));
+            if (withoutPreviousParent.id === sourceId) {
+              return {
+                ...withoutPreviousParent,
+                position: {
+                  x: Math.round(worldPosition.x - parentWorldPosition.x),
+                  y: Math.round(worldPosition.y - parentWorldPosition.y),
+                },
+              };
+            }
+            if (parentGroupId && withoutPreviousParent.id === parentGroupId && withoutPreviousParent.kind === "group") {
+              return {
+                ...withoutPreviousParent,
+                config: {
+                  ...withoutPreviousParent.config,
+                  child_source_ids: uniqueSourceIds([
+                    ...withoutPreviousParent.config.child_source_ids,
+                    sourceId,
+                  ]),
+                },
+              };
+            }
+            return withoutPreviousParent;
+          }),
+        };
+      }),
+    }));
+  }
+
+  function handleSetDesignerSourceZOrder(
+    sceneId: string,
+    sourceId: string,
+    mode: "front" | "back",
+  ) {
+    updateDesignerCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) => {
+        if (scene.id !== sceneId) return scene;
+        const source = scene.sources.find((item) => item.id === sourceId);
+        if (!source || source.locked) return scene;
+        const zIndexes = scene.sources.map((item) => item.z_index);
+        const z_index =
+          mode === "front"
+            ? Math.max(...zIndexes, source.z_index) + 10
+            : Math.min(...zIndexes, source.z_index) - 10;
+        return {
+          ...scene,
+          sources: scene.sources.map((item) =>
+            item.id === sourceId ? { ...item, z_index } : item,
+          ),
+        };
+      }),
+    }));
+  }
+
   function handleCreateDesignerScene() {
     const now = new Date().toISOString();
     const sceneId = designerId("scene");
@@ -1334,14 +1434,29 @@ function App() {
   function handleDuplicateDesignerScene(sceneId: string) {
     const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
     if (!scene) return;
+    const sourceIdMap = new Map(
+      scene.sources.map((source) => [source.id, designerId("source")]),
+    );
     const nextScene = {
       ...scene,
       id: designerId("scene"),
       name: `${scene.name} Copy`,
-      sources: scene.sources.map((source) => ({
-        ...source,
-        id: designerId("source"),
-      })) as SceneSource[],
+      sources: scene.sources.map((source) => {
+        const clone = cloneSceneSource(source);
+        return {
+          ...clone,
+          id: sourceIdMap.get(source.id) ?? designerId("source"),
+          config:
+            clone.kind === "group"
+              ? {
+                  ...clone.config,
+                  child_source_ids: clone.config.child_source_ids
+                    .map((childId) => sourceIdMap.get(childId))
+                    .filter((childId): childId is string => Boolean(childId)),
+                }
+              : clone.config,
+        } as SceneSource;
+      }),
     };
     updateDesignerCollection((current) => ({
       ...current,
@@ -1500,13 +1615,15 @@ function App() {
     if (!scene) return;
     const selectedIds = new Set(sourceIds);
     const children = scene.sources.filter(
-      (source) =>
-        selectedIds.has(source.id) &&
-        !source.locked &&
-        source.kind !== "group",
+      (source) => selectedIds.has(source.id) && !source.locked,
     );
     if (children.length < 2) return;
-    const bounds = sceneSourceBounds(children);
+    const childWorldRects = children.map((source) => ({
+      ...sceneSourceWorldPosition(scene, source.id),
+      width: source.size.width,
+      height: source.size.height,
+    }));
+    const bounds = sceneRectsBounds(childWorldRects);
     const group = createDefaultSceneSource("group", {
       id: designerId("source-group"),
       name: `Group ${scene.sources.filter((source) => source.kind === "group").length + 1}`,
@@ -1523,19 +1640,20 @@ function App() {
           ? {
               ...item,
               sources: [
-                ...item.sources.map((source) =>
-                  selectedIds.has(source.id) &&
-                  !source.locked &&
-                  source.kind !== "group"
-                    ? {
-                        ...source,
-                        position: {
-                          x: source.position.x - bounds.x,
-                          y: source.position.y - bounds.y,
-                        },
-                      }
-                    : source,
-                ),
+                ...item.sources.map((source) => {
+                  const withoutPreviousParent = removeGroupChildRefs(source, selectedIds);
+                  if (!selectedIds.has(source.id) || source.locked) {
+                    return withoutPreviousParent;
+                  }
+                  const worldPosition = sceneSourceWorldPosition(scene, source.id);
+                  return {
+                    ...withoutPreviousParent,
+                    position: {
+                      x: Math.round(worldPosition.x - bounds.x),
+                      y: Math.round(worldPosition.y - bounds.y),
+                    },
+                  };
+                }),
                 group,
               ],
             }
@@ -1549,15 +1667,21 @@ function App() {
     const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
     if (!scene) return;
     const selectedIds = new Set(sourceIds);
+    const parentMap = sceneSourceParentMap(scene);
     const groups = scene.sources.filter(
       (source): source is Extract<SceneSource, { kind: "group" }> =>
         selectedIds.has(source.id) && source.kind === "group" && !source.locked,
     );
     if (groups.length === 0) return;
     const groupByChildId = new Map<string, SceneSource>();
+    const targetParentByChildId = new Map<string, string | null>();
+    const childWorldPositionById = new Map<string, ScenePoint>();
     groups.forEach((group) => {
+      const targetParentId = parentMap.get(group.id) ?? null;
       group.config.child_source_ids.forEach((childId) => {
         groupByChildId.set(childId, group);
+        targetParentByChildId.set(childId, targetParentId);
+        childWorldPositionById.set(childId, sceneSourceWorldPosition(scene, childId));
       });
     });
     const groupIds = new Set(groups.map((group) => group.id));
@@ -1575,17 +1699,46 @@ function App() {
                 .filter((source) => !groupIds.has(source.id))
                 .map((source) => {
                   const group = groupByChildId.get(source.id);
+                  const targetParentId = targetParentByChildId.get(source.id) ?? null;
+                  const targetParentWorldPosition = targetParentId
+                    ? sceneSourceWorldPosition(scene, targetParentId)
+                    : { x: 0, y: 0 };
+                  const childWorldPosition = childWorldPositionById.get(source.id);
                   const ungrouped =
                     group && !groupIds.has(source.id)
                       ? {
                           ...source,
                           position: {
-                            x: source.position.x + group.position.x,
-                            y: source.position.y + group.position.y,
+                            x: Math.round(
+                              (childWorldPosition?.x ?? source.position.x) -
+                                targetParentWorldPosition.x,
+                            ),
+                            y: Math.round(
+                              (childWorldPosition?.y ?? source.position.y) -
+                                targetParentWorldPosition.y,
+                            ),
                           },
                         }
                       : source;
-                  return removeGroupChildRefs(ungrouped, groupIds);
+                  const withoutGroups = removeGroupChildRefs(ungrouped, groupIds);
+                  if (
+                    withoutGroups.kind === "group" &&
+                    groups.some((group) => parentMap.get(group.id) === withoutGroups.id)
+                  ) {
+                    return {
+                      ...withoutGroups,
+                      config: {
+                        ...withoutGroups.config,
+                        child_source_ids: uniqueSourceIds([
+                          ...withoutGroups.config.child_source_ids,
+                          ...groups
+                            .filter((group) => parentMap.get(group.id) === withoutGroups.id)
+                            .flatMap((group) => group.config.child_source_ids),
+                        ]),
+                      },
+                    };
+                  }
+                  return withoutGroups;
                 }),
             }
           : item,
@@ -1766,6 +1919,8 @@ function App() {
             onSelectScene={handleSelectDesignerScene}
             onSelectSource={handleSelectDesignerSource}
             onSelectSources={selectDesignerSources}
+            onSetSourceParent={handleSetDesignerSourceParent}
+            onSetSourceZOrder={handleSetDesignerSourceZOrder}
             onSelectTransition={handleSelectDesignerTransition}
             onUndo={handleUndoDesignerChange}
             onUngroupSources={handleUngroupDesignerSources}
@@ -2114,6 +2269,16 @@ function DesignerPage(props: {
   onSelectScene: (sceneId: string) => void;
   onSelectSource: (sourceId: string, additive?: boolean) => void;
   onSelectSources: (sourceIds: string[]) => void;
+  onSetSourceParent: (
+    sceneId: string,
+    sourceId: string,
+    parentGroupId: string | null,
+  ) => void;
+  onSetSourceZOrder: (
+    sceneId: string,
+    sourceId: string,
+    mode: "front" | "back",
+  ) => void;
   onSave: () => void;
   onUndo: () => void;
   onSelectTransition: (transitionId: string) => void;
@@ -2145,6 +2310,8 @@ function DesignerPage(props: {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const renderCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const suppressSourceClickRef = useRef(false);
+  const [collapsedGroupIds, setCollapsedGroupIds] = useState<string[]>([]);
+  const [isolatedGroupId, setIsolatedGroupId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DesignerDragState | null>(null);
   const [marqueeState, setMarqueeState] = useState<DesignerMarqueeState | null>(
     null,
@@ -2172,6 +2339,16 @@ function DesignerPage(props: {
     props.selectedSources.filter(
       (source) => !source.locked && source.kind !== "group",
     ).length >= 2;
+  const sourceTree = buildSourceStackTree(
+    props.scene,
+    collapsedGroupIds,
+    isolatedGroupId,
+  );
+  const isolatedGroup = isolatedGroupId
+    ? props.scene.sources.find(
+        (source) => source.id === isolatedGroupId && source.kind === "group",
+      )
+    : null;
 
   useEffect(() => {
     function handleDesignerKeyDown(event: KeyboardEvent) {
@@ -2306,6 +2483,25 @@ function DesignerPage(props: {
     setTransitionPreviewPlaying(false);
     setTransitionPreviewProgress(0);
   }, [activeTransition?.id]);
+
+  useEffect(() => {
+    if (
+      isolatedGroupId &&
+      !props.scene.sources.some(
+        (source) => source.id === isolatedGroupId && source.kind === "group",
+      )
+    ) {
+      setIsolatedGroupId(null);
+    }
+  }, [isolatedGroupId, props.scene.sources]);
+
+  function toggleGroupCollapse(groupId: string) {
+    setCollapsedGroupIds((current) =>
+      current.includes(groupId)
+        ? current.filter((id) => id !== groupId)
+        : [...current, groupId],
+    );
+  }
 
   function applyDesignerSourcePatches(
     patches: Array<{ sourceId: string; patch: SceneSourcePatch }>,
@@ -2847,154 +3043,279 @@ function DesignerPage(props: {
             title="Source Stack"
           />
           <div className="designer-list source-stack">
-            {sourceStack.map((source, index) => (
-              <div
-                className={
-                  selectedSourceIds.includes(source.id)
-                    ? "designer-list-item source-stack-item selected"
-                    : "designer-list-item source-stack-item"
+            <div
+              className="source-stack-root-drop"
+              data-testid="designer-source-root-drop"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event: ReactDragEvent<HTMLDivElement>) => {
+                const draggedSourceId = event.dataTransfer.getData("text/plain");
+                if (draggedSourceId) {
+                  props.onSetSourceParent(
+                    props.scene.id,
+                    draggedSourceId,
+                    isolatedGroup?.id ?? null,
+                  );
                 }
-                data-source-id={source.id}
-                data-source-kind={source.kind}
-                data-testid="designer-source-stack-item"
-                draggable={!source.locked}
-                onDragOver={(event) => event.preventDefault()}
-                onDragStart={(event: ReactDragEvent<HTMLDivElement>) => {
-                  event.dataTransfer.setData("text/plain", source.id);
-                  event.dataTransfer.effectAllowed = "move";
-                }}
-                onDrop={(event: ReactDragEvent<HTMLDivElement>) => {
-                  const draggedSourceId = event.dataTransfer.getData("text/plain");
-                  if (draggedSourceId) {
+              }}
+            >
+              <Layers size={14} />
+              <span>{isolatedGroup ? `Editing ${isolatedGroup.name}` : "Scene Root"}</span>
+              {isolatedGroup && (
+                <button
+                  className="secondary-button compact"
+                  onClick={() => setIsolatedGroupId(null)}
+                  type="button"
+                >
+                  Exit
+                </button>
+              )}
+            </div>
+            {sourceTree.map((item) => {
+              const source = item.source;
+              const effectiveState = sourceEffectiveState(props.scene, source.id);
+              const stackIndex = sourceStack.findIndex(
+                (candidate) => candidate.id === source.id,
+              );
+              const groupCollapsed = collapsedGroupIds.includes(source.id);
+              return (
+                <div
+                  className={[
+                    "designer-list-item source-stack-item",
+                    selectedSourceIds.includes(source.id) ? "selected" : "",
+                    item.depth > 0 ? "nested-source-stack-item" : "",
+                    effectiveState.inheritedHidden ? "inherited-hidden" : "",
+                    effectiveState.inheritedLocked ? "inherited-locked" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  data-source-id={source.id}
+                  data-source-kind={source.kind}
+                  data-testid="designer-source-stack-item"
+                  draggable={!effectiveState.locked}
+                  key={source.id}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDragStart={(event: ReactDragEvent<HTMLDivElement>) => {
+                    event.dataTransfer.setData("text/plain", source.id);
+                    event.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDrop={(event: ReactDragEvent<HTMLDivElement>) => {
+                    const draggedSourceId = event.dataTransfer.getData("text/plain");
+                    if (!draggedSourceId || draggedSourceId === source.id) return;
+                    if (source.kind === "group") {
+                      props.onSetSourceParent(
+                        props.scene.id,
+                        draggedSourceId,
+                        source.id,
+                      );
+                      return;
+                    }
                     props.onDropReorderSource(
                       props.scene.id,
                       draggedSourceId,
                       source.id,
                     );
-                  }
-                }}
-                key={source.id}
-              >
-                <button
-                  className="source-stack-select-button"
-                  data-source-id={source.id}
-                  data-testid="designer-source-select"
-                  onClick={(event) =>
-                    props.onSelectSource(
-                      source.id,
-                      event.shiftKey || event.metaKey || event.ctrlKey,
-                    )
-                  }
-                  type="button"
+                  }}
+                  style={{ paddingLeft: 10 + item.depth * 18 }}
                 >
-                  <div className="source-stack-main">
-                    <SourceKindIcon kind={source.kind} />
-                    <div>
-                      <strong>{source.name}</strong>
-                      <span>
-                        {sceneSourceKindLabels[source.kind]} - z {source.z_index}
-                      </span>
-                    </div>
-                  </div>
-                  {source.kind === "group" && (
-                    <div className="source-stack-children">
-                      {source.config.child_source_ids.length > 0
-                        ? source.config.child_source_ids
-                            .map(
-                              (childId) =>
-                                props.scene.sources.find(
-                                  (candidate) => candidate.id === childId,
-                                )?.name ?? childId,
-                            )
-                            .join(", ")
-                        : "Empty group"}
-                    </div>
-                  )}
-                </button>
-                <div className="source-stack-actions">
                   <button
-                    aria-label={`${source.visible ? "Hide" : "Show"} ${source.name}`}
-                    className="icon-button compact"
-                    onClick={() => {
-                      props.onUpdateSource(props.scene.id, source.id, {
-                        visible: !source.visible,
-                      });
-                    }}
-                    title={`${source.visible ? "Hide" : "Show"} ${source.name}`}
-                    type="button"
-                  >
-                    {source.visible ? <Eye size={14} /> : <EyeOff size={14} />}
-                  </button>
-                  <button
-                    aria-label={`${source.locked ? "Unlock" : "Lock"} ${source.name}`}
-                    className="icon-button compact"
-                    onClick={() => {
-                      props.onUpdateSource(props.scene.id, source.id, {
-                        locked: !source.locked,
-                      });
-                    }}
-                    title={`${source.locked ? "Unlock" : "Lock"} ${source.name}`}
-                    type="button"
-                  >
-                    {source.locked ? <Lock size={14} /> : <Unlock size={14} />}
-                  </button>
-                  <button
-                    aria-label={`Move ${source.name} forward`}
-                    className="icon-button compact"
-                    disabled={source.locked || index === 0}
-                    onClick={() => {
-                      props.onReorderSource(props.scene.id, source.id, "up");
-                    }}
-                    title={`Move ${source.name} forward`}
-                    type="button"
-                  >
-                    <ArrowUp size={14} />
-                  </button>
-                  <button
-                    aria-label={`Move ${source.name} backward`}
-                    className="icon-button compact"
-                    disabled={source.locked || index === sourceStack.length - 1}
-                    onClick={() => {
-                      props.onReorderSource(props.scene.id, source.id, "down");
-                    }}
-                    title={`Move ${source.name} backward`}
-                    type="button"
-                  >
-                    <ArrowDown size={14} />
-                  </button>
-                  <button
-                    aria-label={`Copy ${source.name}`}
-                    className="icon-button compact"
-                    onClick={() => props.onCopySource(props.scene.id, source.id)}
-                    title={`Copy ${source.name}`}
-                    type="button"
-                  >
-                    <ClipboardCopy size={14} />
-                  </button>
-                  <button
-                    aria-label={`Duplicate ${source.name}`}
-                    className="icon-button compact"
-                    onClick={() =>
-                      props.onDuplicateSource(props.scene.id, source.id)
+                    aria-label={
+                      source.kind === "group"
+                        ? `${groupCollapsed ? "Expand" : "Collapse"} ${source.name}`
+                        : undefined
                     }
-                    title={`Duplicate ${source.name}`}
+                    className="icon-button compact source-stack-tree-toggle"
+                    disabled={source.kind !== "group"}
+                    onClick={() => {
+                      if (source.kind === "group") toggleGroupCollapse(source.id);
+                    }}
+                    title={
+                      source.kind === "group"
+                        ? `${groupCollapsed ? "Expand" : "Collapse"} ${source.name}`
+                        : undefined
+                    }
                     type="button"
                   >
-                    <CopyPlus size={14} />
+                    {source.kind === "group" ? (
+                      groupCollapsed ? (
+                        <ChevronRight size={14} />
+                      ) : (
+                        <ChevronDown size={14} />
+                      )
+                    ) : (
+                      <span aria-hidden="true" />
+                    )}
                   </button>
                   <button
-                    aria-label={`Delete ${source.name}`}
-                    className="icon-button compact danger"
-                    disabled={source.locked}
-                    onClick={() => props.onDeleteSource(props.scene.id, source.id)}
-                    title={`Delete ${source.name}`}
+                    className="source-stack-select-button"
+                    data-source-id={source.id}
+                    data-testid="designer-source-select"
+                    onClick={(event) =>
+                      props.onSelectSource(
+                        source.id,
+                        event.shiftKey || event.metaKey || event.ctrlKey,
+                      )
+                    }
                     type="button"
                   >
-                    <Trash2 size={14} />
+                    <div className="source-stack-main">
+                      <SourceKindIcon kind={source.kind} />
+                      <div>
+                        <strong>{source.name}</strong>
+                        <span>
+                          {sceneSourceKindLabels[source.kind]} - z {source.z_index}
+                          {effectiveState.parentId ? " - grouped" : ""}
+                          {effectiveState.inheritedHidden ? " - hidden by parent" : ""}
+                          {effectiveState.inheritedLocked ? " - locked by parent" : ""}
+                        </span>
+                      </div>
+                    </div>
                   </button>
+                  <div className="source-stack-actions">
+                    {source.kind === "group" && (
+                      <button
+                        aria-label={`Edit ${source.name} group`}
+                        className="icon-button compact"
+                        onClick={() =>
+                          setIsolatedGroupId(
+                            isolatedGroupId === source.id ? null : source.id,
+                          )
+                        }
+                        title={`Edit ${source.name} group`}
+                        type="button"
+                      >
+                        <Group size={14} />
+                      </button>
+                    )}
+                    {effectiveState.parentId && (
+                      <button
+                        aria-label={`Move ${source.name} to scene root`}
+                        className="icon-button compact"
+                        disabled={effectiveState.locked}
+                        onClick={() =>
+                          props.onSetSourceParent(props.scene.id, source.id, null)
+                        }
+                        title={`Move ${source.name} to scene root`}
+                        type="button"
+                      >
+                        <Layers size={14} />
+                      </button>
+                    )}
+                    <button
+                      aria-label={`${source.visible ? "Hide" : "Show"} ${source.name}`}
+                      className="icon-button compact"
+                      disabled={effectiveState.inheritedHidden}
+                      onClick={() => {
+                        props.onUpdateSource(props.scene.id, source.id, {
+                          visible: !source.visible,
+                        });
+                      }}
+                      title={`${source.visible ? "Hide" : "Show"} ${source.name}`}
+                      type="button"
+                    >
+                      {effectiveState.visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                    </button>
+                    <button
+                      aria-label={`${source.locked ? "Unlock" : "Lock"} ${source.name}`}
+                      className="icon-button compact"
+                      disabled={effectiveState.inheritedLocked}
+                      onClick={() => {
+                        props.onUpdateSource(props.scene.id, source.id, {
+                          locked: !source.locked,
+                        });
+                      }}
+                      title={`${source.locked ? "Unlock" : "Lock"} ${source.name}`}
+                      type="button"
+                    >
+                      {effectiveState.locked ? <Lock size={14} /> : <Unlock size={14} />}
+                    </button>
+                    <button
+                      aria-label={`Move ${source.name} forward`}
+                      className="icon-button compact"
+                      disabled={effectiveState.locked || stackIndex === 0}
+                      onClick={() => {
+                        props.onReorderSource(props.scene.id, source.id, "up");
+                      }}
+                      title={`Move ${source.name} forward`}
+                      type="button"
+                    >
+                      <ArrowUp size={14} />
+                    </button>
+                    <button
+                      aria-label={`Move ${source.name} backward`}
+                      className="icon-button compact"
+                      disabled={
+                        effectiveState.locked || stackIndex === sourceStack.length - 1
+                      }
+                      onClick={() => {
+                        props.onReorderSource(props.scene.id, source.id, "down");
+                      }}
+                      title={`Move ${source.name} backward`}
+                      type="button"
+                    >
+                      <ArrowDown size={14} />
+                    </button>
+                    <button
+                      aria-label={`Send ${source.name} to front`}
+                      className="icon-button compact"
+                      disabled={effectiveState.locked}
+                      onClick={() =>
+                        props.onSetSourceZOrder(props.scene.id, source.id, "front")
+                      }
+                      title={`Send ${source.name} to front`}
+                      type="button"
+                    >
+                      <PanelTop size={14} />
+                    </button>
+                    <button
+                      aria-label={`Send ${source.name} to back`}
+                      className="icon-button compact"
+                      disabled={effectiveState.locked}
+                      onClick={() =>
+                        props.onSetSourceZOrder(props.scene.id, source.id, "back")
+                      }
+                      title={`Send ${source.name} to back`}
+                      type="button"
+                    >
+                      <PanelBottom size={14} />
+                    </button>
+                    <button
+                      aria-label={`Copy ${source.name}`}
+                      className="icon-button compact"
+                      onClick={() => props.onCopySource(props.scene.id, source.id)}
+                      title={`Copy ${source.name}`}
+                      type="button"
+                    >
+                      <ClipboardCopy size={14} />
+                    </button>
+                    <button
+                      aria-label={`Duplicate ${source.name}`}
+                      className="icon-button compact"
+                      disabled={effectiveState.locked}
+                      onClick={() =>
+                        props.onDuplicateSource(props.scene.id, source.id)
+                      }
+                      title={`Duplicate ${source.name}`}
+                      type="button"
+                    >
+                      <CopyPlus size={14} />
+                    </button>
+                    <button
+                      aria-label={`Delete ${source.name}`}
+                      className="icon-button compact danger"
+                      disabled={effectiveState.locked}
+                      onClick={() => props.onDeleteSource(props.scene.id, source.id)}
+                      title={`Delete ${source.name}`}
+                      type="button"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
+            {sourceTree.length === 0 && (
+              <div className="empty compact-empty">No sources in this group</div>
+            )}
           </div>
         </section>
       </div>
@@ -3111,118 +3432,126 @@ function DesignerPage(props: {
                 style={marqueeStyle(marqueeState, props.scene)}
               />
             )}
-            {sortedSceneSources(props.scene, "asc").map((source) => (
-              <div
-                className={[
-                  "designer-source-box",
-                  `source-${source.kind}`,
-                  selectedSourceIds.includes(source.id) ? "selected" : "",
-                  source.visible ? "" : "hidden-source",
-                  source.locked ? "locked-source" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                data-source-id={source.id}
-                data-source-kind={source.kind}
-                data-testid="designer-preview-source"
-                key={source.id}
-                onClick={(event) => {
-                  if (suppressSourceClickRef.current) {
-                    suppressSourceClickRef.current = false;
-                    return;
-                  }
-                  props.onSelectSource(
-                    source.id,
-                    event.shiftKey || event.metaKey || event.ctrlKey,
-                  );
-                }}
-                onKeyDown={(event) => {
-                  if (source.locked) return;
-                  const nudge = event.shiftKey ? 10 : 1;
-                  const keyboardSourceIds = selectedSourceIds.includes(source.id)
-                    ? selectedSourceIds
-                    : [source.id];
-                  if (event.key === "ArrowLeft") {
-                    nudgeDesignerSelection(
-                      -nudge,
-                      0,
-                      `keyboard:nudge:${event.timeStamp}`,
-                      keyboardSourceIds,
+            {sortedSceneSources(props.scene, "asc").map((source) => {
+              const effectiveState = sourceEffectiveState(props.scene, source.id);
+              return (
+                <div
+                  className={[
+                    "designer-source-box",
+                    `source-${source.kind}`,
+                    selectedSourceIds.includes(source.id) ? "selected" : "",
+                    effectiveState.visible ? "" : "hidden-source",
+                    effectiveState.locked ? "locked-source" : "",
+                    effectiveState.inheritedHidden ? "inherited-hidden" : "",
+                    effectiveState.inheritedLocked ? "inherited-locked" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  data-source-id={source.id}
+                  data-source-kind={source.kind}
+                  data-testid="designer-preview-source"
+                  key={source.id}
+                  onClick={(event) => {
+                    if (suppressSourceClickRef.current) {
+                      suppressSourceClickRef.current = false;
+                      return;
+                    }
+                    props.onSelectSource(
+                      source.id,
+                      event.shiftKey || event.metaKey || event.ctrlKey,
                     );
-                  } else if (event.key === "ArrowRight") {
-                    nudgeDesignerSelection(
-                      nudge,
-                      0,
-                      `keyboard:nudge:${event.timeStamp}`,
-                      keyboardSourceIds,
-                    );
-                  } else if (event.key === "ArrowUp") {
-                    nudgeDesignerSelection(
-                      0,
-                      -nudge,
-                      `keyboard:nudge:${event.timeStamp}`,
-                      keyboardSourceIds,
-                    );
-                  } else if (event.key === "ArrowDown") {
-                    nudgeDesignerSelection(
-                      0,
-                      nudge,
-                      `keyboard:nudge:${event.timeStamp}`,
-                      keyboardSourceIds,
-                    );
-                  } else if (event.key === "[" || event.key === "]") {
-                    props.onRotateSelection(
-                      props.scene.id,
-                      keyboardSourceIds,
-                      event.key === "]" ? (event.shiftKey ? 15 : 1) : event.shiftKey ? -15 : -1,
-                    );
-                  } else {
-                    return;
-                  }
-                  event.preventDefault();
-                  event.stopPropagation();
-                }}
-                onPointerDown={(event) => beginSourceDrag(event, source, "move")}
-                role="button"
-                style={sceneSourcePreviewStyle(source, props.scene)}
-                tabIndex={0}
-              >
-                <div className="designer-source-label">
-                  <SourceKindIcon kind={source.kind} />
-                  <strong>{source.name}</strong>
+                  }}
+                  onKeyDown={(event) => {
+                    if (effectiveState.locked) return;
+                    const nudge = event.shiftKey ? 10 : 1;
+                    const keyboardSourceIds = selectedSourceIds.includes(source.id)
+                      ? selectedSourceIds
+                      : [source.id];
+                    if (event.key === "ArrowLeft") {
+                      nudgeDesignerSelection(
+                        -nudge,
+                        0,
+                        `keyboard:nudge:${event.timeStamp}`,
+                        keyboardSourceIds,
+                      );
+                    } else if (event.key === "ArrowRight") {
+                      nudgeDesignerSelection(
+                        nudge,
+                        0,
+                        `keyboard:nudge:${event.timeStamp}`,
+                        keyboardSourceIds,
+                      );
+                    } else if (event.key === "ArrowUp") {
+                      nudgeDesignerSelection(
+                        0,
+                        -nudge,
+                        `keyboard:nudge:${event.timeStamp}`,
+                        keyboardSourceIds,
+                      );
+                    } else if (event.key === "ArrowDown") {
+                      nudgeDesignerSelection(
+                        0,
+                        nudge,
+                        `keyboard:nudge:${event.timeStamp}`,
+                        keyboardSourceIds,
+                      );
+                    } else if (event.key === "[" || event.key === "]") {
+                      props.onRotateSelection(
+                        props.scene.id,
+                        keyboardSourceIds,
+                        event.key === "]" ? (event.shiftKey ? 15 : 1) : event.shiftKey ? -15 : -1,
+                      );
+                    } else {
+                      return;
+                    }
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }}
+                  onPointerDown={(event) => beginSourceDrag(event, source, "move")}
+                  role="button"
+                  style={{
+                    ...sceneSourcePreviewStyle(source, props.scene),
+                    opacity: effectiveState.visible ? source.opacity : 0.18,
+                  }}
+                  tabIndex={0}
+                >
+                  <div className="designer-source-label">
+                    <SourceKindIcon kind={source.kind} />
+                    <strong>{source.name}</strong>
+                  </div>
+                  <span>{sourceConfigSummary(source)}</span>
+                  {sceneSourceAvailability(source) && (
+                    <small>{sceneSourceAvailability(source)?.detail}</small>
+                  )}
+                  {!effectiveState.locked && (
+                    <>
+                      <button
+                        aria-label={`Rotate ${source.name}`}
+                        className="designer-rotate-handle"
+                        onClick={(event) => event.stopPropagation()}
+                        onPointerDown={(event) =>
+                          beginSourceDrag(event, source, "rotate")
+                        }
+                        title={`Rotate ${source.name}`}
+                        type="button"
+                      >
+                        <RotateCcw size={11} />
+                      </button>
+                      <button
+                        aria-label={`Resize ${source.name}`}
+                        className="designer-resize-handle"
+                        onClick={(event) => event.stopPropagation()}
+                        onPointerDown={(event) =>
+                          beginSourceDrag(event, source, "resize")
+                        }
+                        title={`Resize ${source.name}`}
+                        type="button"
+                      />
+                    </>
+                  )}
                 </div>
-                <span>{sourceConfigSummary(source)}</span>
-                {sceneSourceAvailability(source) && (
-                  <small>{sceneSourceAvailability(source)?.detail}</small>
-                )}
-                {!source.locked && (
-                  <>
-                    <button
-                      aria-label={`Rotate ${source.name}`}
-                      className="designer-rotate-handle"
-                      onClick={(event) => event.stopPropagation()}
-                      onPointerDown={(event) =>
-                        beginSourceDrag(event, source, "rotate")
-                      }
-                      title={`Rotate ${source.name}`}
-                      type="button"
-                    >
-                      <RotateCcw size={11} />
-                    </button>
-                    <button
-                      aria-label={`Resize ${source.name}`}
-                      className="designer-resize-handle"
-                      onClick={(event) => event.stopPropagation()}
-                      onPointerDown={(event) =>
-                        beginSourceDrag(event, source, "resize")
-                      }
-                      title={`Resize ${source.name}`}
-                      type="button"
-                    />
-                  </>
-                )}
-              </div>
-            ))}
+              );
+            })}
             {selectionBounds && (
               <div
                 aria-label={`${selectedSourceIds.length} selected sources`}
@@ -5561,6 +5890,142 @@ function sortedSceneSources(
   );
 }
 
+function sceneSourceParentMap(scene: Scene): Map<string, string> {
+  const parentMap = new Map<string, string>();
+  scene.sources.forEach((source) => {
+    if (source.kind !== "group") return;
+    source.config.child_source_ids.forEach((childId) => {
+      if (!parentMap.has(childId)) {
+        parentMap.set(childId, source.id);
+      }
+    });
+  });
+  return parentMap;
+}
+
+function buildSourceStackTree(
+  scene: Scene,
+  collapsedGroupIds: string[],
+  isolatedGroupId: string | null,
+): SourceStackTreeItem[] {
+  const sourceById = new Map(scene.sources.map((source) => [source.id, source]));
+  const parentMap = sceneSourceParentMap(scene);
+  const collapsed = new Set(collapsedGroupIds);
+  const isolatedGroup = isolatedGroupId
+    ? sourceById.get(isolatedGroupId)
+    : undefined;
+  const roots =
+    isolatedGroup?.kind === "group"
+      ? isolatedGroup.config.child_source_ids
+          .map((childId) => sourceById.get(childId))
+          .filter((source): source is SceneSource => Boolean(source))
+      : scene.sources.filter((source) => !parentMap.has(source.id));
+
+  function buildItem(
+    source: SceneSource,
+    depth: number,
+    parentId: string | null,
+    visited: Set<string>,
+  ): SourceStackTreeItem {
+    if (visited.has(source.id) || source.kind !== "group" || collapsed.has(source.id)) {
+      return { children: [], depth, parentId, source };
+    }
+    const nextVisited = new Set(visited);
+    nextVisited.add(source.id);
+    const children = source.config.child_source_ids
+      .map((childId) => sourceById.get(childId))
+      .filter((child): child is SceneSource => Boolean(child))
+      .sort((left, right) => right.z_index - left.z_index)
+      .map((child) => buildItem(child, depth + 1, source.id, nextVisited));
+    return { children, depth, parentId, source };
+  }
+
+  function flatten(items: SourceStackTreeItem[]): SourceStackTreeItem[] {
+    return items.flatMap((item) => [item, ...flatten(item.children)]);
+  }
+
+  return flatten(
+    roots
+      .sort((left, right) => right.z_index - left.z_index)
+      .map((source) =>
+        buildItem(source, 0, isolatedGroup?.kind === "group" ? isolatedGroup.id : null, new Set()),
+      ),
+  );
+}
+
+function sourceEffectiveState(scene: Scene, sourceId: string): SourceEffectiveState {
+  const sourceById = new Map(scene.sources.map((source) => [source.id, source]));
+  const parentMap = sceneSourceParentMap(scene);
+  const source = sourceById.get(sourceId);
+  const parentId = parentMap.get(sourceId) ?? null;
+  let inheritedLocked = false;
+  let inheritedHidden = false;
+  let nextParentId = parentId;
+  const visited = new Set<string>();
+
+  while (nextParentId && !visited.has(nextParentId)) {
+    visited.add(nextParentId);
+    const parent = sourceById.get(nextParentId);
+    if (!parent) break;
+    if (parent.locked) inheritedLocked = true;
+    if (!parent.visible) inheritedHidden = true;
+    nextParentId = parentMap.get(parent.id) ?? null;
+  }
+
+  return {
+    inheritedHidden,
+    inheritedLocked,
+    locked: Boolean(source?.locked) || inheritedLocked,
+    parentId,
+    visible: Boolean(source?.visible) && !inheritedHidden,
+  };
+}
+
+function sceneSourceWorldPosition(scene: Scene, sourceId: string): ScenePoint {
+  const sourceById = new Map(scene.sources.map((source) => [source.id, source]));
+  const parentMap = sceneSourceParentMap(scene);
+  const source = sourceById.get(sourceId);
+  if (!source) return { x: 0, y: 0 };
+  let position = { ...source.position };
+  let parentId = parentMap.get(sourceId);
+  const visited = new Set<string>();
+  while (parentId && !visited.has(parentId)) {
+    visited.add(parentId);
+    const parent = sourceById.get(parentId);
+    if (!parent) break;
+    position = {
+      x: position.x + parent.position.x,
+      y: position.y + parent.position.y,
+    };
+    parentId = parentMap.get(parentId);
+  }
+  return position;
+}
+
+function groupWouldCreateCycle(
+  scene: Scene,
+  sourceId: string,
+  parentGroupId: string | null,
+): boolean {
+  if (!parentGroupId) return false;
+  const sourceById = new Map(scene.sources.map((source) => [source.id, source]));
+  const source = sourceById.get(sourceId);
+  if (!source || source.kind !== "group") return false;
+  const visited = new Set<string>();
+  const stack = [...source.config.child_source_ids];
+  while (stack.length > 0) {
+    const childId = stack.pop();
+    if (!childId || visited.has(childId)) continue;
+    if (childId === parentGroupId) return true;
+    visited.add(childId);
+    const child = sourceById.get(childId);
+    if (child?.kind === "group") {
+      stack.push(...child.config.child_source_ids);
+    }
+  }
+  return false;
+}
+
 function sortedSceneSourceFilters(filters: SceneSourceFilter[]): SceneSourceFilter[] {
   return [...filters].sort(
     (left, right) => left.order - right.order || left.id.localeCompare(right.id),
@@ -5896,14 +6361,21 @@ function sceneSourcePreviewStyle(
 }
 
 function sceneSourceBounds(sources: SceneSource[]): SceneRect {
-  const left = Math.min(...sources.map((source) => source.position.x));
-  const top = Math.min(...sources.map((source) => source.position.y));
-  const right = Math.max(
-    ...sources.map((source) => source.position.x + source.size.width),
+  return sceneRectsBounds(
+    sources.map((source) => ({
+      x: source.position.x,
+      y: source.position.y,
+      width: source.size.width,
+      height: source.size.height,
+    })),
   );
-  const bottom = Math.max(
-    ...sources.map((source) => source.position.y + source.size.height),
-  );
+}
+
+function sceneRectsBounds(rects: SceneRect[]): SceneRect {
+  const left = Math.min(...rects.map((rect) => rect.x));
+  const top = Math.min(...rects.map((rect) => rect.y));
+  const right = Math.max(...rects.map((rect) => rect.x + rect.width));
+  const bottom = Math.max(...rects.map((rect) => rect.y + rect.height));
   return {
     x: Math.round(left),
     y: Math.round(top),
