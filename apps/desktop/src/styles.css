@@ -721,6 +721,55 @@ nav {
   display: grid;
 }
 
+.designer-crop-handle {
+  position: absolute;
+  z-index: 2;
+  display: none;
+  padding: 0;
+  border: 1px solid rgba(117, 240, 207, 0.78);
+  border-radius: 999px;
+  background: rgba(7, 8, 16, 0.94);
+  box-shadow: 0 0 10px rgba(117, 240, 207, 0.2);
+}
+
+.designer-source-box.selected .designer-crop-handle {
+  display: block;
+}
+
+.designer-crop-handle.top,
+.designer-crop-handle.bottom {
+  left: 50%;
+  width: 34px;
+  height: 8px;
+  transform: translateX(-50%);
+  cursor: ns-resize;
+}
+
+.designer-crop-handle.top {
+  top: -5px;
+}
+
+.designer-crop-handle.bottom {
+  bottom: -5px;
+}
+
+.designer-crop-handle.left,
+.designer-crop-handle.right {
+  top: 50%;
+  width: 8px;
+  height: 34px;
+  transform: translateY(-50%);
+  cursor: ew-resize;
+}
+
+.designer-crop-handle.left {
+  left: -5px;
+}
+
+.designer-crop-handle.right {
+  right: -5px;
+}
+
 .designer-resize-handle {
   position: absolute;
   right: 0;
@@ -869,6 +918,17 @@ nav {
 .designer-selection-tools-header span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.designer-selection-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.designer-selection-options label {
+  min-width: 0;
 }
 
 .designer-transform-tools {

@@ -221,14 +221,17 @@ type SourceEffectiveState = {
 };
 
 type DesignerDragSourceState = {
+  crop: SceneCrop;
   id: string;
   position: ScenePoint;
   size: SceneSize;
   rotation_degrees: number;
 };
 
+type DesignerCropEdge = "top" | "right" | "bottom" | "left";
+
 type DesignerDragState = {
-  mode: "move" | "resize" | "rotate";
+  mode: "move" | "resize" | "rotate" | "crop";
   pointerId: number;
   sourceId: string;
   startClientX: number;
@@ -238,6 +241,7 @@ type DesignerDragState = {
   startRotation: number;
   startSources: DesignerDragSourceState[];
   startSelectionBounds: SceneRect;
+  cropEdge?: DesignerCropEdge;
   centerClientX?: number;
   centerClientY?: number;
   startAngleDegrees?: number;
@@ -2318,6 +2322,12 @@ function DesignerPage(props: {
   );
   const [snapGuides, setSnapGuides] = useState<DesignerSnapGuide[]>([]);
   const [newSourceKind, setNewSourceKind] = useState<SceneSourceKind>("display");
+  const [snapEnabled, setSnapEnabled] = useState(true);
+  const [snapStrength, setSnapStrength] = useState(designerSnapThreshold);
+  const [aspectRatioLocked, setAspectRatioLocked] = useState(false);
+  const [transformPivot, setTransformPivot] = useState<"selection" | "individual">(
+    "selection",
+  );
   const [transitionPreviewPlaying, setTransitionPreviewPlaying] =
     useState(false);
   const [transitionPreviewProgress, setTransitionPreviewProgress] = useState(0);
@@ -2328,7 +2338,7 @@ function DesignerPage(props: {
     selectedSourceIds.includes(source.id),
   );
   const unlockedSelectedSources = selectedSceneSources.filter(
-    (source) => !source.locked,
+    (source) => !sourceEffectiveState(props.scene, source.id).locked,
   );
   const selectionBounds =
     selectedSceneSources.length > 1 ? sceneSourceBounds(selectedSceneSources) : null;
@@ -2337,7 +2347,9 @@ function DesignerPage(props: {
   );
   const canGroupSelection =
     props.selectedSources.filter(
-      (source) => !source.locked && source.kind !== "group",
+      (source) =>
+        !sourceEffectiveState(props.scene, source.id).locked &&
+        source.kind !== "group",
     ).length >= 2;
   const sourceTree = buildSourceStackTree(
     props.scene,
@@ -2520,7 +2532,9 @@ function DesignerPage(props: {
   ) {
     const selectedIds = new Set(sourceIds);
     const targets = props.scene.sources.filter(
-      (source) => selectedIds.has(source.id) && !source.locked,
+      (source) =>
+        selectedIds.has(source.id) &&
+        !sourceEffectiveState(props.scene, source.id).locked,
     );
     applyDesignerSourcePatches(
       targets.map((source) => ({
@@ -2536,6 +2550,46 @@ function DesignerPage(props: {
     );
   }
 
+  function updateSelectionBounds(patch: Partial<SceneRect>) {
+    if (!selectionBounds || unlockedSelectedSources.length === 0) return;
+    const nextBounds = {
+      ...selectionBounds,
+      ...patch,
+    };
+    if (aspectRatioLocked && patch.width && !patch.height) {
+      nextBounds.height = Math.max(
+        16,
+        Math.round(patch.width / (selectionBounds.width / selectionBounds.height)),
+      );
+    } else if (aspectRatioLocked && patch.height && !patch.width) {
+      nextBounds.width = Math.max(
+        16,
+        Math.round(patch.height * (selectionBounds.width / selectionBounds.height)),
+      );
+    }
+    const scaleX = nextBounds.width / selectionBounds.width;
+    const scaleY = nextBounds.height / selectionBounds.height;
+    applyDesignerSourcePatches(
+      unlockedSelectedSources.map((source) => {
+        const relativeX = source.position.x - selectionBounds.x;
+        const relativeY = source.position.y - selectionBounds.y;
+        return {
+          sourceId: source.id,
+          patch: {
+            position: {
+              x: Math.round(nextBounds.x + relativeX * scaleX),
+              y: Math.round(nextBounds.y + relativeY * scaleY),
+            },
+            size: {
+              width: Math.max(16, Math.round(source.size.width * scaleX)),
+              height: Math.max(16, Math.round(source.size.height * scaleY)),
+            },
+          },
+        };
+      }),
+    );
+  }
+
   function beginSelectionTransform(
     event: ReactPointerEvent,
     mode: "resize" | "rotate",
@@ -2548,12 +2602,37 @@ function DesignerPage(props: {
     startDesignerDrag(event, mode, unlockedSelectedSources, selectionBounds);
   }
 
+  function beginCropDrag(
+    event: ReactPointerEvent,
+    source: SceneSource,
+    edge: DesignerCropEdge,
+  ) {
+    const effectiveState = sourceEffectiveState(props.scene, source.id);
+    if (effectiveState.locked || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    props.onSelectSource(source.id);
+    startDesignerDrag(
+      event,
+      "crop",
+      [source],
+      {
+        x: source.position.x,
+        y: source.position.y,
+        width: source.size.width,
+        height: source.size.height,
+      },
+      edge,
+    );
+  }
+
   function beginSourceDrag(
     event: ReactPointerEvent,
     source: SceneSource,
     mode: "move" | "resize" | "rotate",
   ) {
-    if (source.locked || event.button !== 0) return;
+    const effectiveState = sourceEffectiveState(props.scene, source.id);
+    if (effectiveState.locked || event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
     const additive = event.shiftKey || event.metaKey || event.ctrlKey;
@@ -2571,9 +2650,10 @@ function DesignerPage(props: {
 
   function startDesignerDrag(
     event: ReactPointerEvent,
-    mode: "move" | "resize" | "rotate",
+    mode: "move" | "resize" | "rotate" | "crop",
     sources: SceneSource[],
     bounds: SceneRect,
+    cropEdge?: DesignerCropEdge,
   ) {
     suppressSourceClickRef.current = false;
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -2601,12 +2681,14 @@ function DesignerPage(props: {
       startSize: { width: bounds.width, height: bounds.height },
       startRotation: sources[0]?.rotation_degrees ?? 0,
       startSources: sources.map((item) => ({
+        crop: { ...item.crop },
         id: item.id,
         position: { ...item.position },
         size: { ...item.size },
         rotation_degrees: item.rotation_degrees,
       })),
       startSelectionBounds: { ...bounds },
+      cropEdge,
       centerClientX: centerClient?.x,
       centerClientY: centerClient?.y,
       startAngleDegrees,
@@ -2628,6 +2710,30 @@ function DesignerPage(props: {
     const ignoredSourceIds = new Set(
       dragState.startSources.map((source) => source.id),
     );
+    const snapThreshold = snapEnabled ? snapStrength : -1;
+
+    if (dragState.mode === "crop") {
+      const source = dragState.startSources[0];
+      if (!source || !dragState.cropEdge) return;
+      const nextCrop = { ...source.crop };
+      if (dragState.cropEdge === "top") {
+        nextCrop.top = Math.max(0, Math.round(source.crop.top + deltaY));
+      } else if (dragState.cropEdge === "right") {
+        nextCrop.right = Math.max(0, Math.round(source.crop.right - deltaX));
+      } else if (dragState.cropEdge === "bottom") {
+        nextCrop.bottom = Math.max(0, Math.round(source.crop.bottom - deltaY));
+      } else {
+        nextCrop.left = Math.max(0, Math.round(source.crop.left + deltaX));
+      }
+      setSnapGuides([]);
+      props.onUpdateSource(
+        props.scene.id,
+        source.id,
+        { crop: nextCrop },
+        options,
+      );
+      return;
+    }
 
     if (dragState.mode === "rotate") {
       if (
@@ -2653,7 +2759,7 @@ function DesignerPage(props: {
             y: source.position.y + source.size.height / 2,
           };
           const rotatedCenter =
-            dragState.startSources.length > 1
+            dragState.startSources.length > 1 && transformPivot === "selection"
               ? rotatePointAroundCenter(sourceCenter, center, rotationDelta)
               : sourceCenter;
           return {
@@ -2683,6 +2789,7 @@ function DesignerPage(props: {
           y: Math.round(dragState.startPosition.y + deltaY),
         },
         ignoredSourceIds,
+        snapThreshold,
       );
       const appliedDeltaX = snapped.position.x - dragState.startSelectionBounds.x;
       const appliedDeltaY = snapped.position.y - dragState.startSelectionBounds.y;
@@ -2702,14 +2809,22 @@ function DesignerPage(props: {
       return;
     }
 
-    const snapped = snapSourceSize(
-      props.scene,
-      dragState.startSelectionBounds,
+    const nextSize = constrainDesignerResizeSize(
+      dragState.startSize,
       {
         width: Math.max(16, Math.round(dragState.startSize.width + deltaX)),
         height: Math.max(16, Math.round(dragState.startSize.height + deltaY)),
       },
+      aspectRatioLocked,
+      deltaX,
+      deltaY,
+    );
+    const snapped = snapSourceSize(
+      props.scene,
+      dragState.startSelectionBounds,
+      nextSize,
       ignoredSourceIds,
+      snapThreshold,
     );
     const scaleX = snapped.size.width / dragState.startSelectionBounds.width;
     const scaleY = snapped.size.height / dragState.startSelectionBounds.height;
@@ -3547,6 +3662,22 @@ function DesignerPage(props: {
                         title={`Resize ${source.name}`}
                         type="button"
                       />
+                      {selectedSourceIds.includes(source.id) &&
+                        (["top", "right", "bottom", "left"] as DesignerCropEdge[]).map(
+                          (edge) => (
+                            <button
+                              aria-label={`Crop ${source.name} ${edge}`}
+                              className={`designer-crop-handle ${edge}`}
+                              key={edge}
+                              onClick={(event) => event.stopPropagation()}
+                              onPointerDown={(event) =>
+                                beginCropDrag(event, source, edge)
+                              }
+                              title={`Crop ${source.name} ${edge}`}
+                              type="button"
+                            />
+                          ),
+                        )}
                     </>
                   )}
                 </div>
@@ -3633,6 +3764,75 @@ function DesignerPage(props: {
                   <span>
                     {props.selectedSources.filter((source) => source.locked).length} locked
                   </span>
+                </div>
+                {selectionBounds && (
+                  <>
+                    <div className="form-grid">
+                      <SceneNumberInput
+                        label="Selection X"
+                        onChange={(x) => updateSelectionBounds({ x })}
+                        value={selectionBounds.x}
+                      />
+                      <SceneNumberInput
+                        label="Selection Y"
+                        onChange={(y) => updateSelectionBounds({ y })}
+                        value={selectionBounds.y}
+                      />
+                    </div>
+                    <div className="form-grid">
+                      <SceneNumberInput
+                        label="Selection Width"
+                        min={16}
+                        onChange={(width) => updateSelectionBounds({ width })}
+                        value={selectionBounds.width}
+                      />
+                      <SceneNumberInput
+                        label="Selection Height"
+                        min={16}
+                        onChange={(height) => updateSelectionBounds({ height })}
+                        value={selectionBounds.height}
+                      />
+                    </div>
+                  </>
+                )}
+                <div className="designer-selection-options">
+                  <label className="check-row">
+                    <input
+                      checked={aspectRatioLocked}
+                      onChange={(event) => setAspectRatioLocked(event.target.checked)}
+                      type="checkbox"
+                    />
+                    Lock aspect
+                  </label>
+                  <label>
+                    Pivot
+                    <select
+                      onChange={(event) =>
+                        setTransformPivot(
+                          event.target.value as "selection" | "individual",
+                        )
+                      }
+                      value={transformPivot}
+                    >
+                      <option value="selection">Selection</option>
+                      <option value="individual">Individual</option>
+                    </select>
+                  </label>
+                  <label className="check-row">
+                    <input
+                      checked={snapEnabled}
+                      onChange={(event) => setSnapEnabled(event.target.checked)}
+                      type="checkbox"
+                    />
+                    Snap
+                  </label>
+                  <SceneNumberInput
+                    label="Snap px"
+                    max={64}
+                    min={1}
+                    onChange={(value) => setSnapStrength(Math.round(value))}
+                    value={snapStrength}
+                  />
                 </div>
                 <div className="designer-transform-tools compact-tools">
                   <button
@@ -6589,11 +6789,37 @@ function snapGuideStyle(guide: DesignerSnapGuide, scene: Scene): CSSProperties {
   };
 }
 
+function constrainDesignerResizeSize(
+  startSize: SceneSize,
+  nextSize: SceneSize,
+  aspectLocked: boolean,
+  deltaX: number,
+  deltaY: number,
+): SceneSize {
+  if (!aspectLocked || startSize.width <= 0 || startSize.height <= 0) {
+    return nextSize;
+  }
+
+  const aspectRatio = startSize.width / startSize.height;
+  if (Math.abs(deltaX) >= Math.abs(deltaY)) {
+    return {
+      width: nextSize.width,
+      height: Math.max(16, Math.round(nextSize.width / aspectRatio)),
+    };
+  }
+
+  return {
+    width: Math.max(16, Math.round(nextSize.height * aspectRatio)),
+    height: nextSize.height,
+  };
+}
+
 function snapSourcePosition(
   scene: Scene,
   rect: SceneRect,
   position: ScenePoint,
   ignoredSourceIds: Set<string> = new Set(),
+  threshold = designerSnapThreshold,
 ): { position: ScenePoint; guides: DesignerSnapGuide[] } {
   const guides: DesignerSnapGuide[] = [];
   const snappedPosition = { ...position };
@@ -6606,6 +6832,7 @@ function snapSourcePosition(
       { coordinate: position.x + rect.width, offset: rect.width },
     ],
     horizontalTargets,
+    threshold,
   );
   const yTarget = nearestSnapCandidate(
     [
@@ -6614,6 +6841,7 @@ function snapSourcePosition(
       { coordinate: position.y + rect.height, offset: rect.height },
     ],
     verticalTargets,
+    threshold,
   );
 
   if (xTarget) {
@@ -6633,6 +6861,7 @@ function snapSourceSize(
   rect: SceneRect,
   size: SceneSize,
   ignoredSourceIds: Set<string> = new Set(),
+  threshold = designerSnapThreshold,
 ): { size: SceneSize; guides: DesignerSnapGuide[] } {
   const guides: DesignerSnapGuide[] = [];
   const snappedSize = { ...size };
@@ -6641,10 +6870,12 @@ function snapSourceSize(
   const rightTarget = nearestSnapCandidate(
     [{ coordinate: rightEdge, offset: rect.x }],
     snapTargetsForAxis(scene, "x", ignoredSourceIds),
+    threshold,
   );
   const bottomTarget = nearestSnapCandidate(
     [{ coordinate: bottomEdge, offset: rect.y }],
     snapTargetsForAxis(scene, "y", ignoredSourceIds),
+    threshold,
   );
 
   if (rightTarget) {
@@ -6682,16 +6913,15 @@ function snapTargetsForAxis(
 function nearestSnapCandidate(
   edges: Array<{ coordinate: number; offset: number }>,
   targets: Array<{ coordinate: number }>,
+  threshold = designerSnapThreshold,
 ): { coordinate: number; position: number } | null {
+  if (threshold < 0) return null;
   let nearest: { coordinate: number; position: number; distance: number } | null =
     null;
   edges.forEach((edge) => {
     targets.forEach((target) => {
       const distance = Math.abs(edge.coordinate - target.coordinate);
-      if (
-        distance <= designerSnapThreshold &&
-        (!nearest || distance < nearest.distance)
-      ) {
+      if (distance <= threshold && (!nearest || distance < nearest.distance)) {
         nearest = {
           coordinate: target.coordinate,
           position: Math.round(target.coordinate - edge.offset),
