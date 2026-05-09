@@ -17,9 +17,19 @@ import type {
   PreflightSnapshot,
   ProfilesSnapshot,
   RecentRecordingsSnapshot,
+  CompositorRenderRequest,
+  CompositorRenderResponse,
+  PreviewFrameRequest,
+  PreviewFrameResponse,
+  SceneActivationRequest,
+  SceneActivationResponse,
   SceneCollection,
   SceneCollectionBundle,
   SceneCollectionImportResult,
+  SceneRuntimeBindingsSnapshot,
+  SceneRuntimeSnapshot,
+  SceneRuntimeStateUpdateRequest,
+  SceneRuntimeStateUpdateResponse,
   SceneValidationResult,
   StudioStatus,
   StreamDestinationInput,
@@ -513,6 +523,39 @@ export const StudioApi = {
       method: "POST",
       body: JSON.stringify(collection),
     }),
+  sceneRuntime: (config: RuntimeApiConfig) =>
+    apiRequest<SceneRuntimeSnapshot>(config, "/scene-runtime"),
+  activateScene: (
+    config: RuntimeApiConfig,
+    request: SceneActivationRequest,
+  ) =>
+    apiRequest<SceneActivationResponse>(config, "/scene-runtime/activate", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  updateSceneRuntimeState: (
+    config: RuntimeApiConfig,
+    request: SceneRuntimeStateUpdateRequest,
+  ) =>
+    apiRequest<SceneRuntimeStateUpdateResponse>(config, "/scene-runtime/state", {
+      method: "PUT",
+      body: JSON.stringify(request),
+    }),
+  previewFrame: (config: RuntimeApiConfig, request: PreviewFrameRequest) =>
+    apiRequest<PreviewFrameResponse>(config, "/scene-runtime/preview-frame", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  validateRuntimeGraph: (
+    config: RuntimeApiConfig,
+    request: CompositorRenderRequest,
+  ) =>
+    apiRequest<CompositorRenderResponse>(config, "/scene-runtime/validate-graph", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  sceneRuntimeBindings: (config: RuntimeApiConfig) =>
+    apiRequest<SceneRuntimeBindingsSnapshot>(config, "/scene-runtime/bindings"),
   createProfile: (config: RuntimeApiConfig, request: CreateProfileRequest) =>
     apiRequest<CreatedProfile>(config, "/profiles", {
       method: "POST",

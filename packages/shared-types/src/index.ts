@@ -466,6 +466,21 @@ export type SceneRuntimeStatus =
   | "transitioning"
   | "error";
 
+export interface SceneRuntimeSnapshot {
+  version: number;
+  collection_id: string;
+  collection_name: string;
+  active_scene_id: string;
+  active_scene_name: string;
+  active_transition_id: string;
+  active_transition_name: string;
+  status: SceneRuntimeStatus;
+  preview_enabled: boolean;
+  metadata: Record<string, unknown>;
+  updated_at: string;
+  validation: SceneRuntimeContractValidation;
+}
+
 export interface SceneRuntimeStatePatch {
   active_scene_id?: string | null;
   active_transition_id?: string | null;
@@ -514,6 +529,7 @@ export interface SceneActivationResponse {
   transition_id: string | null;
   status: SceneActivationStatus;
   activated_at: string;
+  runtime: SceneRuntimeSnapshot;
   validation: SceneRuntimeContractValidation;
 }
 
@@ -633,6 +649,15 @@ export interface RuntimeAudioSourceBindingContract {
   bindings: RuntimeAudioSourceBinding[];
   buses: AudioMixBus[];
   validation: SceneRuntimeContractValidation;
+}
+
+export interface SceneRuntimeBindingsSnapshot {
+  version: number;
+  scene_id: string;
+  scene_name: string;
+  capture: RuntimeCaptureSourceBindingContract;
+  audio: RuntimeAudioSourceBindingContract;
+  generated_at: string;
 }
 
 export interface TransitionExecutionRequest {
@@ -2487,6 +2512,73 @@ export function validatePerformanceTelemetryPlan(
   };
 }
 
+export function createSceneRuntimeSnapshot(
+  collection: SceneCollection,
+  options: {
+    status?: SceneRuntimeStatus;
+    previewEnabled?: boolean;
+    metadata?: Record<string, unknown>;
+    updatedAt?: string;
+  } = {},
+): SceneRuntimeSnapshot {
+  const activeScene =
+    collection.scenes.find((scene) => scene.id === collection.active_scene_id) ??
+    collection.scenes[0];
+  const activeTransition =
+    collection.transitions.find(
+      (transition) => transition.id === collection.active_transition_id,
+    ) ??
+    collection.transitions[0] ??
+    defaultSceneTransitions[0];
+
+  return {
+    version: 1,
+    collection_id: collection.id,
+    collection_name: collection.name,
+    active_scene_id: activeScene?.id ?? "",
+    active_scene_name: activeScene?.name ?? "",
+    active_transition_id: activeTransition?.id ?? "",
+    active_transition_name: activeTransition?.name ?? "",
+    status: options.status ?? "active",
+    preview_enabled: options.previewEnabled ?? true,
+    metadata: options.metadata ?? { source: "scene_collection" },
+    updated_at: options.updatedAt ?? new Date().toISOString(),
+    validation: runtimeValidation(
+      [],
+      validateSceneCollection(collection).ok
+        ? []
+        : ["Scene collection has validation issues."],
+    ),
+  };
+}
+
+export function validateSceneRuntimeSnapshot(
+  snapshot: SceneRuntimeSnapshot,
+): SceneRuntimeContractValidation {
+  const errors: string[] = [];
+
+  if (!Number.isInteger(snapshot.version) || snapshot.version < 1) {
+    errors.push("Scene runtime snapshot version must be a positive integer.");
+  }
+  if (!snapshot.collection_id.trim()) {
+    errors.push("Scene runtime snapshot collection id is required.");
+  }
+  if (!snapshot.active_scene_id.trim()) {
+    errors.push("Scene runtime snapshot active scene id is required.");
+  }
+  if (!snapshot.active_transition_id.trim()) {
+    errors.push("Scene runtime snapshot active transition id is required.");
+  }
+  if (!["idle", "activating", "active", "transitioning", "error"].includes(snapshot.status)) {
+    errors.push("Scene runtime snapshot status is invalid.");
+  }
+  if (Number.isNaN(Date.parse(snapshot.updated_at))) {
+    errors.push("Scene runtime snapshot updated timestamp must be valid.");
+  }
+
+  return runtimeValidation(errors, snapshot.validation.warnings);
+}
+
 export function createSceneRuntimeCommand(
   kind: SceneRuntimeCommandKind,
   payload: SceneRuntimeCommandPayload,
@@ -2624,6 +2716,10 @@ export function createSceneActivationResponse(
     transition_id: request.transition_id,
     status: options.status ?? (validation.ready ? "accepted" : "rejected"),
     activated_at: options.activatedAt ?? new Date().toISOString(),
+    runtime: createSceneRuntimeSnapshot(collection, {
+      status: validation.ready ? "active" : "error",
+      metadata: { request_id: request.request_id },
+    }),
     validation,
   };
 }
@@ -2664,6 +2760,9 @@ export function validateSceneActivationResponse(
   if (response.status === "accepted" && response.validation.errors.length > 0) {
     errors.push("Accepted scene activation responses cannot contain validation errors.");
   }
+  const snapshotValidation = validateSceneRuntimeSnapshot(response.runtime);
+  warnings.push(...snapshotValidation.warnings);
+  errors.push(...snapshotValidation.errors);
 
   if (collection) {
     if (collection.id !== response.collection_id) {

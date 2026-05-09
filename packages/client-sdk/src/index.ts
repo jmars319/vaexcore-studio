@@ -3,6 +3,8 @@ import type {
   ApiResponse,
   AuditLogSnapshot,
   CommandStatus,
+  CompositorRenderRequest,
+  CompositorRenderResponse,
   ConnectedClientsSnapshot,
   CreatedProfile,
   CreateMarkerRequestInput,
@@ -13,11 +15,19 @@ import type {
   MediaPipelinePlanRequest,
   MediaPipelineValidation,
   MediaProfileInput,
+  PreviewFrameRequest,
+  PreviewFrameResponse,
   ProfilesSnapshot,
   RecentRecordingsSnapshot,
+  SceneActivationRequest,
+  SceneActivationResponse,
   SceneCollection,
   SceneCollectionBundle,
   SceneCollectionImportResult,
+  SceneRuntimeBindingsSnapshot,
+  SceneRuntimeSnapshot,
+  SceneRuntimeStateUpdateRequest,
+  SceneRuntimeStateUpdateResponse,
   SceneValidationResult,
   StudioStatus,
   StreamDestinationInput,
@@ -117,6 +127,46 @@ export class VaexcoreStudioClient {
       method: "POST",
       body: JSON.stringify(collection),
     });
+  }
+
+  sceneRuntime(): Promise<SceneRuntimeSnapshot> {
+    return this.request<SceneRuntimeSnapshot>("/scene-runtime");
+  }
+
+  activateScene(request: SceneActivationRequest): Promise<SceneActivationResponse> {
+    return this.request<SceneActivationResponse>("/scene-runtime/activate", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  updateSceneRuntimeState(
+    request: SceneRuntimeStateUpdateRequest,
+  ): Promise<SceneRuntimeStateUpdateResponse> {
+    return this.request<SceneRuntimeStateUpdateResponse>("/scene-runtime/state", {
+      method: "PUT",
+      body: JSON.stringify(request),
+    });
+  }
+
+  previewFrame(request: PreviewFrameRequest): Promise<PreviewFrameResponse> {
+    return this.request<PreviewFrameResponse>("/scene-runtime/preview-frame", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  validateRuntimeGraph(
+    request: CompositorRenderRequest,
+  ): Promise<CompositorRenderResponse> {
+    return this.request<CompositorRenderResponse>("/scene-runtime/validate-graph", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  sceneRuntimeBindings(): Promise<SceneRuntimeBindingsSnapshot> {
+    return this.request<SceneRuntimeBindingsSnapshot>("/scene-runtime/bindings");
   }
 
   clients(): Promise<ConnectedClientsSnapshot> {

@@ -40,8 +40,9 @@ in the app data directory before replacing the active collection.
 Shared Scene Runtime contracts now define scene activation, runtime state
 updates, preview-frame requests/responses, compositor render requests/responses,
 capture/audio binding readiness, and transition execution payloads. These are
-shared type contracts only for now; runtime API routes are planned for the next
-backend scene runtime phase.
+available through local runtime API routes. The routes return contract frames and
+binding readiness only; they do not start real capture or recording/streaming
+output.
 
 ## Auth
 
@@ -218,6 +219,30 @@ Accepts a `SceneCollectionBundle`, validates and saves the contained collection,
 ### `POST /scenes/validate`
 
 Accepts a `SceneCollection` and returns validation issues without saving.
+
+### `GET /scene-runtime`
+
+Returns the in-process scene runtime snapshot loaded from the saved scene collection.
+
+### `POST /scene-runtime/activate`
+
+Accepts a `SceneActivationRequest`, updates the active saved scene/transition when valid, refreshes media planning files, and returns a `SceneActivationResponse`.
+
+### `PUT /scene-runtime/state`
+
+Accepts a `SceneRuntimeStateUpdateRequest`, applies active-scene, active-transition, preview, and status patches, and returns a `SceneRuntimeStateUpdateResponse`.
+
+### `POST /scene-runtime/preview-frame`
+
+Accepts a `PreviewFrameRequest` and returns a `PreviewFrameResponse` with deterministic contract-frame metadata and checksum. The response does not contain real capture pixels.
+
+### `POST /scene-runtime/validate-graph`
+
+Accepts a `CompositorRenderRequest`, evaluates the render graph contract, and returns a `CompositorRenderResponse`.
+
+### `GET /scene-runtime/bindings`
+
+Returns capture and audio binding contracts for the active saved scene.
 
 ### `GET /media/plan`
 

@@ -7,7 +7,10 @@ use std::{
     future::Future,
     net::SocketAddr,
     path::{Path as FsPath, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -25,16 +28,27 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::{net::TcpListener, sync::broadcast};
+use tokio::{
+    net::TcpListener,
+    sync::{broadcast, RwLock},
+};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use vaexcore_core::{
+    build_scene_runtime_bindings_snapshot, create_compositor_render_response,
+    create_preview_frame_response, create_scene_activation_response,
+    create_scene_runtime_state_update_response, scene_runtime_snapshot,
+    scene_runtime_snapshot_with_options, CompositorRenderRequest, CompositorRenderResponse,
+};
 use vaexcore_core::{
     new_id, now_utc, scene_capture_sources, ApiResponse, AuditLogEntry, AuditLogSnapshot,
     CommandStatus, ConnectedClientsSnapshot, HealthResponse, LocalRuntimeDependency,
     LocalRuntimeHealth, Marker, MarkersSnapshot, MediaPipelinePlan, MediaPipelinePlanRequest,
-    MediaPipelineValidation, MediaProfileInput, PipelineIntent, ProfilesSnapshot,
-    RecentRecordingsSnapshot, SceneCollection, SceneCollectionBundle, SceneCollectionImportResult,
-    SceneValidationResult, SecretStore, StreamDestinationInput, StudioEvent, StudioEventKind,
-    StudioStatus, APP_NAME,
+    MediaPipelineValidation, MediaProfileInput, PipelineIntent, PreviewFrameRequest,
+    PreviewFrameResponse, ProfilesSnapshot, RecentRecordingsSnapshot, SceneActivationRequest,
+    SceneActivationResponse, SceneCollection, SceneCollectionBundle, SceneCollectionImportResult,
+    SceneRuntimeBindingsSnapshot, SceneRuntimeSnapshot, SceneRuntimeStateUpdateRequest,
+    SceneRuntimeStateUpdateResponse, SceneRuntimeStatus, SceneValidationResult, SecretStore,
+    StreamDestinationInput, StudioEvent, StudioEventKind, StudioStatus, APP_NAME,
 };
 use vaexcore_media::{
     build_dry_run_pipeline_plan, DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor,
@@ -72,6 +86,8 @@ pub struct ApiState {
     pub media_runner: Option<MediaRunnerSupervisor>,
     pub pipeline_plan_path: Option<PathBuf>,
     pub pipeline_config_path: Option<PathBuf>,
+    pub scene_runtime: RwLock<SceneRuntimeSnapshot>,
+    pub preview_frame_index: AtomicU64,
 }
 
 impl ApiState {
@@ -86,9 +102,11 @@ impl ApiState {
             None => Arc::new(DryRunMediaEngine::new(Some(event_sink))),
         };
         let monitor_events = events.clone();
+        let store = ProfileStore::open(&config.database_path)?;
+        let scene_runtime = scene_runtime_snapshot(&store.scene_collection()?);
         let state = Arc::new(Self {
             auth: config.auth.clone(),
-            store: ProfileStore::open(&config.database_path)?,
+            store,
             database_path: config.database_path.clone(),
             engine,
             events,
@@ -96,6 +114,8 @@ impl ApiState {
             media_runner: config.media_runner.clone(),
             pipeline_plan_path: config.pipeline_plan_path.clone(),
             pipeline_config_path: config.pipeline_config_path.clone(),
+            scene_runtime: RwLock::new(scene_runtime),
+            preview_frame_index: AtomicU64::new(0),
         });
 
         state
@@ -118,9 +138,11 @@ impl ApiState {
             Arc::new(move |event: StudioEvent| events.emit(event))
         };
         let engine: Arc<dyn MediaEngine> = Arc::new(DryRunMediaEngine::new(Some(event_sink)));
+        let store = ProfileStore::open_memory()?;
+        let scene_runtime = scene_runtime_snapshot(&store.scene_collection()?);
         let state = Arc::new(Self {
             auth: SharedAuthConfig::new(auth),
-            store: ProfileStore::open_memory()?,
+            store,
             database_path: PathBuf::from(":memory:"),
             engine,
             events,
@@ -128,6 +150,8 @@ impl ApiState {
             media_runner: None,
             pipeline_plan_path: None,
             pipeline_config_path: None,
+            scene_runtime: RwLock::new(scene_runtime),
+            preview_frame_index: AtomicU64::new(0),
         });
 
         state
@@ -281,6 +305,18 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .route("/scenes/export", get(get_scenes_export))
         .route("/scenes/import", post(post_scenes_import))
         .route("/scenes/validate", post(post_scenes_validate))
+        .route("/scene-runtime", get(get_scene_runtime))
+        .route("/scene-runtime/activate", post(post_scene_runtime_activate))
+        .route("/scene-runtime/state", put(put_scene_runtime_state))
+        .route(
+            "/scene-runtime/preview-frame",
+            post(post_scene_runtime_preview_frame),
+        )
+        .route(
+            "/scene-runtime/validate-graph",
+            post(post_scene_runtime_validate_graph),
+        )
+        .route("/scene-runtime/bindings", get(get_scene_runtime_bindings))
         .route(
             "/media/plan",
             get(default_pipeline_plan).post(post_pipeline_plan),
@@ -444,6 +480,10 @@ fn command_action(method: &Method, path: &str) -> Option<String> {
         ("PUT", "/scenes") => "scenes.save",
         ("POST", "/scenes/import") => "scenes.import",
         ("POST", "/scenes/validate") => "scenes.validate",
+        ("POST", "/scene-runtime/activate") => "scene_runtime.activate",
+        ("PUT", "/scene-runtime/state") => "scene_runtime.state",
+        ("POST", "/scene-runtime/preview-frame") => "scene_runtime.preview_frame",
+        ("POST", "/scene-runtime/validate-graph") => "scene_runtime.validate_graph",
         ("POST", "/media/plan") => "media.plan",
         ("POST", "/media/validate") => "media.validate",
         ("POST", "/marker/create") => "marker.create",
@@ -652,6 +692,7 @@ async fn put_scenes(
 ) -> Result<Json<ApiResponse<SceneCollection>>, ApiError> {
     auth::authorize_headers(&headers, &state.auth)?;
     let saved = state.store.save_scene_collection(collection)?;
+    sync_scene_runtime_from_collection(&state, &saved, SceneRuntimeStatus::Active, true).await;
     refresh_default_pipeline_contract(&state).await;
     Ok(Json(ApiResponse::ok(saved)))
 }
@@ -673,6 +714,13 @@ async fn post_scenes_import(
 ) -> Result<Json<ApiResponse<SceneCollectionImportResult>>, ApiError> {
     auth::authorize_headers(&headers, &state.auth)?;
     let result = state.store.import_scene_collection(bundle)?;
+    sync_scene_runtime_from_collection(
+        &state,
+        &result.collection,
+        SceneRuntimeStatus::Active,
+        true,
+    )
+    .await;
     refresh_default_pipeline_contract(&state).await;
     Ok(Json(ApiResponse::ok(result)))
 }
@@ -685,6 +733,135 @@ async fn post_scenes_validate(
     auth::authorize_headers(&headers, &state.auth)?;
     Ok(Json(ApiResponse::ok(
         state.store.validate_scene_collection(&collection),
+    )))
+}
+
+async fn get_scene_runtime(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<SceneRuntimeSnapshot>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    Ok(Json(ApiResponse::ok(
+        state.scene_runtime.read().await.clone(),
+    )))
+}
+
+async fn post_scene_runtime_activate(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(request): Json<SceneActivationRequest>,
+) -> Result<Json<ApiResponse<SceneActivationResponse>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let mut collection = state.store.scene_collection()?;
+    let validation = vaexcore_core::validate_scene_activation_request(&request, &collection);
+    let previous_scene_id = Some(collection.active_scene_id.clone());
+
+    if validation.ready {
+        collection.active_scene_id = request.target_scene_id.clone();
+        if let Some(transition_id) = &request.transition_id {
+            collection.active_transition_id = transition_id.clone();
+        }
+        collection = state.store.save_scene_collection(collection)?;
+        sync_scene_runtime_from_collection(&state, &collection, SceneRuntimeStatus::Active, true)
+            .await;
+        refresh_default_pipeline_contract(&state).await;
+    }
+
+    let response = create_scene_activation_response(&request, &collection, previous_scene_id);
+    Ok(Json(ApiResponse::ok(response)))
+}
+
+async fn put_scene_runtime_state(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(request): Json<SceneRuntimeStateUpdateRequest>,
+) -> Result<Json<ApiResponse<SceneRuntimeStateUpdateResponse>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let mut collection = state.store.scene_collection()?;
+    let validation =
+        vaexcore_core::validate_scene_runtime_state_update_request(&request, &collection);
+
+    if validation.ready {
+        let mut collection_changed = false;
+        if let Some(active_scene_id) = &request.patch.active_scene_id {
+            collection.active_scene_id = active_scene_id.clone();
+            collection_changed = true;
+        }
+        if let Some(active_transition_id) = &request.patch.active_transition_id {
+            collection.active_transition_id = active_transition_id.clone();
+            collection_changed = true;
+        }
+        if collection_changed {
+            collection = state.store.save_scene_collection(collection)?;
+            refresh_default_pipeline_contract(&state).await;
+        }
+
+        let preview_enabled = request.patch.preview_enabled.unwrap_or_else(|| {
+            state
+                .scene_runtime
+                .try_read()
+                .map(|runtime| runtime.preview_enabled)
+                .unwrap_or(true)
+        });
+        let runtime = scene_runtime_snapshot_with_options(
+            &collection,
+            request
+                .patch
+                .status
+                .clone()
+                .unwrap_or(SceneRuntimeStatus::Active),
+            preview_enabled,
+            request
+                .patch
+                .metadata
+                .clone()
+                .unwrap_or_else(|| serde_json::json!({ "request_id": request.request_id })),
+        );
+        *state.scene_runtime.write().await = runtime;
+    }
+
+    Ok(Json(ApiResponse::ok(
+        create_scene_runtime_state_update_response(&request, &collection),
+    )))
+}
+
+async fn post_scene_runtime_preview_frame(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(request): Json<PreviewFrameRequest>,
+) -> Result<Json<ApiResponse<PreviewFrameResponse>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let collection = state.store.scene_collection()?;
+    let frame_index = state.preview_frame_index.fetch_add(1, Ordering::Relaxed);
+    let response = create_preview_frame_response(&request, &collection, frame_index);
+    Ok(Json(ApiResponse::ok(response)))
+}
+
+async fn post_scene_runtime_validate_graph(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(request): Json<CompositorRenderRequest>,
+) -> Result<Json<ApiResponse<CompositorRenderResponse>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let response = create_compositor_render_response(&request);
+    Ok(Json(ApiResponse::ok(response)))
+}
+
+async fn get_scene_runtime_bindings(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<SceneRuntimeBindingsSnapshot>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let collection = state.store.scene_collection()?;
+    let scene = collection.active_scene().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "scene_runtime_no_active_scene",
+            "scene runtime has no active scene",
+        )
+    })?;
+    Ok(Json(ApiResponse::ok(
+        build_scene_runtime_bindings_snapshot(scene),
     )))
 }
 
@@ -1270,6 +1447,20 @@ async fn refresh_default_pipeline_contract(state: &ApiState) {
     }
 }
 
+async fn sync_scene_runtime_from_collection(
+    state: &ApiState,
+    collection: &SceneCollection,
+    status: SceneRuntimeStatus,
+    preview_enabled: bool,
+) {
+    *state.scene_runtime.write().await = scene_runtime_snapshot_with_options(
+        collection,
+        status,
+        preview_enabled,
+        serde_json::json!({ "source": "saved_scene_collection" }),
+    );
+}
+
 #[derive(Serialize)]
 struct RunnerPipelineConfig<'a> {
     dry_run: bool,
@@ -1794,6 +1985,131 @@ mod tests {
             imported["data"]["collection"]["name"],
             "Imported API Scenes"
         );
+    }
+
+    #[tokio::test]
+    async fn scene_runtime_api_tracks_activation_preview_and_graph_validation() {
+        let app = test_app();
+
+        let (status, runtime) =
+            request_json(app.clone(), "GET", "/scene-runtime".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(runtime["data"]["active_scene_id"], "scene-main");
+        assert_eq!(runtime["data"]["status"], "active");
+
+        let (status, activation) = request_json(
+            app.clone(),
+            "POST",
+            "/scene-runtime/activate".to_string(),
+            Some(json!({
+                "version": 1,
+                "request_id": "scene-activate-test",
+                "collection_id": "collection-default",
+                "target_scene_id": "scene-main",
+                "transition_id": "transition-cut",
+                "requested_at": "2026-05-09T12:00:00Z",
+                "reason": "test"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(activation["data"]["status"], "accepted");
+        assert_eq!(
+            activation["data"]["runtime"]["active_transition_id"],
+            "transition-cut"
+        );
+
+        let (status, state_update) = request_json(
+            app.clone(),
+            "PUT",
+            "/scene-runtime/state".to_string(),
+            Some(json!({
+                "version": 1,
+                "request_id": "scene-state-test",
+                "collection_id": "collection-default",
+                "patch": {
+                    "active_scene_id": "scene-main",
+                    "preview_enabled": false,
+                    "status": "idle"
+                },
+                "requested_at": "2026-05-09T12:00:01Z"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(state_update["data"]["status"], "idle");
+
+        let (status, preview) = request_json(
+            app.clone(),
+            "POST",
+            "/scene-runtime/preview-frame".to_string(),
+            Some(json!({
+                "version": 1,
+                "request_id": "preview-test",
+                "scene_id": "scene-main",
+                "width": 1280,
+                "height": 720,
+                "framerate": 30,
+                "frame_format": "rgba8",
+                "scale_mode": "fit",
+                "encoding": "data_url",
+                "include_debug_overlay": true,
+                "requested_at": "2026-05-09T12:00:02Z"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(preview["data"]["scene_id"], "scene-main");
+        assert!(preview["data"]["checksum"]
+            .as_str()
+            .unwrap()
+            .starts_with("contract:"));
+        assert_eq!(
+            preview["data"]["rendered_frame"]["targets"][0]["target_id"],
+            "target-runtime-preview"
+        );
+
+        let (status, bindings) = request_json(
+            app.clone(),
+            "GET",
+            "/scene-runtime/bindings".to_string(),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(bindings["data"]["scene_id"], "scene-main");
+        assert!(bindings["data"]["capture"]["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|binding| binding["media_kind"] == "video"));
+
+        let (status, plan) =
+            request_json(app.clone(), "GET", "/media/plan".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let render_plan = plan["data"]["config"]["compositor_render_plan"].clone();
+        let (status, graph) = request_json(
+            app,
+            "POST",
+            "/scene-runtime/validate-graph".to_string(),
+            Some(json!({
+                "version": 1,
+                "request_id": "graph-test",
+                "renderer": "contract",
+                "plan": render_plan,
+                "clock": {
+                    "frame_index": 0,
+                    "framerate": 60,
+                    "pts_nanos": 0,
+                    "duration_nanos": 16666666
+                },
+                "requested_at": "2026-05-09T12:00:03Z"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(graph["data"]["scene_id"], "scene-main");
+        assert_eq!(graph["data"]["validation"]["ready"], true);
     }
 
     #[tokio::test]

@@ -6,6 +6,7 @@ pub mod performance;
 pub mod pipeline;
 pub mod profiles;
 pub mod responses;
+pub mod runtime;
 pub mod scenes;
 pub mod security;
 pub mod settings;
@@ -51,6 +52,25 @@ pub use responses::{
     MarkersSnapshot, PreflightCheck, PreflightSnapshot, PreflightStatus, ProfileBundle,
     ProfileBundleImportResult, ProfilesSnapshot, RecentRecordingsSnapshot, RecordingHistoryEntry,
     StreamDestinationBundleItem, StudioStatus,
+};
+pub use runtime::{
+    build_runtime_audio_source_binding_contract, build_runtime_capture_source_binding_contract,
+    build_scene_runtime_bindings_snapshot, create_compositor_render_response,
+    create_preview_frame_response, create_scene_activation_response,
+    create_scene_runtime_state_update_response, create_transition_execution_response,
+    scene_runtime_snapshot, scene_runtime_snapshot_with_options,
+    validate_compositor_render_request, validate_preview_frame_request,
+    validate_runtime_audio_source_binding_contract,
+    validate_runtime_capture_source_binding_contract, validate_scene_activation_request,
+    validate_scene_runtime_state_update_request, validate_transition_execution_request,
+    CompositorRenderRequest, CompositorRenderResponse, CompositorRenderTargetResult,
+    PreviewFrameEncoding, PreviewFrameRequest, PreviewFrameResponse, RuntimeAudioSourceBinding,
+    RuntimeAudioSourceBindingContract, RuntimeCaptureSourceBinding,
+    RuntimeCaptureSourceBindingContract, SceneActivationRequest, SceneActivationResponse,
+    SceneActivationStatus, SceneRuntimeBindingsSnapshot, SceneRuntimeCommand,
+    SceneRuntimeCommandKind, SceneRuntimeContractValidation, SceneRuntimeSnapshot,
+    SceneRuntimeStatePatch, SceneRuntimeStateUpdateRequest, SceneRuntimeStateUpdateResponse,
+    SceneRuntimeStatus, TransitionExecutionRequest, TransitionExecutionResponse,
 };
 pub use scenes::{
     build_scene_transition_preview_plan, scene_capture_sources, scene_resolution,

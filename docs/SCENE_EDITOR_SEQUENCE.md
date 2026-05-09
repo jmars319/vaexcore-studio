@@ -97,6 +97,13 @@ state update, and transition execution contracts with validation/default helper
 coverage. These are contract-only foundations; backend runtime state, API routes,
 preview polling, and live compositor execution begin in Phase C and later.
 
+Phase C backend scene runtime, covering steps 21-30, is now started with an
+in-process runtime snapshot, active scene/transition state, scene activation,
+runtime state patching, contract preview-frame requests, runtime graph
+validation, capture/audio binding snapshots, SDK helpers, and API smoke coverage.
+It still returns contract metadata only; real compositor execution and capture
+frames remain later phases.
+
 ## Validation Contract
 
 Every chunk from step 4 onward must keep these gates green unless a platform
