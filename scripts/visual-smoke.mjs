@@ -25,6 +25,60 @@ const targets = [
     minBytes: 50_000,
   },
   {
+    name: "designer-foundation-controls",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-source-create-panel\\"]"))',
+        message: "Designer source creation panel did not render.",
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-command-bar\\"]"))',
+        message: "Designer command bar did not render.",
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-validation-panel\\"]"))',
+        message: "Designer validation panel did not render.",
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector(".designer-preview-toolbar"))',
+        message: "Designer preview toolbar did not render.",
+      },
+      {
+        type: "click",
+        selector: '[data-testid="designer-command-bar"] button',
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelectorAll(".designer-source-box.selected").length >= 5',
+        message: "Designer select-all command did not select the visible sources.",
+      },
+      {
+        type: "click",
+        selector: '[aria-label="Zoom preview in"]',
+      },
+      {
+        type: "assert",
+        expression: 'Number.parseFloat(document.querySelector(".designer-preview-canvas")?.style.width ?? "0") > 100',
+        message: "Designer preview zoom control did not enlarge the canvas.",
+      },
+      {
+        type: "click",
+        selector: '[data-testid="designer-source-preset"]',
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelectorAll("[data-testid=\\"designer-source-stack-item\\"]").length >= 6',
+        message: "Designer source preset did not create a source.",
+      },
+    ],
+  },
+  {
     name: "designer-multi-select",
     path: "/?section=designer",
     minBytes: 50_000,
