@@ -88,6 +88,15 @@ foundation to OBS-class scene editing and output.
     PNG size/dimension assertions. Real Windows hardware results, installer QA,
     and long-run soak tests are not started.
 
+## 100-Step Progress
+
+Phase B runtime contracts, covering steps 11-20 from the 100-step plan, are now
+in the shared type package. This includes serializable command, preview-frame,
+compositor render, capture binding, audio binding, scene activation, runtime
+state update, and transition execution contracts with validation/default helper
+coverage. These are contract-only foundations; backend runtime state, API routes,
+preview polling, and live compositor execution begin in Phase C and later.
+
 ## Validation Contract
 
 Every chunk from step 4 onward must keep these gates green unless a platform

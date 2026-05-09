@@ -19,6 +19,13 @@ The shared contracts also define:
 - `CaptureFramePlan`
 - `AudioMixerPlan`
 - `PerformanceTelemetryPlan`
+- `SceneRuntimeCommand`
+- `SceneActivationRequest` / `SceneActivationResponse`
+- `PreviewFrameRequest` / `PreviewFrameResponse`
+- `CompositorRenderRequest` / `CompositorRenderResponse`
+- `RuntimeCaptureSourceBindingContract`
+- `RuntimeAudioSourceBindingContract`
+- `TransitionExecutionRequest` / `TransitionExecutionResponse`
 - `MediaPipelinePlanRequest`
 - `MediaPipelinePlan`
 - `MediaPipelineValidation`
@@ -44,6 +51,13 @@ audio mixing is implemented.
 budget, render budget, encode budget, dropped-frame tolerance, latency ceiling,
 and estimated RGBA throughput. It is a contract and validation layer for frame
 pacing and hardware-readiness reporting; it does not start runtime profiling.
+
+The Scene Runtime contracts define the payloads that the future runtime API will
+use for scene activation, runtime state patching, preview polling, compositor
+render requests, source binding readiness, audio binding readiness, and
+transition execution. They are intentionally serializable and backend-friendly,
+but this pass does not start the backend runtime or real capture/compositor
+execution.
 
 ## macOS Source Inventory
 

@@ -431,6 +431,233 @@ export interface CompositorRenderedFrame {
   validation: CompositorValidation;
 }
 
+export interface SceneRuntimeContractValidation {
+  ready: boolean;
+  warnings: string[];
+  errors: string[];
+}
+
+export type SceneRuntimeCommandKind =
+  | "activate_scene"
+  | "update_runtime_state"
+  | "request_preview_frame"
+  | "validate_runtime_graph"
+  | "execute_transition";
+
+export type SceneRuntimeCommandPayload =
+  | SceneActivationRequest
+  | SceneRuntimeStateUpdateRequest
+  | PreviewFrameRequest
+  | CompositorRenderRequest
+  | TransitionExecutionRequest;
+
+export interface SceneRuntimeCommand {
+  version: number;
+  command_id: string;
+  kind: SceneRuntimeCommandKind;
+  requested_at: string;
+  payload: SceneRuntimeCommandPayload;
+}
+
+export type SceneRuntimeStatus =
+  | "idle"
+  | "activating"
+  | "active"
+  | "transitioning"
+  | "error";
+
+export interface SceneRuntimeStatePatch {
+  active_scene_id?: string | null;
+  active_transition_id?: string | null;
+  status?: SceneRuntimeStatus | null;
+  preview_enabled?: boolean | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface SceneRuntimeStateUpdateRequest {
+  version: number;
+  request_id: string;
+  collection_id: string;
+  patch: SceneRuntimeStatePatch;
+  requested_at: string;
+}
+
+export interface SceneRuntimeStateUpdateResponse {
+  version: number;
+  request_id: string;
+  collection_id: string;
+  active_scene_id: string;
+  active_transition_id: string;
+  status: SceneRuntimeStatus;
+  updated_at: string;
+  validation: SceneRuntimeContractValidation;
+}
+
+export interface SceneActivationRequest {
+  version: number;
+  request_id: string;
+  collection_id: string;
+  target_scene_id: string;
+  transition_id: string | null;
+  requested_at: string;
+  reason: string | null;
+}
+
+export type SceneActivationStatus = "accepted" | "rejected";
+
+export interface SceneActivationResponse {
+  version: number;
+  request_id: string;
+  collection_id: string;
+  previous_scene_id: string | null;
+  active_scene_id: string;
+  transition_id: string | null;
+  status: SceneActivationStatus;
+  activated_at: string;
+  validation: SceneRuntimeContractValidation;
+}
+
+export type PreviewFrameEncoding = "none" | "data_url" | "base64";
+
+export interface PreviewFrameRequest {
+  version: number;
+  request_id: string;
+  scene_id: string;
+  width: number;
+  height: number;
+  framerate: number;
+  frame_format: CompositorFrameFormat;
+  scale_mode: CompositorScaleMode;
+  encoding: PreviewFrameEncoding;
+  include_debug_overlay: boolean;
+  requested_at: string;
+}
+
+export interface PreviewFrameResponse {
+  version: number;
+  request_id: string;
+  scene_id: string;
+  scene_name: string;
+  frame_index: number;
+  width: number;
+  height: number;
+  frame_format: CompositorFrameFormat;
+  encoding: PreviewFrameEncoding;
+  image_data: string | null;
+  checksum: string | null;
+  render_time_ms: number;
+  generated_at: string;
+  rendered_frame: CompositorRenderedFrame | null;
+  validation: SceneRuntimeContractValidation;
+}
+
+export interface CompositorRenderRequest {
+  version: number;
+  request_id: string;
+  renderer: CompositorRendererKind;
+  plan: CompositorRenderPlan;
+  clock: CompositorFrameClock;
+  requested_at: string;
+}
+
+export interface CompositorRenderTargetResult {
+  target_id: string;
+  target_kind: CompositorRenderTargetKind;
+  width: number;
+  height: number;
+  frame_format: CompositorFrameFormat;
+  checksum: string | null;
+  byte_length: number | null;
+}
+
+export interface CompositorRenderResponse {
+  version: number;
+  request_id: string;
+  renderer: CompositorRendererKind;
+  scene_id: string;
+  scene_name: string;
+  frame: CompositorRenderedFrame;
+  target_results: CompositorRenderTargetResult[];
+  render_time_ms: number;
+  rendered_at: string;
+  validation: SceneRuntimeContractValidation;
+}
+
+export interface RuntimeCaptureSourceBinding {
+  scene_source_id: string;
+  scene_source_name: string;
+  scene_source_kind: SceneSourceKind;
+  capture_source_id: string | null;
+  capture_kind: CaptureSourceKind;
+  media_kind: CaptureFrameMediaKind;
+  frame_format: CaptureFrameFormat;
+  width: number | null;
+  height: number | null;
+  framerate: number | null;
+  sample_rate: number | null;
+  channels: number | null;
+  required: boolean;
+  status: CaptureFrameBindingStatus;
+  status_detail: string;
+}
+
+export interface RuntimeCaptureSourceBindingContract {
+  version: number;
+  scene_id: string;
+  scene_name: string;
+  bindings: RuntimeCaptureSourceBinding[];
+  validation: SceneRuntimeContractValidation;
+}
+
+export interface RuntimeAudioSourceBinding {
+  scene_source_id: string;
+  scene_source_name: string;
+  capture_source_id: string | null;
+  capture_kind: CaptureSourceKind;
+  bus_ids: string[];
+  gain_db: number;
+  muted: boolean;
+  monitor_enabled: boolean;
+  meter_enabled: boolean;
+  sync_offset_ms: number;
+  status: AudioMixSourceStatus;
+  status_detail: string;
+}
+
+export interface RuntimeAudioSourceBindingContract {
+  version: number;
+  scene_id: string;
+  scene_name: string;
+  sample_rate: number;
+  channels: number;
+  bindings: RuntimeAudioSourceBinding[];
+  buses: AudioMixBus[];
+  validation: SceneRuntimeContractValidation;
+}
+
+export interface TransitionExecutionRequest {
+  version: number;
+  request_id: string;
+  collection_id: string;
+  transition_id: string;
+  from_scene_id: string;
+  to_scene_id: string;
+  framerate: number;
+  requested_at: string;
+}
+
+export interface TransitionExecutionResponse {
+  version: number;
+  request_id: string;
+  collection_id: string;
+  transition_id: string;
+  from_scene_id: string;
+  to_scene_id: string;
+  started_at: string;
+  preview_plan: SceneTransitionPreviewPlan;
+  validation: SceneRuntimeContractValidation;
+}
+
 export interface CompositorValidation {
   ready: boolean;
   warnings: string[];
@@ -2258,6 +2485,945 @@ export function validatePerformanceTelemetryPlan(
     warnings,
     errors,
   };
+}
+
+export function createSceneRuntimeCommand(
+  kind: SceneRuntimeCommandKind,
+  payload: SceneRuntimeCommandPayload,
+  options: { commandId?: string; requestedAt?: string } = {},
+): SceneRuntimeCommand {
+  return {
+    version: 1,
+    command_id: options.commandId ?? runtimeId("runtime-command"),
+    kind,
+    requested_at: options.requestedAt ?? new Date().toISOString(),
+    payload: cloneJson(payload),
+  };
+}
+
+export function validateSceneRuntimeCommand(
+  command: SceneRuntimeCommand,
+): SceneRuntimeContractValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+
+  validateRuntimeEnvelope(
+    command.version,
+    command.command_id,
+    command.requested_at,
+    "Scene runtime command",
+    errors,
+  );
+  if (!command.kind.trim()) {
+    errors.push("Scene runtime command kind is required.");
+  }
+  if (!command.payload || typeof command.payload !== "object") {
+    errors.push("Scene runtime command payload is required.");
+  }
+
+  if (command.payload && typeof command.payload === "object") {
+    const validation = validateSceneRuntimeCommandPayload(command);
+    warnings.push(...validation.warnings);
+    errors.push(...validation.errors);
+  }
+
+  return runtimeValidation(errors, warnings);
+}
+
+export function createSceneActivationRequest(
+  collection: SceneCollection,
+  targetSceneId: string,
+  options: {
+    requestId?: string;
+    requestedAt?: string;
+    transitionId?: string | null;
+    reason?: string | null;
+  } = {},
+): SceneActivationRequest {
+  return {
+    version: 1,
+    request_id: options.requestId ?? runtimeId("scene-activation"),
+    collection_id: collection.id,
+    target_scene_id: targetSceneId,
+    transition_id: options.transitionId ?? collection.active_transition_id ?? null,
+    requested_at: options.requestedAt ?? new Date().toISOString(),
+    reason: options.reason ?? null,
+  };
+}
+
+export function validateSceneActivationRequest(
+  request: SceneActivationRequest,
+  collection?: SceneCollection,
+): SceneRuntimeContractValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+
+  validateRuntimeEnvelope(
+    request.version,
+    request.request_id,
+    request.requested_at,
+    "Scene activation request",
+    errors,
+  );
+  if (!request.collection_id.trim()) {
+    errors.push("Scene activation collection id is required.");
+  }
+  if (!request.target_scene_id.trim()) {
+    errors.push("Scene activation target scene id is required.");
+  }
+  if (request.transition_id !== null && !request.transition_id.trim()) {
+    errors.push("Scene activation transition id cannot be blank.");
+  }
+
+  if (collection) {
+    if (collection.id !== request.collection_id) {
+      errors.push("Scene activation request collection id does not match collection.");
+    }
+    if (!collection.scenes.some((scene) => scene.id === request.target_scene_id)) {
+      errors.push(
+        `Scene activation target scene "${request.target_scene_id}" does not exist.`,
+      );
+    }
+    if (
+      request.transition_id &&
+      !collection.transitions.some(
+        (transition) => transition.id === request.transition_id,
+      )
+    ) {
+      errors.push(
+        `Scene activation transition "${request.transition_id}" does not exist.`,
+      );
+    }
+    const collectionValidation = validateSceneCollection(collection);
+    if (!collectionValidation.ok) {
+      warnings.push(
+        `Scene collection has ${collectionValidation.issues.length} validation issue(s).`,
+      );
+    }
+  }
+
+  return runtimeValidation(errors, warnings);
+}
+
+export function createSceneActivationResponse(
+  request: SceneActivationRequest,
+  collection: SceneCollection,
+  options: {
+    previousSceneId?: string | null;
+    status?: SceneActivationStatus;
+    activatedAt?: string;
+  } = {},
+): SceneActivationResponse {
+  const validation = validateSceneActivationRequest(request, collection);
+  return {
+    version: 1,
+    request_id: request.request_id,
+    collection_id: request.collection_id,
+    previous_scene_id: options.previousSceneId ?? collection.active_scene_id ?? null,
+    active_scene_id: request.target_scene_id,
+    transition_id: request.transition_id,
+    status: options.status ?? (validation.ready ? "accepted" : "rejected"),
+    activated_at: options.activatedAt ?? new Date().toISOString(),
+    validation,
+  };
+}
+
+export function validateSceneActivationResponse(
+  response: SceneActivationResponse,
+  collection?: SceneCollection,
+): SceneRuntimeContractValidation {
+  const warnings = [...response.validation.warnings];
+  const errors = [...response.validation.errors];
+
+  validateRuntimeEnvelope(
+    response.version,
+    response.request_id,
+    response.activated_at,
+    "Scene activation response",
+    errors,
+  );
+  if (!response.collection_id.trim()) {
+    errors.push("Scene activation response collection id is required.");
+  }
+  if (!response.active_scene_id.trim()) {
+    errors.push("Scene activation response active scene id is required.");
+  }
+  if (
+    response.previous_scene_id !== null &&
+    typeof response.previous_scene_id === "string" &&
+    !response.previous_scene_id.trim()
+  ) {
+    errors.push("Scene activation response previous scene id cannot be blank.");
+  }
+  if (response.transition_id !== null && !response.transition_id.trim()) {
+    errors.push("Scene activation response transition id cannot be blank.");
+  }
+  if (!["accepted", "rejected"].includes(response.status)) {
+    errors.push("Scene activation response status is invalid.");
+  }
+  if (response.status === "accepted" && response.validation.errors.length > 0) {
+    errors.push("Accepted scene activation responses cannot contain validation errors.");
+  }
+
+  if (collection) {
+    if (collection.id !== response.collection_id) {
+      errors.push("Scene activation response collection id does not match collection.");
+    }
+    if (!collection.scenes.some((scene) => scene.id === response.active_scene_id)) {
+      errors.push(
+        `Scene activation response active scene "${response.active_scene_id}" does not exist.`,
+      );
+    }
+    if (
+      response.previous_scene_id &&
+      !collection.scenes.some((scene) => scene.id === response.previous_scene_id)
+    ) {
+      errors.push(
+        `Scene activation response previous scene "${response.previous_scene_id}" does not exist.`,
+      );
+    }
+    if (
+      response.transition_id &&
+      !collection.transitions.some((transition) => transition.id === response.transition_id)
+    ) {
+      errors.push(
+        `Scene activation response transition "${response.transition_id}" does not exist.`,
+      );
+    }
+  }
+
+  return runtimeValidation(errors, warnings);
+}
+
+export function createSceneRuntimeStateUpdateRequest(
+  collection: SceneCollection,
+  patch: SceneRuntimeStatePatch,
+  options: { requestId?: string; requestedAt?: string } = {},
+): SceneRuntimeStateUpdateRequest {
+  return {
+    version: 1,
+    request_id: options.requestId ?? runtimeId("scene-state"),
+    collection_id: collection.id,
+    patch: cloneJson(patch),
+    requested_at: options.requestedAt ?? new Date().toISOString(),
+  };
+}
+
+export function validateSceneRuntimeStateUpdateRequest(
+  request: SceneRuntimeStateUpdateRequest,
+  collection?: SceneCollection,
+): SceneRuntimeContractValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+
+  validateRuntimeEnvelope(
+    request.version,
+    request.request_id,
+    request.requested_at,
+    "Scene runtime state update request",
+    errors,
+  );
+  if (!request.collection_id.trim()) {
+    errors.push("Scene runtime state update collection id is required.");
+  }
+  if (!request.patch || typeof request.patch !== "object") {
+    errors.push("Scene runtime state patch is required.");
+  }
+  if (request.patch.active_scene_id === "") {
+    errors.push("Scene runtime state active scene id cannot be blank.");
+  }
+  if (request.patch.active_transition_id === "") {
+    errors.push("Scene runtime state active transition id cannot be blank.");
+  }
+
+  if (collection) {
+    if (collection.id !== request.collection_id) {
+      errors.push("Scene runtime state update collection id does not match collection.");
+    }
+    if (
+      request.patch.active_scene_id &&
+      !collection.scenes.some((scene) => scene.id === request.patch.active_scene_id)
+    ) {
+      errors.push(
+        `Scene runtime state active scene "${request.patch.active_scene_id}" does not exist.`,
+      );
+    }
+    if (
+      request.patch.active_transition_id &&
+      !collection.transitions.some(
+        (transition) => transition.id === request.patch.active_transition_id,
+      )
+    ) {
+      errors.push(
+        `Scene runtime state active transition "${request.patch.active_transition_id}" does not exist.`,
+      );
+    }
+  }
+
+  return runtimeValidation(errors, warnings);
+}
+
+export function createSceneRuntimeStateUpdateResponse(
+  request: SceneRuntimeStateUpdateRequest,
+  collection: SceneCollection,
+  options: { updatedAt?: string } = {},
+): SceneRuntimeStateUpdateResponse {
+  const validation = validateSceneRuntimeStateUpdateRequest(request, collection);
+  return {
+    version: 1,
+    request_id: request.request_id,
+    collection_id: request.collection_id,
+    active_scene_id: request.patch.active_scene_id ?? collection.active_scene_id,
+    active_transition_id:
+      request.patch.active_transition_id ?? collection.active_transition_id,
+    status: request.patch.status ?? "active",
+    updated_at: options.updatedAt ?? new Date().toISOString(),
+    validation,
+  };
+}
+
+export function validateSceneRuntimeStateUpdateResponse(
+  response: SceneRuntimeStateUpdateResponse,
+  collection?: SceneCollection,
+): SceneRuntimeContractValidation {
+  const warnings = [...response.validation.warnings];
+  const errors = [...response.validation.errors];
+
+  validateRuntimeEnvelope(
+    response.version,
+    response.request_id,
+    response.updated_at,
+    "Scene runtime state update response",
+    errors,
+  );
+  if (!response.collection_id.trim()) {
+    errors.push("Scene runtime state update response collection id is required.");
+  }
+  if (!response.active_scene_id.trim()) {
+    errors.push("Scene runtime state update response active scene id is required.");
+  }
+  if (!response.active_transition_id.trim()) {
+    errors.push("Scene runtime state update response active transition id is required.");
+  }
+  if (!["idle", "activating", "active", "transitioning", "error"].includes(response.status)) {
+    errors.push("Scene runtime state update response status is invalid.");
+  }
+
+  if (collection) {
+    if (collection.id !== response.collection_id) {
+      errors.push(
+        "Scene runtime state update response collection id does not match collection.",
+      );
+    }
+    if (!collection.scenes.some((scene) => scene.id === response.active_scene_id)) {
+      errors.push(
+        `Scene runtime state update response active scene "${response.active_scene_id}" does not exist.`,
+      );
+    }
+    if (
+      !collection.transitions.some(
+        (transition) => transition.id === response.active_transition_id,
+      )
+    ) {
+      errors.push(
+        `Scene runtime state update response active transition "${response.active_transition_id}" does not exist.`,
+      );
+    }
+  }
+
+  return runtimeValidation(errors, warnings);
+}
+
+export function createPreviewFrameRequest(
+  scene: Scene,
+  options: Partial<
+    Pick<
+      PreviewFrameRequest,
+      | "request_id"
+      | "width"
+      | "height"
+      | "framerate"
+      | "frame_format"
+      | "scale_mode"
+      | "encoding"
+      | "include_debug_overlay"
+      | "requested_at"
+    >
+  > = {},
+): PreviewFrameRequest {
+  return {
+    version: 1,
+    request_id: options.request_id ?? runtimeId("preview-frame"),
+    scene_id: scene.id,
+    width: options.width ?? scene.canvas.width,
+    height: options.height ?? scene.canvas.height,
+    framerate: options.framerate ?? 30,
+    frame_format: options.frame_format ?? "rgba8",
+    scale_mode: options.scale_mode ?? "fit",
+    encoding: options.encoding ?? "data_url",
+    include_debug_overlay: options.include_debug_overlay ?? false,
+    requested_at: options.requested_at ?? new Date().toISOString(),
+  };
+}
+
+export function validatePreviewFrameRequest(
+  request: PreviewFrameRequest,
+): SceneRuntimeContractValidation {
+  const errors: string[] = [];
+
+  validateRuntimeEnvelope(
+    request.version,
+    request.request_id,
+    request.requested_at,
+    "Preview frame request",
+    errors,
+  );
+  if (!request.scene_id.trim()) {
+    errors.push("Preview frame scene id is required.");
+  }
+  validateGraphPositiveNumber(request.width, "preview.width", errors);
+  validateGraphPositiveNumber(request.height, "preview.height", errors);
+  validateGraphPositiveNumber(request.framerate, "preview.framerate", errors);
+  if (request.width > 7680 || request.height > 4320) {
+    errors.push("Preview frame dimensions must be 8K or smaller.");
+  }
+
+  return runtimeValidation(errors, []);
+}
+
+export function createCompositorRenderRequest(
+  plan: CompositorRenderPlan,
+  options: {
+    requestId?: string;
+    requestedAt?: string;
+    frameIndex?: number;
+    framerate?: number;
+    renderer?: CompositorRendererKind;
+  } = {},
+): CompositorRenderRequest {
+  const framerate =
+    options.framerate ??
+    plan.targets.find((target) => target.enabled)?.framerate ??
+    60;
+  const frameIndex = options.frameIndex ?? 0;
+  const durationNanos = Math.floor(1_000_000_000 / Math.max(1, framerate));
+
+  return {
+    version: 1,
+    request_id: options.requestId ?? runtimeId("compositor-render"),
+    renderer: options.renderer ?? plan.renderer,
+    plan: cloneJson(plan),
+    clock: {
+      frame_index: frameIndex,
+      framerate,
+      pts_nanos: frameIndex * durationNanos,
+      duration_nanos: durationNanos,
+    },
+    requested_at: options.requestedAt ?? new Date().toISOString(),
+  };
+}
+
+export function validateCompositorRenderRequest(
+  request: CompositorRenderRequest,
+): SceneRuntimeContractValidation {
+  const renderValidation = validateCompositorRenderPlan(request.plan);
+  const warnings = [...renderValidation.warnings];
+  const errors = [...renderValidation.errors];
+
+  validateRuntimeEnvelope(
+    request.version,
+    request.request_id,
+    request.requested_at,
+    "Compositor render request",
+    errors,
+  );
+  if (!Number.isInteger(request.clock.frame_index) || request.clock.frame_index < 0) {
+    errors.push("Compositor render clock frame index must be zero or greater.");
+  }
+  validateGraphPositiveNumber(request.clock.framerate, "render.clock.framerate", errors);
+  validateGraphNonNegativeNumber(request.clock.pts_nanos, "render.clock.pts_nanos", errors);
+  validateGraphPositiveNumber(
+    request.clock.duration_nanos,
+    "render.clock.duration_nanos",
+    errors,
+  );
+
+  return runtimeValidation(errors, warnings);
+}
+
+export function createCompositorRenderResponse(
+  request: CompositorRenderRequest,
+  frame: CompositorRenderedFrame,
+  options: {
+    renderedAt?: string;
+    renderTimeMs?: number;
+    targetResults?: CompositorRenderTargetResult[];
+  } = {},
+): CompositorRenderResponse {
+  return {
+    version: 1,
+    request_id: request.request_id,
+    renderer: frame.renderer,
+    scene_id: frame.scene_id,
+    scene_name: frame.scene_name,
+    frame: cloneJson(frame),
+    target_results:
+      options.targetResults ??
+      frame.targets.map((target) => ({
+        target_id: target.target_id,
+        target_kind: target.target_kind,
+        width: target.width,
+        height: target.height,
+        frame_format: target.frame_format,
+        checksum: null,
+        byte_length: null,
+      })),
+    render_time_ms: options.renderTimeMs ?? 0,
+    rendered_at: options.renderedAt ?? new Date().toISOString(),
+    validation: runtimeValidation([], []),
+  };
+}
+
+export function validateCompositorRenderResponse(
+  response: CompositorRenderResponse,
+): SceneRuntimeContractValidation {
+  const warnings = [...response.frame.validation.warnings];
+  const errors = [...response.frame.validation.errors];
+  const targetIds = new Set(response.frame.targets.map((target) => target.target_id));
+
+  validateRuntimeEnvelope(
+    response.version,
+    response.request_id,
+    response.rendered_at,
+    "Compositor render response",
+    errors,
+  );
+  if (response.scene_id !== response.frame.scene_id) {
+    errors.push("Compositor render response scene id must match rendered frame.");
+  }
+  validateGraphNonNegativeNumber(
+    response.render_time_ms,
+    "render.response.render_time_ms",
+    errors,
+  );
+  response.target_results.forEach((target) => {
+    if (!targetIds.has(target.target_id)) {
+      errors.push(`Render response target "${target.target_id}" is not in the frame.`);
+    }
+    validateGraphPositiveNumber(target.width, `${target.target_id}.width`, errors);
+    validateGraphPositiveNumber(target.height, `${target.target_id}.height`, errors);
+    if (target.byte_length !== null) {
+      validateGraphNonNegativeNumber(
+        target.byte_length,
+        `${target.target_id}.byte_length`,
+        errors,
+      );
+    }
+  });
+
+  return runtimeValidation(errors, warnings);
+}
+
+export function createPreviewFrameResponse(
+  request: PreviewFrameRequest,
+  frame: CompositorRenderedFrame | null,
+  options: {
+    sceneName?: string;
+    imageData?: string | null;
+    checksum?: string | null;
+    renderTimeMs?: number;
+    generatedAt?: string;
+  } = {},
+): PreviewFrameResponse {
+  const validation = frame
+    ? runtimeValidation(frame.validation.errors, frame.validation.warnings)
+    : runtimeValidation([], ["Preview frame response has no rendered frame payload."]);
+
+  return {
+    version: 1,
+    request_id: request.request_id,
+    scene_id: request.scene_id,
+    scene_name: options.sceneName ?? frame?.scene_name ?? "",
+    frame_index: frame?.clock.frame_index ?? 0,
+    width: request.width,
+    height: request.height,
+    frame_format: request.frame_format,
+    encoding: request.encoding,
+    image_data: options.imageData ?? null,
+    checksum: options.checksum ?? null,
+    render_time_ms: options.renderTimeMs ?? 0,
+    generated_at: options.generatedAt ?? new Date().toISOString(),
+    rendered_frame: frame ? cloneJson(frame) : null,
+    validation,
+  };
+}
+
+export function validatePreviewFrameResponse(
+  response: PreviewFrameResponse,
+): SceneRuntimeContractValidation {
+  const warnings = [...response.validation.warnings];
+  const errors = [...response.validation.errors];
+
+  validateRuntimeEnvelope(
+    response.version,
+    response.request_id,
+    response.generated_at,
+    "Preview frame response",
+    errors,
+  );
+  if (!response.scene_id.trim()) {
+    errors.push("Preview frame response scene id is required.");
+  }
+  if (!response.scene_name.trim()) {
+    errors.push("Preview frame response scene name is required.");
+  }
+  validateGraphPositiveNumber(response.width, "preview.response.width", errors);
+  validateGraphPositiveNumber(response.height, "preview.response.height", errors);
+  validateGraphNonNegativeNumber(
+    response.render_time_ms,
+    "preview.response.render_time_ms",
+    errors,
+  );
+  if (response.encoding !== "none" && !response.image_data && !response.checksum) {
+    warnings.push("Preview frame response has no image data or checksum.");
+  }
+  if (response.rendered_frame && response.rendered_frame.scene_id !== response.scene_id) {
+    errors.push("Preview frame response scene id must match rendered frame.");
+  }
+
+  return runtimeValidation(errors, warnings);
+}
+
+export function buildRuntimeCaptureSourceBindingContract(
+  scene: Scene,
+): RuntimeCaptureSourceBindingContract {
+  const framePlan = buildCaptureFramePlan(scene);
+  const contract: RuntimeCaptureSourceBindingContract = {
+    version: 1,
+    scene_id: scene.id,
+    scene_name: scene.name,
+    bindings: framePlan.bindings.map((binding) => {
+      const source = scene.sources.find(
+        (candidate) => candidate.id === binding.scene_source_id,
+      );
+      return {
+        scene_source_id: binding.scene_source_id,
+        scene_source_name: binding.scene_source_name,
+        scene_source_kind: source?.kind ?? "display",
+        capture_source_id: binding.capture_source_id,
+        capture_kind: binding.capture_kind,
+        media_kind: binding.media_kind,
+        frame_format: binding.format,
+        width: binding.width,
+        height: binding.height,
+        framerate: binding.framerate,
+        sample_rate: binding.sample_rate,
+        channels: binding.channels,
+        required: source?.visible ?? true,
+        status: binding.status,
+        status_detail: binding.status_detail,
+      };
+    }),
+    validation: runtimeValidation([], []),
+  };
+  contract.validation = validateRuntimeCaptureSourceBindingContract(contract);
+  return contract;
+}
+
+export function validateRuntimeCaptureSourceBindingContract(
+  contract: RuntimeCaptureSourceBindingContract,
+): SceneRuntimeContractValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const sourceIds = new Set<string>();
+
+  if (!Number.isInteger(contract.version) || contract.version < 1) {
+    errors.push("Runtime capture binding contract version must be positive.");
+  }
+  if (!contract.scene_id.trim()) {
+    errors.push("Runtime capture binding scene id is required.");
+  }
+  if (!contract.scene_name.trim()) {
+    errors.push("Runtime capture binding scene name is required.");
+  }
+  if (contract.bindings.length === 0) {
+    warnings.push("Runtime capture binding contract has no bindings.");
+  }
+
+  contract.bindings.forEach((binding) => {
+    if (sourceIds.has(binding.scene_source_id)) {
+      errors.push(`Duplicate runtime capture binding "${binding.scene_source_id}".`);
+    }
+    sourceIds.add(binding.scene_source_id);
+    if (!binding.scene_source_id.trim()) {
+      errors.push("Runtime capture binding source id is required.");
+    }
+    if (!binding.scene_source_name.trim()) {
+      errors.push(`Runtime capture binding "${binding.scene_source_id}" name is required.`);
+    }
+    if (binding.required && binding.status !== "ready") {
+      warnings.push(
+        `${binding.scene_source_name} capture is ${binding.status}: ${binding.status_detail}`,
+      );
+    }
+    if (binding.media_kind === "video") {
+      validateNullablePositiveNumber(binding.width, `${binding.scene_source_id}.width`, errors);
+      validateNullablePositiveNumber(binding.height, `${binding.scene_source_id}.height`, errors);
+      validateNullablePositiveNumber(
+        binding.framerate,
+        `${binding.scene_source_id}.framerate`,
+        errors,
+      );
+    } else {
+      validateNullablePositiveNumber(
+        binding.sample_rate,
+        `${binding.scene_source_id}.sample_rate`,
+        errors,
+      );
+      validateNullablePositiveNumber(binding.channels, `${binding.scene_source_id}.channels`, errors);
+    }
+  });
+
+  return runtimeValidation(errors, warnings);
+}
+
+export function buildRuntimeAudioSourceBindingContract(
+  scene: Scene,
+): RuntimeAudioSourceBindingContract {
+  const mixerPlan = buildAudioMixerPlan(scene);
+  const busIds = mixerPlan.buses.map((bus) => bus.id);
+  const contract: RuntimeAudioSourceBindingContract = {
+    version: 1,
+    scene_id: scene.id,
+    scene_name: scene.name,
+    sample_rate: mixerPlan.sample_rate,
+    channels: mixerPlan.channels,
+    bindings: mixerPlan.sources.map((source) => ({
+      scene_source_id: source.scene_source_id,
+      scene_source_name: source.name,
+      capture_source_id: source.capture_source_id,
+      capture_kind: source.capture_kind,
+      bus_ids: busIds,
+      gain_db: source.gain_db,
+      muted: source.muted,
+      monitor_enabled: source.monitor_enabled,
+      meter_enabled: source.meter_enabled,
+      sync_offset_ms: source.sync_offset_ms,
+      status: source.status,
+      status_detail: source.status_detail,
+    })),
+    buses: cloneJson(mixerPlan.buses),
+    validation: runtimeValidation([], []),
+  };
+  contract.validation = validateRuntimeAudioSourceBindingContract(contract);
+  return contract;
+}
+
+export function validateRuntimeAudioSourceBindingContract(
+  contract: RuntimeAudioSourceBindingContract,
+): SceneRuntimeContractValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const sourceIds = new Set<string>();
+  const busIds = new Set(contract.buses.map((bus) => bus.id));
+
+  if (!Number.isInteger(contract.version) || contract.version < 1) {
+    errors.push("Runtime audio binding contract version must be positive.");
+  }
+  if (!contract.scene_id.trim()) {
+    errors.push("Runtime audio binding scene id is required.");
+  }
+  validateNullablePositiveNumber(contract.sample_rate, "runtime.audio.sample_rate", errors);
+  validateNullablePositiveNumber(contract.channels, "runtime.audio.channels", errors);
+  if (!contract.buses.some((bus) => bus.kind === "master")) {
+    errors.push("Runtime audio binding contract requires a master bus.");
+  }
+  if (contract.bindings.length === 0) {
+    warnings.push("Runtime audio binding contract has no audio bindings.");
+  }
+
+  contract.bindings.forEach((binding) => {
+    if (sourceIds.has(binding.scene_source_id)) {
+      errors.push(`Duplicate runtime audio binding "${binding.scene_source_id}".`);
+    }
+    sourceIds.add(binding.scene_source_id);
+    if (!binding.scene_source_id.trim()) {
+      errors.push("Runtime audio binding source id is required.");
+    }
+    validateGain(binding.gain_db, binding.scene_source_name, errors);
+    binding.bus_ids.forEach((busId) => {
+      if (!busIds.has(busId)) {
+        errors.push(`${binding.scene_source_name} references missing bus "${busId}".`);
+      }
+    });
+    if (binding.status !== "ready") {
+      warnings.push(
+        `${binding.scene_source_name} audio is ${binding.status}: ${binding.status_detail}`,
+      );
+    }
+  });
+
+  return runtimeValidation(errors, warnings);
+}
+
+export function createTransitionExecutionRequest(
+  collection: SceneCollection,
+  fromSceneId: string,
+  toSceneId: string,
+  options: {
+    requestId?: string;
+    requestedAt?: string;
+    transitionId?: string;
+    framerate?: number;
+  } = {},
+): TransitionExecutionRequest {
+  return {
+    version: 1,
+    request_id: options.requestId ?? runtimeId("transition"),
+    collection_id: collection.id,
+    transition_id: options.transitionId ?? collection.active_transition_id,
+    from_scene_id: fromSceneId,
+    to_scene_id: toSceneId,
+    framerate: options.framerate ?? 60,
+    requested_at: options.requestedAt ?? new Date().toISOString(),
+  };
+}
+
+export function validateTransitionExecutionRequest(
+  request: TransitionExecutionRequest,
+  collection?: SceneCollection,
+): SceneRuntimeContractValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+
+  validateRuntimeEnvelope(
+    request.version,
+    request.request_id,
+    request.requested_at,
+    "Transition execution request",
+    errors,
+  );
+  if (!request.collection_id.trim()) {
+    errors.push("Transition execution collection id is required.");
+  }
+  if (!request.transition_id.trim()) {
+    errors.push("Transition execution transition id is required.");
+  }
+  if (!request.from_scene_id.trim()) {
+    errors.push("Transition execution from scene id is required.");
+  }
+  if (!request.to_scene_id.trim()) {
+    errors.push("Transition execution to scene id is required.");
+  }
+  validateGraphPositiveNumber(request.framerate, "transition.framerate", errors);
+  if (request.from_scene_id === request.to_scene_id) {
+    warnings.push("Transition execution uses the same from and to scene.");
+  }
+
+  if (collection) {
+    if (collection.id !== request.collection_id) {
+      errors.push("Transition execution collection id does not match collection.");
+    }
+    if (!collection.scenes.some((scene) => scene.id === request.from_scene_id)) {
+      errors.push(`Transition from scene "${request.from_scene_id}" does not exist.`);
+    }
+    if (!collection.scenes.some((scene) => scene.id === request.to_scene_id)) {
+      errors.push(`Transition to scene "${request.to_scene_id}" does not exist.`);
+    }
+    if (!collection.transitions.some((transition) => transition.id === request.transition_id)) {
+      errors.push(`Transition "${request.transition_id}" does not exist.`);
+    }
+  }
+
+  return runtimeValidation(errors, warnings);
+}
+
+export function createTransitionExecutionResponse(
+  request: TransitionExecutionRequest,
+  collection: SceneCollection,
+  options: { startedAt?: string } = {},
+): TransitionExecutionResponse {
+  const previewPlan = buildSceneTransitionPreviewPlan(
+    {
+      ...collection,
+      active_transition_id: request.transition_id,
+    },
+    request.from_scene_id,
+    request.to_scene_id,
+    request.framerate,
+  );
+  return {
+    version: 1,
+    request_id: request.request_id,
+    collection_id: request.collection_id,
+    transition_id: request.transition_id,
+    from_scene_id: request.from_scene_id,
+    to_scene_id: request.to_scene_id,
+    started_at: options.startedAt ?? new Date().toISOString(),
+    preview_plan: previewPlan,
+    validation: runtimeValidation(
+      previewPlan.validation.errors,
+      previewPlan.validation.warnings,
+    ),
+  };
+}
+
+function runtimeId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function runtimeValidation(
+  errors: string[],
+  warnings: string[],
+): SceneRuntimeContractValidation {
+  return {
+    ready: errors.length === 0,
+    warnings,
+    errors,
+  };
+}
+
+function validateRuntimeEnvelope(
+  version: number,
+  id: string,
+  timestamp: string,
+  label: string,
+  errors: string[],
+) {
+  if (!Number.isInteger(version) || version < 1) {
+    errors.push(`${label} version must be a positive integer.`);
+  }
+  if (typeof id !== "string" || !id.trim()) {
+    errors.push(`${label} id is required.`);
+  }
+  if (typeof timestamp !== "string" || !timestamp.trim()) {
+    errors.push(`${label} timestamp is required.`);
+    return;
+  }
+  if (Number.isNaN(Date.parse(timestamp))) {
+    errors.push(`${label} timestamp must be a valid ISO-8601 timestamp.`);
+  }
+}
+
+function validateSceneRuntimeCommandPayload(
+  command: SceneRuntimeCommand,
+): SceneRuntimeContractValidation {
+  switch (command.kind) {
+    case "activate_scene":
+      return validateSceneActivationRequest(command.payload as SceneActivationRequest);
+    case "update_runtime_state":
+      return validateSceneRuntimeStateUpdateRequest(
+        command.payload as SceneRuntimeStateUpdateRequest,
+      );
+    case "request_preview_frame":
+      return validatePreviewFrameRequest(command.payload as PreviewFrameRequest);
+    case "validate_runtime_graph":
+      return validateCompositorRenderRequest(command.payload as CompositorRenderRequest);
+    case "execute_transition":
+      return validateTransitionExecutionRequest(command.payload as TransitionExecutionRequest);
+    default:
+      return runtimeValidation([`Unsupported scene runtime command kind "${command.kind}".`], []);
+  }
 }
 
 export function evaluateCompositorFrame(

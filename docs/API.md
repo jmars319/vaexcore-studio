@@ -37,6 +37,11 @@ Scene transition helpers expose frame-count and easing sample plans for preview
 and future renderer handoff.
 Desktop scene bundle imports create timestamped backups under `scene-backups`
 in the app data directory before replacing the active collection.
+Shared Scene Runtime contracts now define scene activation, runtime state
+updates, preview-frame requests/responses, compositor render requests/responses,
+capture/audio binding readiness, and transition execution payloads. These are
+shared type contracts only for now; runtime API routes are planned for the next
+backend scene runtime phase.
 
 ## Auth
 

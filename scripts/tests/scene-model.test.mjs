@@ -340,6 +340,147 @@ test("compositor graph builder preserves source order and warnings", async () =>
   assert.equal(frame.targets[0].nodes[0].rect.width, 1920);
 });
 
+test("scene runtime contracts validate preview, render, binding, and transition payloads", async () => {
+  const {
+    buildCompositorGraph,
+    buildCompositorRenderPlan,
+    buildDefaultCompositorRenderTargets,
+    buildRuntimeAudioSourceBindingContract,
+    buildRuntimeCaptureSourceBindingContract,
+    createCompositorRenderRequest,
+    createCompositorRenderResponse,
+    createDefaultSceneCollection,
+    createPreviewFrameRequest,
+    createPreviewFrameResponse,
+    createSceneActivationRequest,
+    createSceneActivationResponse,
+    createSceneRuntimeCommand,
+    createSceneRuntimeStateUpdateRequest,
+    createSceneRuntimeStateUpdateResponse,
+    createTransitionExecutionRequest,
+    createTransitionExecutionResponse,
+    evaluateCompositorFrame,
+    validateCompositorRenderRequest,
+    validateCompositorRenderResponse,
+    validatePreviewFrameRequest,
+    validatePreviewFrameResponse,
+    validateRuntimeAudioSourceBindingContract,
+    validateRuntimeCaptureSourceBindingContract,
+    validateSceneActivationRequest,
+    validateSceneActivationResponse,
+    validateSceneRuntimeCommand,
+    validateSceneRuntimeStateUpdateRequest,
+    validateSceneRuntimeStateUpdateResponse,
+    validateTransitionExecutionRequest,
+  } = await sharedTypes;
+  const collection = createDefaultSceneCollection("2026-05-08T12:00:00.000Z");
+  const scene = collection.scenes[0];
+  const requestedAt = "2026-05-08T12:15:00.000Z";
+
+  const activation = createSceneActivationRequest(collection, scene.id, {
+    requestId: "scene-activation-test",
+    requestedAt,
+    reason: "test",
+  });
+  const activationCommand = createSceneRuntimeCommand("activate_scene", activation, {
+    commandId: "runtime-command-test",
+    requestedAt,
+  });
+
+  assert.equal(validateSceneActivationRequest(activation, collection).ready, true);
+  assert.equal(validateSceneRuntimeCommand(activationCommand).ready, true);
+  const activationResponse = createSceneActivationResponse(activation, collection, {
+    previousSceneId: scene.id,
+    activatedAt: "2026-05-08T12:15:00.010Z",
+  });
+  assert.equal(activationResponse.status, "accepted");
+  assert.equal(validateSceneActivationResponse(activationResponse, collection).ready, true);
+
+  const stateUpdate = createSceneRuntimeStateUpdateRequest(
+    collection,
+    { active_scene_id: scene.id, preview_enabled: true },
+    { requestId: "scene-state-test", requestedAt },
+  );
+  assert.equal(validateSceneRuntimeStateUpdateRequest(stateUpdate, collection).ready, true);
+  const stateUpdateResponse = createSceneRuntimeStateUpdateResponse(
+    stateUpdate,
+    collection,
+    { updatedAt: "2026-05-08T12:15:00.012Z" },
+  );
+  assert.equal(stateUpdateResponse.status, "active");
+  assert.equal(
+    validateSceneRuntimeStateUpdateResponse(stateUpdateResponse, collection).ready,
+    true,
+  );
+
+  const previewRequest = createPreviewFrameRequest(scene, {
+    request_id: "preview-frame-test",
+    width: 1280,
+    height: 720,
+    framerate: 30,
+    requested_at: requestedAt,
+  });
+  assert.equal(validatePreviewFrameRequest(previewRequest).ready, true);
+
+  const graph = buildCompositorGraph(scene);
+  const renderPlan = buildCompositorRenderPlan(
+    graph,
+    buildDefaultCompositorRenderTargets("recording", graph, null),
+  );
+  const renderRequest = createCompositorRenderRequest(renderPlan, {
+    requestId: "compositor-render-test",
+    requestedAt,
+    frameIndex: 4,
+  });
+  const renderedFrame = evaluateCompositorFrame(renderPlan, 4);
+  const renderResponse = createCompositorRenderResponse(renderRequest, renderedFrame, {
+    renderedAt: "2026-05-08T12:15:00.020Z",
+    renderTimeMs: 2.25,
+  });
+  const previewResponse = createPreviewFrameResponse(previewRequest, renderedFrame, {
+    checksum: "sha256:test",
+    generatedAt: "2026-05-08T12:15:00.030Z",
+    renderTimeMs: 2.5,
+  });
+
+  assert.equal(validateCompositorRenderRequest(renderRequest).ready, true);
+  assert.equal(validateCompositorRenderResponse(renderResponse).ready, true);
+  assert.equal(validatePreviewFrameResponse(previewResponse).ready, true);
+
+  const captureContract = buildRuntimeCaptureSourceBindingContract(scene);
+  const captureValidation = validateRuntimeCaptureSourceBindingContract(captureContract);
+  assert.equal(captureValidation.ready, true);
+  assert.ok(captureContract.bindings.some((binding) => binding.media_kind === "video"));
+  assert.ok(captureContract.bindings.some((binding) => binding.media_kind === "audio"));
+  assert.ok(captureValidation.warnings.length >= 1);
+
+  const audioContract = buildRuntimeAudioSourceBindingContract(scene);
+  const audioValidation = validateRuntimeAudioSourceBindingContract(audioContract);
+  assert.equal(audioValidation.ready, true);
+  assert.ok(audioContract.buses.some((bus) => bus.kind === "master"));
+  assert.ok(audioValidation.warnings.length >= 1);
+
+  const transition = createTransitionExecutionRequest(collection, scene.id, scene.id, {
+    requestId: "transition-test",
+    requestedAt,
+    transitionId: "transition-cut",
+    framerate: 60,
+  });
+  const transitionResponse = createTransitionExecutionResponse(transition, collection, {
+    startedAt: "2026-05-08T12:15:00.040Z",
+  });
+
+  assert.equal(validateTransitionExecutionRequest(transition, collection).ready, true);
+  assert.equal(transitionResponse.preview_plan.transition.id, "transition-cut");
+  assert.equal(transitionResponse.validation.ready, true);
+
+  const invalidActivation = {
+    ...activation,
+    target_scene_id: "missing-scene",
+  };
+  assert.equal(validateSceneActivationRequest(invalidActivation, collection).ready, false);
+});
+
 test("capture frame plan maps scene sources to video and audio bindings", async () => {
   const {
     buildCaptureFramePlan,
