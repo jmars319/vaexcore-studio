@@ -386,6 +386,75 @@ export interface PerformanceTelemetryValidation {
   errors: string[];
 }
 
+export interface RenderTargetProfile {
+  id: string;
+  name: string;
+  kind: CompositorRenderTargetKind;
+  width: number;
+  height: number;
+  framerate: number;
+  frame_format: CompositorFrameFormat;
+  scale_mode: CompositorScaleMode;
+  enabled: boolean;
+  encoder_preference: EncoderPreference;
+  bitrate_kbps: number | null;
+}
+
+export interface RecordingTargetContract {
+  id: string;
+  profile_id: string;
+  profile_name: string;
+  render_target_id: string;
+  output_folder: string;
+  filename_pattern: string;
+  container: RecordingContainer;
+  resolution: Resolution;
+  framerate: number;
+  bitrate_kbps: number;
+  encoder_preference: EncoderPreference;
+  output_path_preview: string;
+  ready: boolean;
+  warnings: string[];
+  errors: string[];
+}
+
+export interface StreamingTargetContract {
+  id: string;
+  destination_id: string;
+  destination_name: string;
+  platform: PlatformKind;
+  render_target_id: string;
+  ingest_url: string;
+  stream_key_required: boolean;
+  has_stream_key: boolean;
+  bandwidth_test: boolean;
+  width: number;
+  height: number;
+  framerate: number;
+  bitrate_kbps: number;
+  encoder_preference: EncoderPreference;
+  ready: boolean;
+  warnings: string[];
+  errors: string[];
+}
+
+export interface OutputPreflightValidation {
+  ready: boolean;
+  warnings: string[];
+  errors: string[];
+}
+
+export interface OutputPreflightPlan {
+  version: number;
+  intent: PipelineIntent;
+  active_scene_id: string | null;
+  active_scene_name: string | null;
+  render_targets: RenderTargetProfile[];
+  recording_target: RecordingTargetContract | null;
+  streaming_targets: StreamingTargetContract[];
+  validation: OutputPreflightValidation;
+}
+
 export interface CompositorFrameClock {
   frame_index: number;
   framerate: number;
@@ -1200,6 +1269,7 @@ export interface MediaPipelineConfig {
   compositor_graph?: CompositorGraph | null;
   compositor_render_plan?: CompositorRenderPlan | null;
   performance_telemetry_plan?: PerformanceTelemetryPlan | null;
+  output_preflight_plan?: OutputPreflightPlan | null;
   recording_profile: MediaProfile | null;
   stream_destinations: StreamDestination[];
 }
@@ -2585,6 +2655,297 @@ export function validatePerformanceTelemetryPlan(
     warnings,
     errors,
   };
+}
+
+export function buildOutputPreflightPlan(
+  intent: PipelineIntent,
+  activeScene: Scene | null | undefined,
+  renderPlan: CompositorRenderPlan | null | undefined,
+  recordingProfile: MediaProfile | null | undefined,
+  streamDestinations: StreamDestination[] = [],
+): OutputPreflightPlan {
+  const renderTargets =
+    renderPlan?.targets.map((target) =>
+      renderTargetProfile(target, recordingProfile),
+    ) ?? [];
+  const recordingTarget =
+    intent === "recording" || intent === "recording_and_stream"
+      ? recordingProfile
+        ? recordingTargetContract(
+            recordingProfile,
+            preferredRenderTargetId(renderTargets, "recording"),
+          )
+        : null
+      : null;
+  const streamingTargets =
+    intent === "stream" || intent === "recording_and_stream"
+      ? streamDestinations
+          .filter((destination) => destination.enabled)
+          .map((destination) =>
+            streamingTargetContract(
+              destination,
+              recordingProfile,
+              streamTargetProfile(renderTargets, destination),
+            ),
+          )
+      : [];
+  const plan: OutputPreflightPlan = {
+    version: 1,
+    intent,
+    active_scene_id: activeScene?.id ?? null,
+    active_scene_name: activeScene?.name ?? null,
+    render_targets: renderTargets,
+    recording_target: recordingTarget,
+    streaming_targets: streamingTargets,
+    validation: {
+      ready: true,
+      warnings: [],
+      errors: [],
+    },
+  };
+  plan.validation = validateOutputPreflightPlan(plan);
+  return plan;
+}
+
+export function validateOutputPreflightPlan(
+  plan: OutputPreflightPlan,
+): OutputPreflightValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const targetIds = new Set<string>();
+  const needsRecording =
+    plan.intent === "recording" || plan.intent === "recording_and_stream";
+  const needsStream = plan.intent === "stream" || plan.intent === "recording_and_stream";
+
+  if (!Number.isInteger(plan.version) || plan.version < 1) {
+    errors.push("Output preflight plan version must be a positive integer.");
+  }
+  if (!plan.active_scene_id) {
+    warnings.push("Output preflight has no active scene.");
+  }
+  if (plan.render_targets.length === 0) {
+    errors.push("Output preflight requires at least one render target.");
+  }
+
+  for (const target of plan.render_targets) {
+    if (targetIds.has(target.id)) {
+      errors.push(`Duplicate render target profile "${target.id}".`);
+    }
+    targetIds.add(target.id);
+    if (!target.id.trim()) errors.push("Render target profile id is required.");
+    if (!target.name.trim()) {
+      errors.push(`Render target profile "${target.id}" name is required.`);
+    }
+    validateGraphPositiveNumber(target.width, `${target.id}.width`, errors);
+    validateGraphPositiveNumber(target.height, `${target.id}.height`, errors);
+    validateGraphPositiveNumber(target.framerate, `${target.id}.framerate`, errors);
+    if (!target.enabled) {
+      warnings.push(`Render target profile "${target.id}" is disabled.`);
+    }
+    validateEncoderPreference(
+      target.encoder_preference,
+      `Render target profile "${target.id}"`,
+      warnings,
+      errors,
+    );
+  }
+
+  if (needsRecording) {
+    if (!plan.recording_target) {
+      errors.push("Recording output preflight requires a recording target.");
+    } else {
+      warnings.push(...plan.recording_target.warnings);
+      errors.push(...plan.recording_target.errors);
+      if (!targetIds.has(plan.recording_target.render_target_id)) {
+        errors.push(
+          `Recording target references unknown render target "${plan.recording_target.render_target_id}".`,
+        );
+      }
+    }
+  }
+
+  if (needsStream) {
+    if (plan.streaming_targets.length === 0) {
+      errors.push("Stream output preflight requires at least one streaming target.");
+    }
+    for (const target of plan.streaming_targets) {
+      warnings.push(...target.warnings);
+      errors.push(...target.errors);
+      if (!targetIds.has(target.render_target_id)) {
+        errors.push(
+          `Streaming target "${target.destination_name}" references unknown render target "${target.render_target_id}".`,
+        );
+      }
+    }
+  }
+
+  return {
+    ready: errors.length === 0,
+    warnings,
+    errors,
+  };
+}
+
+function renderTargetProfile(
+  target: CompositorRenderTarget,
+  recordingProfile: MediaProfile | null | undefined,
+): RenderTargetProfile {
+  return {
+    id: target.id,
+    name: target.name,
+    kind: target.kind,
+    width: target.width,
+    height: target.height,
+    framerate: target.framerate,
+    frame_format: target.frame_format,
+    scale_mode: target.scale_mode,
+    enabled: target.enabled,
+    encoder_preference: recordingProfile?.encoder_preference ?? "auto",
+    bitrate_kbps:
+      target.kind === "recording" || target.kind === "stream"
+        ? (recordingProfile?.bitrate_kbps ?? 6000)
+        : null,
+  };
+}
+
+function recordingTargetContract(
+  profile: MediaProfile,
+  renderTargetId: string,
+): RecordingTargetContract {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  if (!profile.output_folder.trim()) errors.push("Recording output folder is required.");
+  if (!profile.filename_pattern.trim()) {
+    errors.push("Recording filename pattern is required.");
+  }
+  if (profile.filename_pattern.includes("/") || profile.filename_pattern.includes("\\")) {
+    warnings.push("Recording filename pattern includes path separators.");
+  }
+  validateGraphPositiveNumber(profile.resolution.width, "recording.width", errors);
+  validateGraphPositiveNumber(profile.resolution.height, "recording.height", errors);
+  validateGraphPositiveNumber(profile.framerate, "recording.framerate", errors);
+  validateGraphPositiveNumber(profile.bitrate_kbps, "recording.bitrate_kbps", errors);
+  validateEncoderPreference(
+    profile.encoder_preference,
+    "Recording target",
+    warnings,
+    errors,
+  );
+
+  return {
+    id: `recording-target-${profile.id}`,
+    profile_id: profile.id,
+    profile_name: profile.name,
+    render_target_id: renderTargetId,
+    output_folder: profile.output_folder,
+    filename_pattern: profile.filename_pattern,
+    container: profile.container,
+    resolution: profile.resolution,
+    framerate: profile.framerate,
+    bitrate_kbps: profile.bitrate_kbps,
+    encoder_preference: profile.encoder_preference,
+    output_path_preview: recordingOutputPathPreview(profile),
+    ready: errors.length === 0,
+    warnings,
+    errors,
+  };
+}
+
+function streamingTargetContract(
+  destination: StreamDestination,
+  recordingProfile: MediaProfile | null | undefined,
+  renderTarget: RenderTargetProfile | null,
+): StreamingTargetContract {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const encoderPreference = recordingProfile?.encoder_preference ?? "auto";
+  if (!destination.ingest_url.trim()) {
+    errors.push(`Stream destination "${destination.name}" requires an ingest URL.`);
+  }
+  if (!destination.stream_key_ref) {
+    warnings.push(`Stream destination "${destination.name}" has no stored stream key.`);
+  }
+  validateEncoderPreference(
+    encoderPreference,
+    `Streaming target "${destination.name}"`,
+    warnings,
+    errors,
+  );
+
+  return {
+    id: `streaming-target-${destination.id}`,
+    destination_id: destination.id,
+    destination_name: destination.name,
+    platform: destination.platform,
+    render_target_id: renderTarget?.id ?? "target-stream",
+    ingest_url: destination.ingest_url,
+    stream_key_required: true,
+    has_stream_key: Boolean(destination.stream_key_ref),
+    bandwidth_test: false,
+    width: renderTarget?.width ?? 1920,
+    height: renderTarget?.height ?? 1080,
+    framerate: renderTarget?.framerate ?? 60,
+    bitrate_kbps: recordingProfile?.bitrate_kbps ?? 6000,
+    encoder_preference: encoderPreference,
+    ready: errors.length === 0,
+    warnings,
+    errors,
+  };
+}
+
+function streamTargetProfile(
+  targets: RenderTargetProfile[],
+  destination: StreamDestination,
+) {
+  return (
+    targets.find(
+      (target) =>
+        target.kind === "stream" && target.id === `target-stream-${destination.id}`,
+    ) ??
+    targets.find((target) => target.kind === "stream") ??
+    targets.find((target) => target.kind === "program") ??
+    null
+  );
+}
+
+function preferredRenderTargetId(
+  targets: RenderTargetProfile[],
+  kind: "recording" | "stream" | "program",
+) {
+  return (
+    targets.find((target) => target.kind === kind)?.id ??
+    targets.find((target) => target.kind === "program")?.id ??
+    targets[0]?.id ??
+    `target-${kind}`
+  );
+}
+
+function validateEncoderPreference(
+  encoder: EncoderPreference,
+  label: string,
+  warnings: string[],
+  errors: string[],
+) {
+  if (typeof encoder === "object" && !encoder.named.trim()) {
+    errors.push(`${label} named encoder cannot be empty.`);
+  } else if (encoder === "hardware") {
+    warnings.push(`${label} requests hardware encoding; validate availability on target machine.`);
+  }
+}
+
+function recordingOutputPathPreview(profile: MediaProfile) {
+  const filename = profile.filename_pattern
+    .replace("{date}", "2026-05-09")
+    .replace("{time}", "12-00-00")
+    .replace("{profile}", slugForPath(profile.name));
+  return `${profile.output_folder}/${filename}.${profile.container}`;
+}
+
+function slugForPath(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
 }
 
 export function createSceneRuntimeSnapshot(

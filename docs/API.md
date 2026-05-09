@@ -250,9 +250,9 @@ Returns the active scene audio graph runtime snapshot with simulated meter level
 
 ### `GET /media/plan`
 
-Returns the current dry-run pipeline plan using the saved capture sources, first recording profile, and enabled stream destinations.
+Returns the current dry-run pipeline plan using the saved capture sources, first recording profile, active scene, and enabled stream destinations.
 
-Also refreshes `pipeline-plan.json` and `pipeline-config.json` in the app data directory.
+Also refreshes `pipeline-plan.json` and `pipeline-config.json` in the app data directory. The generated config includes compositor render targets, performance telemetry, and an `output_preflight_plan` with recording/streaming target contracts for dry-run readiness checks.
 
 ### `POST /media/plan`
 

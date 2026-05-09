@@ -135,6 +135,12 @@ validation, API/SDK/Desktop client access, and Designer meter displays in the
 preview and Inspector. The meters are deterministic simulation, not live device
 audio capture.
 
+Phase I recording/streaming prep, covering steps 81-90, now has render target
+profiles, recording target contracts, streaming target contracts, dry-run
+encoder/output-path/destination readiness checks, and a Designer runtime
+preflight panel. It prepares outputs but still does not start real recording,
+streaming, capture, or encoder work.
+
 ## Validation Contract
 
 Every chunk from step 4 onward must keep these gates green unless a platform
@@ -161,6 +167,6 @@ npm run app:build:windows
 ```
 
 The generated `pipeline-config.json` must include `active_scene`,
-`capture_frame_plan`, `audio_mixer_plan`, `compositor_graph`, and
-`compositor_render_plan`, and `performance_telemetry_plan` before Phase 1 is
-considered wired.
+`capture_frame_plan`, `audio_mixer_plan`, `compositor_graph`,
+`compositor_render_plan`, `performance_telemetry_plan`, and
+`output_preflight_plan` before Phase 1 is considered wired.

@@ -41,8 +41,10 @@ pub use performance::{
     PerformanceTelemetryPlan, PerformanceTelemetryValidation,
 };
 pub use pipeline::{
-    MediaPipelineConfig, MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep,
-    MediaPipelineValidation, PipelineIntent, PipelineStepStatus,
+    build_output_preflight_plan, validate_output_preflight_plan, MediaPipelineConfig,
+    MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep, MediaPipelineValidation,
+    OutputPreflightPlan, OutputPreflightValidation, PipelineIntent, PipelineStepStatus,
+    RecordingTargetContract, RenderTargetProfile, StreamingTargetContract,
 };
 pub use profiles::{
     EncoderPreference, MediaProfile, MediaProfileInput, PlatformKind, RecordingContainer,

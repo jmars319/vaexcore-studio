@@ -15,12 +15,13 @@ use tokio::sync::Mutex;
 use vaexcore_core::{
     build_compositor_graph, evaluate_compositor_frame, new_id, render_software_compositor_frame,
     validate_audio_mixer_plan, validate_capture_frame_plan, validate_compositor_graph,
-    validate_compositor_render_plan, validate_performance_telemetry_plan, AudioMixSourceStatus,
-    CaptureFrameBindingStatus, CaptureFrameMediaKind, CaptureSourceKind, CaptureSourceSelection,
-    CompositorFrameFormat, CompositorRenderPlan, EngineMode, EngineStatus, MediaPipelineConfig,
-    MediaPipelinePlan, MediaPipelinePlanRequest, MediaPipelineStep, MediaProfile, PipelineIntent,
-    PipelineStepStatus, PlatformKind, RecordingContainer, RecordingSession, Scene,
-    StreamDestination, StreamSession, StudioEvent, StudioEventKind,
+    validate_compositor_render_plan, validate_output_preflight_plan,
+    validate_performance_telemetry_plan, AudioMixSourceStatus, CaptureFrameBindingStatus,
+    CaptureFrameMediaKind, CaptureSourceKind, CaptureSourceSelection, CompositorFrameFormat,
+    CompositorRenderPlan, EngineMode, EngineStatus, MediaPipelineConfig, MediaPipelinePlan,
+    MediaPipelinePlanRequest, MediaPipelineStep, MediaProfile, PipelineIntent, PipelineStepStatus,
+    PlatformKind, RecordingContainer, RecordingSession, Scene, StreamDestination, StreamSession,
+    StudioEvent, StudioEventKind,
 };
 
 mod sidecar;
@@ -139,6 +140,7 @@ pub fn build_dry_run_pipeline_plan(request: MediaPipelinePlanRequest) -> MediaPi
     validate_audio_mixer(&config, &mut steps, &mut warnings, &mut errors);
     validate_scene_compositor(&config, &mut steps, &mut warnings, &mut errors);
     validate_performance_telemetry(&config, &mut steps, &mut warnings, &mut errors);
+    validate_output_preflight(&config, &mut steps, &mut warnings, &mut errors);
     validate_recording(&config, &mut steps, &mut errors);
     validate_streaming(&config, &mut steps, &mut warnings, &mut errors);
     steps.push(MediaPipelineStep {
@@ -751,6 +753,141 @@ fn validate_performance_telemetry(
             total_rgba_bytes_per_second / 1_000_000
         ),
     });
+}
+
+fn validate_output_preflight(
+    config: &MediaPipelineConfig,
+    steps: &mut Vec<MediaPipelineStep>,
+    warnings: &mut Vec<String>,
+    errors: &mut Vec<String>,
+) {
+    let Some(plan) = &config.output_preflight_plan else {
+        warnings.push("pipeline has no output preflight plan".to_string());
+        steps.push(MediaPipelineStep {
+            id: "outputs.preflight".to_string(),
+            label: "Output preflight".to_string(),
+            status: PipelineStepStatus::Warning,
+            detail: "No output readiness contract was generated.".to_string(),
+        });
+        return;
+    };
+
+    let validation = validate_output_preflight_plan(plan);
+    warnings.extend(validation.warnings.iter().cloned());
+    errors.extend(validation.errors.iter().cloned());
+
+    let enabled_targets = plan
+        .render_targets
+        .iter()
+        .filter(|target| target.enabled)
+        .count();
+    steps.push(MediaPipelineStep {
+        id: "outputs.render_targets".to_string(),
+        label: "Render target profiles".to_string(),
+        status: if plan.render_targets.is_empty() {
+            PipelineStepStatus::Blocked
+        } else {
+            PipelineStepStatus::Ready
+        },
+        detail: format!(
+            "{enabled_targets}/{} render target profile(s) enabled.",
+            plan.render_targets.len()
+        ),
+    });
+
+    let encoder_warnings = validation
+        .warnings
+        .iter()
+        .filter(|warning| warning.contains("encoding"))
+        .count();
+    let encoder_errors = validation
+        .errors
+        .iter()
+        .filter(|error| error.contains("encoder"))
+        .count();
+    steps.push(MediaPipelineStep {
+        id: "outputs.encoder_readiness".to_string(),
+        label: "Encoder readiness".to_string(),
+        status: if encoder_errors > 0 {
+            PipelineStepStatus::Blocked
+        } else if encoder_warnings > 0 {
+            PipelineStepStatus::Warning
+        } else {
+            PipelineStepStatus::Ready
+        },
+        detail: if encoder_warnings > 0 {
+            format!("{encoder_warnings} encoder availability warning(s).")
+        } else {
+            "Encoder preferences are contract-valid for dry-run planning.".to_string()
+        },
+    });
+
+    if matches!(
+        plan.intent,
+        PipelineIntent::Recording | PipelineIntent::RecordingAndStream
+    ) {
+        match &plan.recording_target {
+            Some(target) => steps.push(MediaPipelineStep {
+                id: "outputs.recording_path".to_string(),
+                label: "Recording output path".to_string(),
+                status: if !target.ready {
+                    PipelineStepStatus::Blocked
+                } else if target.warnings.is_empty() {
+                    PipelineStepStatus::Ready
+                } else {
+                    PipelineStepStatus::Warning
+                },
+                detail: target.output_path_preview.clone(),
+            }),
+            None => steps.push(MediaPipelineStep {
+                id: "outputs.recording_path".to_string(),
+                label: "Recording output path".to_string(),
+                status: PipelineStepStatus::Blocked,
+                detail: "Recording intent has no recording target contract.".to_string(),
+            }),
+        }
+    }
+
+    if matches!(
+        plan.intent,
+        PipelineIntent::Stream | PipelineIntent::RecordingAndStream
+    ) {
+        let ready_targets = plan
+            .streaming_targets
+            .iter()
+            .filter(|target| target.ready)
+            .count();
+        let missing_keys = plan
+            .streaming_targets
+            .iter()
+            .filter(|target| target.stream_key_required && !target.has_stream_key)
+            .count();
+        steps.push(MediaPipelineStep {
+            id: "outputs.stream_readiness".to_string(),
+            label: "Stream destination readiness".to_string(),
+            status: if plan.streaming_targets.is_empty()
+                || plan
+                    .streaming_targets
+                    .iter()
+                    .any(|target| !target.errors.is_empty())
+            {
+                PipelineStepStatus::Blocked
+            } else if missing_keys > 0
+                || plan
+                    .streaming_targets
+                    .iter()
+                    .any(|target| !target.warnings.is_empty())
+            {
+                PipelineStepStatus::Warning
+            } else {
+                PipelineStepStatus::Ready
+            },
+            detail: format!(
+                "{ready_targets}/{} streaming target(s) ready; {missing_keys} missing key(s).",
+                plan.streaming_targets.len()
+            ),
+        });
+    }
 }
 
 fn validate_recording(

@@ -1945,6 +1945,16 @@ mod tests {
             .unwrap()
             .iter()
             .any(|step| step["id"] == serde_json::json!("performance.telemetry")));
+        assert!(body["data"]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["id"] == serde_json::json!("outputs.render_targets")));
+        assert!(body["data"]["steps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|step| step["id"] == serde_json::json!("outputs.encoder_readiness")));
         assert_eq!(
             body["data"]["config"]["active_scene"]["id"],
             serde_json::json!("scene-main")
@@ -1968,6 +1978,17 @@ mod tests {
         assert_eq!(
             body["data"]["config"]["performance_telemetry_plan"]["scene_id"],
             serde_json::json!("scene-main")
+        );
+        assert_eq!(
+            body["data"]["config"]["output_preflight_plan"]["active_scene_id"],
+            serde_json::json!("scene-main")
+        );
+        assert!(
+            body["data"]["config"]["output_preflight_plan"]["render_targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|target| target["kind"] == "recording")
         );
     }
 
@@ -2214,6 +2235,17 @@ mod tests {
         assert_eq!(
             config_json["pipeline"]["compositor_render_plan"]["targets"][0]["kind"],
             "preview"
+        );
+        assert_eq!(
+            config_json["pipeline"]["output_preflight_plan"]["active_scene_id"],
+            "scene-main"
+        );
+        assert!(
+            config_json["pipeline"]["output_preflight_plan"]["render_targets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|target| target["kind"].as_str() == Some("recording"))
         );
         assert!(config_json["pipeline"]["capture_sources"]
             .as_array()

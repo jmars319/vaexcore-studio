@@ -2863,6 +2863,8 @@ function App() {
             previewPolling={previewPolling}
             previewQuality={previewQuality}
             previewStats={previewStats}
+            pipelinePlan={pipelinePlan}
+            preflight={preflight}
             runtime={sceneRuntime}
             runtimeBindings={sceneRuntimeBindings}
             onCopySource={handleCopyDesignerSource}
@@ -3227,6 +3229,8 @@ function DesignerPage(props: {
   previewPolling: boolean;
   previewQuality: PreviewQuality;
   previewStats: PreviewStats;
+  pipelinePlan: MediaPipelinePlan | null;
+  preflight: PreflightSnapshot | null;
   runtime: SceneRuntimeSnapshot | null;
   runtimeBindings: SceneRuntimeBindingsSnapshot | null;
   onCopySource: (sceneId: string, sourceId: string) => void;
@@ -5435,6 +5439,10 @@ function DesignerPage(props: {
               </div>
             )}
         </div>
+        <OutputPreflightPanel
+          pipelinePlan={props.pipelinePlan}
+          preflight={props.preflight}
+        />
       </section>
 
       <section className="panel designer-inspector">
@@ -6028,6 +6036,147 @@ function DesignerPage(props: {
           <div className="empty">No source selected</div>
         )}
       </section>
+    </div>
+  );
+}
+
+function OutputPreflightPanel(props: {
+  pipelinePlan: MediaPipelinePlan | null;
+  preflight: PreflightSnapshot | null;
+}) {
+  const outputPlan = props.pipelinePlan?.config.output_preflight_plan ?? null;
+  const renderTargetStep = props.pipelinePlan?.steps.find(
+    (step) => step.id === "outputs.render_targets",
+  );
+  const encoderStep = props.pipelinePlan?.steps.find(
+    (step) => step.id === "outputs.encoder_readiness",
+  );
+  const recordingStep = props.pipelinePlan?.steps.find(
+    (step) => step.id === "outputs.recording_path",
+  );
+  const streamStep = props.pipelinePlan?.steps.find(
+    (step) => step.id === "outputs.stream_readiness",
+  );
+  const blockingIssues =
+    (outputPlan?.validation.errors.length ?? 0) +
+    (props.pipelinePlan?.errors.length ?? 0);
+  const warningIssues =
+    (outputPlan?.validation.warnings.length ?? 0) +
+    (props.pipelinePlan?.warnings.length ?? 0);
+
+  return (
+    <div className="designer-preview-diagnostics" data-testid="designer-output-preflight">
+      <div className="designer-validation-header">
+        <FileVideo size={16} />
+        <div>
+          <strong>Scene Runtime Preflight</strong>
+          <span>
+            {outputPlan
+              ? `${outputPlan.render_targets.length} render target(s), ${outputPlan.streaming_targets.length} stream target(s)`
+              : "Waiting for pipeline plan"}
+          </span>
+        </div>
+        <Pill
+          tone={
+            outputPlan?.validation.ready && props.pipelinePlan?.ready
+              ? "green"
+              : blockingIssues > 0
+                ? "red"
+                : "amber"
+          }
+        >
+          {outputPlan?.validation.ready && props.pipelinePlan?.ready
+            ? "ready"
+            : blockingIssues > 0
+              ? "blocked"
+              : "warnings"}
+        </Pill>
+      </div>
+      {outputPlan ? (
+        <>
+          <div className="designer-preview-meta">
+            <KeyValue
+              label="Active Scene"
+              value={outputPlan.active_scene_name ?? "none"}
+            />
+            <KeyValue
+              label="Render Targets"
+              value={outputPlan.render_targets
+                .map(
+                  (target) =>
+                    `${target.kind}:${target.width}x${target.height}@${target.framerate}`,
+                )
+                .join(", ")}
+            />
+            <KeyValue
+              label="Recording"
+              value={
+                outputPlan.recording_target
+                  ? outputPlan.recording_target.output_path_preview
+                  : "not requested"
+              }
+            />
+            <KeyValue
+              label="Streaming"
+              value={
+                outputPlan.streaming_targets.length
+                  ? outputPlan.streaming_targets
+                      .map(
+                        (target) =>
+                          `${target.destination_name} ${
+                            target.has_stream_key ? "key ready" : "key missing"
+                          }`,
+                      )
+                      .join(", ")
+                  : "not requested"
+              }
+            />
+            <KeyValue
+              label="Issues"
+              value={`${blockingIssues} blocked / ${warningIssues} warning`}
+            />
+            <KeyValue
+              label="App Preflight"
+              value={props.preflight ? preflightLabel(props.preflight.overall) : "pending"}
+            />
+          </div>
+          <div className="check-list compact-check-list">
+            {[renderTargetStep, encoderStep, recordingStep, streamStep]
+              .filter((step): step is NonNullable<typeof step> => Boolean(step))
+              .map((step) => (
+                <div className="check-row-compact" key={step.id}>
+                  <div>
+                    <strong>{step.label}</strong>
+                    <span>{step.detail}</span>
+                  </div>
+                  <Pill tone={stepTone(step.status)}>{step.status}</Pill>
+                </div>
+              ))}
+          </div>
+          {(outputPlan.validation.errors.length > 0 ||
+            outputPlan.validation.warnings.length > 0) && (
+            <div className="designer-validation-list">
+              {outputPlan.validation.errors.slice(0, 4).map((message) => (
+                <div className="validation-issue" key={`output-error-${message}`}>
+                  <code>output</code>
+                  <span>{message}</span>
+                </div>
+              ))}
+              {outputPlan.validation.warnings.slice(0, 4).map((message) => (
+                <div
+                  className="validation-issue warning"
+                  key={`output-warning-${message}`}
+                >
+                  <code>output</code>
+                  <span>{message}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="empty compact-empty">No output preflight plan yet</div>
+      )}
     </div>
   );
 }

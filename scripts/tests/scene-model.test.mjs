@@ -289,11 +289,13 @@ test("compositor graph builder preserves source order and warnings", async () =>
     buildCompositorGraph,
     buildCompositorRenderPlan,
     buildDefaultCompositorRenderTargets,
+    buildOutputPreflightPlan,
     buildPerformanceTelemetryPlan,
     createDefaultSceneCollection,
     evaluateCompositorFrame,
     validateCompositorGraph,
     validateCompositorRenderPlan,
+    validateOutputPreflightPlan,
     validatePerformanceTelemetryPlan,
   } = await sharedTypes;
   const scene = createDefaultSceneCollection("2026-05-08T12:00:00.000Z").scenes[0];
@@ -307,6 +309,26 @@ test("compositor graph builder preserves source order and warnings", async () =>
   const frame = evaluateCompositorFrame(renderPlan, 2);
   const performancePlan = buildPerformanceTelemetryPlan(renderPlan);
   const performanceValidation = validatePerformanceTelemetryPlan(performancePlan);
+  const recordingProfile = {
+    id: "profile-test",
+    name: "Local Test",
+    output_folder: "~/Movies/vaexcore studio",
+    filename_pattern: "{date}-{time}-{profile}",
+    container: "mkv",
+    resolution: { width: 1920, height: 1080 },
+    framerate: 60,
+    bitrate_kbps: 12000,
+    encoder_preference: "auto",
+    created_at: "2026-05-08T12:00:00.000Z",
+    updated_at: "2026-05-08T12:00:00.000Z",
+  };
+  const outputPreflight = buildOutputPreflightPlan(
+    "recording",
+    scene,
+    renderPlan,
+    recordingProfile,
+  );
+  const outputValidation = validateOutputPreflightPlan(outputPreflight);
 
   assert.equal(graph.version, 1);
   assert.equal(graph.scene_id, scene.id);
@@ -327,6 +349,9 @@ test("compositor graph builder preserves source order and warnings", async () =>
   assert.ok(validation.warnings.length >= 1);
   assert.equal(renderValidation.ready, true);
   assert.equal(performanceValidation.ready, true);
+  assert.equal(outputValidation.ready, true);
+  assert.equal(outputPreflight.recording_target.render_target_id, "target-recording");
+  assert.ok(outputPreflight.render_targets.some((target) => target.kind === "recording"));
   assert.deepEqual(
     renderPlan.targets.map((target) => target.kind),
     ["preview", "program", "recording"],
