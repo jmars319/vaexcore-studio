@@ -699,6 +699,15 @@ nav {
   background: #10111d;
 }
 
+.filter-config-fields {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(34, 216, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(7, 8, 16, 0.44);
+}
+
 .source-filter-item-header {
   justify-content: space-between;
 }

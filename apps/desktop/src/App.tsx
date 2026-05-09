@@ -3536,6 +3536,20 @@ function SourceFilterEditor(props: {
     );
   }
 
+  function updateFilterConfig(
+    filterId: string,
+    patch: Record<string, unknown>,
+  ) {
+    const filter = props.source.filters?.find((item) => item.id === filterId);
+    if (!filter) return;
+    updateFilter(filterId, {
+      config: {
+        ...(filter.config ?? {}),
+        ...patch,
+      },
+    });
+  }
+
   function moveFilter(filterId: string, direction: "up" | "down") {
     const index = filters.findIndex((filter) => filter.id === filterId);
     const targetIndex = direction === "up" ? index - 1 : index + 1;
@@ -3680,6 +3694,10 @@ function SourceFilterEditor(props: {
                 />
                 Enabled
               </label>
+              <FilterConfigFields
+                filter={filter}
+                onChange={(patch) => updateFilterConfig(filter.id, patch)}
+              />
               <label>
                 Config JSON
                 <textarea
@@ -3711,6 +3729,292 @@ function SourceFilterEditor(props: {
       )}
     </div>
   );
+}
+
+function FilterConfigFields(props: {
+  filter: SceneSourceFilter;
+  onChange: (patch: Record<string, unknown>) => void;
+}) {
+  const config = props.filter.config ?? {};
+
+  switch (props.filter.kind) {
+    case "color_correction":
+      return (
+        <div className="filter-config-fields">
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Brightness"
+              onChange={(brightness) => props.onChange({ brightness })}
+              step={0.05}
+              value={configNumber(config, "brightness", 0)}
+            />
+            <SceneNumberInput
+              label="Contrast"
+              min={0}
+              onChange={(contrast) => props.onChange({ contrast })}
+              step={0.05}
+              value={configNumber(config, "contrast", 1)}
+            />
+          </div>
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Saturation"
+              min={0}
+              onChange={(saturation) => props.onChange({ saturation })}
+              step={0.05}
+              value={configNumber(config, "saturation", 1)}
+            />
+            <SceneNumberInput
+              label="Gamma"
+              min={0.01}
+              onChange={(gamma) => props.onChange({ gamma })}
+              step={0.05}
+              value={configNumber(config, "gamma", 1)}
+            />
+          </div>
+        </div>
+      );
+    case "chroma_key":
+      return (
+        <div className="filter-config-fields">
+          <TextInput
+            label="Key Color"
+            onChange={(key_color) => props.onChange({ key_color })}
+            value={configString(config, "key_color", "#00ff00")}
+          />
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Similarity"
+              max={1}
+              min={0}
+              onChange={(similarity) => props.onChange({ similarity })}
+              step={0.01}
+              value={configNumber(config, "similarity", 0.25)}
+            />
+            <SceneNumberInput
+              label="Smoothness"
+              max={1}
+              min={0}
+              onChange={(smoothness) => props.onChange({ smoothness })}
+              step={0.01}
+              value={configNumber(config, "smoothness", 0.08)}
+            />
+          </div>
+        </div>
+      );
+    case "crop_pad":
+      return (
+        <div className="filter-config-fields">
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Top"
+              min={0}
+              onChange={(top) => props.onChange({ top })}
+              value={configNumber(config, "top", 0)}
+            />
+            <SceneNumberInput
+              label="Right"
+              min={0}
+              onChange={(right) => props.onChange({ right })}
+              value={configNumber(config, "right", 0)}
+            />
+          </div>
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Bottom"
+              min={0}
+              onChange={(bottom) => props.onChange({ bottom })}
+              value={configNumber(config, "bottom", 0)}
+            />
+            <SceneNumberInput
+              label="Left"
+              min={0}
+              onChange={(left) => props.onChange({ left })}
+              value={configNumber(config, "left", 0)}
+            />
+          </div>
+        </div>
+      );
+    case "mask_blend":
+      return (
+        <div className="filter-config-fields">
+          <TextInput
+            label="Mask URI"
+            onChange={(mask_uri) => props.onChange({ mask_uri: mask_uri || null })}
+            value={configString(config, "mask_uri", "")}
+          />
+          <label>
+            Blend Mode
+            <select
+              onChange={(event) =>
+                props.onChange({ blend_mode: event.target.value })
+              }
+              value={configString(config, "blend_mode", "normal")}
+            >
+              <option value="normal">Normal</option>
+              <option value="multiply">Multiply</option>
+              <option value="screen">Screen</option>
+              <option value="overlay">Overlay</option>
+              <option value="alpha">Alpha</option>
+            </select>
+          </label>
+        </div>
+      );
+    case "blur":
+      return (
+        <div className="filter-config-fields">
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Radius"
+              min={0}
+              onChange={(radius) => props.onChange({ radius })}
+              step={0.5}
+              value={configNumber(config, "radius", 4)}
+            />
+            <label>
+              Quality
+              <select
+                onChange={(event) => props.onChange({ quality: event.target.value })}
+                value={configString(config, "quality", "balanced")}
+              >
+                <option value="fast">Fast</option>
+                <option value="balanced">Balanced</option>
+                <option value="high">High</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      );
+    case "sharpen":
+      return (
+        <div className="filter-config-fields">
+          <SceneNumberInput
+            label="Amount"
+            max={2}
+            min={0}
+            onChange={(amount) => props.onChange({ amount })}
+            step={0.05}
+            value={configNumber(config, "amount", 0.35)}
+          />
+        </div>
+      );
+    case "lut":
+      return (
+        <div className="filter-config-fields">
+          <TextInput
+            label="LUT URI"
+            onChange={(lut_uri) => props.onChange({ lut_uri: lut_uri || null })}
+            value={configString(config, "lut_uri", "")}
+          />
+          <SceneNumberInput
+            label="Strength"
+            max={1}
+            min={0}
+            onChange={(strength) => props.onChange({ strength })}
+            step={0.05}
+            value={configNumber(config, "strength", 1)}
+          />
+        </div>
+      );
+    case "audio_gain":
+      return (
+        <div className="filter-config-fields">
+          <SceneNumberInput
+            label="Gain dB"
+            max={24}
+            min={-60}
+            onChange={(gain_db) => props.onChange({ gain_db })}
+            step={0.5}
+            value={configNumber(config, "gain_db", 0)}
+          />
+        </div>
+      );
+    case "noise_gate":
+      return (
+        <div className="filter-config-fields">
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Close dB"
+              max={0}
+              min={-96}
+              onChange={(close_threshold_db) =>
+                props.onChange({ close_threshold_db })
+              }
+              step={0.5}
+              value={configNumber(config, "close_threshold_db", -45)}
+            />
+            <SceneNumberInput
+              label="Open dB"
+              max={0}
+              min={-96}
+              onChange={(open_threshold_db) =>
+                props.onChange({ open_threshold_db })
+              }
+              step={0.5}
+              value={configNumber(config, "open_threshold_db", -35)}
+            />
+          </div>
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Attack ms"
+              min={0}
+              onChange={(attack_ms) => props.onChange({ attack_ms })}
+              value={configNumber(config, "attack_ms", 10)}
+            />
+            <SceneNumberInput
+              label="Release ms"
+              min={0}
+              onChange={(release_ms) => props.onChange({ release_ms })}
+              value={configNumber(config, "release_ms", 120)}
+            />
+          </div>
+        </div>
+      );
+    case "compressor":
+      return (
+        <div className="filter-config-fields">
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Threshold dB"
+              max={0}
+              min={-96}
+              onChange={(threshold_db) => props.onChange({ threshold_db })}
+              step={0.5}
+              value={configNumber(config, "threshold_db", -18)}
+            />
+            <SceneNumberInput
+              label="Ratio"
+              min={1}
+              onChange={(ratio) => props.onChange({ ratio })}
+              step={0.1}
+              value={configNumber(config, "ratio", 3)}
+            />
+          </div>
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Attack ms"
+              min={0}
+              onChange={(attack_ms) => props.onChange({ attack_ms })}
+              value={configNumber(config, "attack_ms", 8)}
+            />
+            <SceneNumberInput
+              label="Release ms"
+              min={0}
+              onChange={(release_ms) => props.onChange({ release_ms })}
+              value={configNumber(config, "release_ms", 120)}
+            />
+          </div>
+          <SceneNumberInput
+            label="Makeup Gain dB"
+            max={24}
+            min={-24}
+            onChange={(makeup_gain_db) => props.onChange({ makeup_gain_db })}
+            step={0.5}
+            value={configNumber(config, "makeup_gain_db", 0)}
+          />
+        </div>
+      );
+  }
 }
 
 function SourceConfigEditor(props: {
@@ -5032,6 +5336,24 @@ function defaultSceneSourceFilterConfig(
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function configNumber(
+  config: Record<string, unknown>,
+  key: string,
+  fallback: number,
+): number {
+  const value = config[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function configString(
+  config: Record<string, unknown>,
+  key: string,
+  fallback: string,
+): string {
+  const value = config[key];
+  return typeof value === "string" ? value : fallback;
 }
 
 function isEditableEventTarget(target: EventTarget | null): boolean {
