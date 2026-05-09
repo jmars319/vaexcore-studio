@@ -524,7 +524,7 @@ nav {
   min-width: 46px;
   min-height: 30px;
   padding: 8px;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid rgba(34, 216, 255, 0.56);
   border-radius: 8px;
   background: rgba(10, 14, 28, 0.18);
@@ -532,6 +532,52 @@ nav {
   text-align: left;
   transform-origin: center;
   touch-action: none;
+}
+
+.designer-selection-bounds {
+  position: absolute;
+  z-index: 95;
+  border: 1px solid rgba(57, 217, 255, 0.94);
+  border-radius: 8px;
+  box-shadow:
+    0 0 0 1px rgba(57, 217, 255, 0.18),
+    0 0 18px rgba(57, 217, 255, 0.22);
+  pointer-events: none;
+}
+
+.designer-selection-rotate-handle,
+.designer-selection-resize-handle {
+  position: absolute;
+  pointer-events: auto;
+}
+
+.designer-selection-rotate-handle {
+  top: 6px;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgba(34, 216, 255, 0.8);
+  border-radius: 999px;
+  background: rgba(7, 8, 16, 0.95);
+  color: var(--cyan);
+  cursor: grab;
+  transform: translateX(-50%);
+}
+
+.designer-selection-resize-handle {
+  right: -1px;
+  bottom: -1px;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-left: 1px solid rgba(34, 216, 255, 0.76);
+  border-top: 1px solid rgba(34, 216, 255, 0.76);
+  border-radius: 6px 0 7px;
+  background: rgba(57, 217, 255, 0.42);
+  cursor: nwse-resize;
 }
 
 .designer-source-box span,
@@ -613,7 +659,7 @@ nav {
 
 .designer-rotate-handle {
   position: absolute;
-  top: -20px;
+  top: 5px;
   left: 50%;
   display: none;
   place-items: center;

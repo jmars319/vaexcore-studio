@@ -71,6 +71,49 @@ const targets = [
     ],
   },
   {
+    name: "designer-selection-transform",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "click",
+        selector: '[data-testid="designer-source-select"][data-source-id="source-title-text"]',
+      },
+      {
+        type: "click",
+        selector: '[data-testid="designer-source-select"][data-source-id="source-alert-overlay"]',
+        shiftKey: true,
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-selection-bounds\\"]"))',
+        message: "Designer selection bounds did not render.",
+      },
+      {
+        type: "drag",
+        selector: '[data-testid="designer-preview-source"][data-source-id="source-title-text"]',
+        deltaX: 90,
+        deltaY: 45,
+      },
+      {
+        type: "assert",
+        expression: 'Number.parseFloat(document.querySelector("[data-testid=\\"designer-preview-source\\"][data-source-id=\\"source-title-text\\"]")?.style.left ?? "0") > 34',
+        message: "Designer multi-source move did not update the selected source position.",
+      },
+      {
+        type: "drag",
+        selector: '[data-testid="designer-selection-resize-handle"]',
+        deltaX: 80,
+        deltaY: 55,
+      },
+      {
+        type: "assert",
+        expression: 'Number.parseFloat(document.querySelector("[data-testid=\\"designer-preview-source\\"][data-source-id=\\"source-title-text\\"]")?.style.width ?? "0") > 34',
+        message: "Designer multi-source resize did not scale the selected source.",
+      },
+    ],
+  },
+  {
     name: "designer-transition-preview",
     path: "/?section=designer",
     minBytes: 50_000,
@@ -350,7 +393,68 @@ async function runInteraction(cdp, interaction) {
     return;
   }
 
+  if (interaction.type === "drag") {
+    await waitForCdpExpression(
+      cdp,
+      `Boolean(document.querySelector(${JSON.stringify(interaction.selector)}))`,
+      5_000,
+      `Could not find ${interaction.selector}`,
+    );
+    const start = await elementCenter(cdp, interaction.selector);
+    const deltaX = interaction.deltaX ?? 0;
+    const deltaY = interaction.deltaY ?? 0;
+    await cdp.send("Input.dispatchMouseEvent", {
+      button: "none",
+      type: "mouseMoved",
+      x: start.x,
+      y: start.y,
+    });
+    await cdp.send("Input.dispatchMouseEvent", {
+      button: "left",
+      buttons: 1,
+      clickCount: 1,
+      type: "mousePressed",
+      x: start.x,
+      y: start.y,
+    });
+    for (let step = 1; step <= 6; step += 1) {
+      await cdp.send("Input.dispatchMouseEvent", {
+        button: "left",
+        buttons: 1,
+        type: "mouseMoved",
+        x: start.x + (deltaX * step) / 6,
+        y: start.y + (deltaY * step) / 6,
+      });
+      await delay(40);
+    }
+    await cdp.send("Input.dispatchMouseEvent", {
+      button: "left",
+      buttons: 0,
+      type: "mouseReleased",
+      x: start.x + deltaX,
+      y: start.y + deltaY,
+    });
+    await delay(interaction.delayMs ?? 220);
+    return;
+  }
+
   throw new Error(`Unknown visual smoke interaction: ${interaction.type}`);
+}
+
+async function elementCenter(cdp, selector) {
+  return evaluateCdp(
+    cdp,
+    `(() => {
+      const element = document.querySelector(${JSON.stringify(selector)});
+      if (!element) return null;
+      element.scrollIntoView({ block: "center", inline: "center" });
+      const rect = element.getBoundingClientRect();
+      return {
+        x: Math.round(rect.left + rect.width / 2),
+        y: Math.round(rect.top + rect.height / 2)
+      };
+    })()`,
+  );
 }
 
 async function waitForCdpExpression(cdp, expression, timeoutMs, message) {

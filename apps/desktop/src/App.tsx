@@ -201,6 +201,15 @@ const sceneSourceBoundsModeLabels: Record<SceneSourceBoundsMode, string> = {
   original_size: "Original Size",
 };
 
+type SceneRect = ScenePoint & SceneSize;
+
+type DesignerDragSourceState = {
+  id: string;
+  position: ScenePoint;
+  size: SceneSize;
+  rotation_degrees: number;
+};
+
 type DesignerDragState = {
   mode: "move" | "resize" | "rotate";
   pointerId: number;
@@ -210,6 +219,8 @@ type DesignerDragState = {
   startPosition: ScenePoint;
   startSize: SceneSize;
   startRotation: number;
+  startSources: DesignerDragSourceState[];
+  startSelectionBounds: SceneRect;
   centerClientX?: number;
   centerClientY?: number;
   startAngleDegrees?: number;
@@ -225,8 +236,6 @@ type DesignerMarqueeState = {
   start: ScenePoint;
   current: ScenePoint;
 };
-
-type SceneRect = ScenePoint & SceneSize;
 
 type SceneHistory = {
   past: SceneCollection[];
@@ -2135,6 +2144,7 @@ function DesignerPage(props: {
   );
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const renderCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const suppressSourceClickRef = useRef(false);
   const [dragState, setDragState] = useState<DesignerDragState | null>(null);
   const [marqueeState, setMarqueeState] = useState<DesignerMarqueeState | null>(
     null,
@@ -2147,6 +2157,14 @@ function DesignerPage(props: {
   const selectedSourceIds = props.selectedSourceIds.filter((sourceId) =>
     props.scene.sources.some((source) => source.id === sourceId),
   );
+  const selectedSceneSources = props.scene.sources.filter((source) =>
+    selectedSourceIds.includes(source.id),
+  );
+  const unlockedSelectedSources = selectedSceneSources.filter(
+    (source) => !source.locked,
+  );
+  const selectionBounds =
+    selectedSceneSources.length > 1 ? sceneSourceBounds(selectedSceneSources) : null;
   const hasGroupSelection = props.selectedSources.some(
     (source) => source.kind === "group",
   );
@@ -2201,6 +2219,29 @@ function DesignerPage(props: {
         event.preventDefault();
         props.onDuplicateSource(props.scene.id, props.selectedSource.id);
         return;
+      }
+
+      if (selectedSourceIds.length > 0 && event.key.startsWith("Arrow")) {
+        const nudge = event.shiftKey ? 10 : 1;
+        const delta =
+          event.key === "ArrowLeft"
+            ? { x: -nudge, y: 0 }
+            : event.key === "ArrowRight"
+              ? { x: nudge, y: 0 }
+              : event.key === "ArrowUp"
+                ? { x: 0, y: -nudge }
+                : event.key === "ArrowDown"
+                  ? { x: 0, y: nudge }
+                  : null;
+        if (delta) {
+          event.preventDefault();
+          nudgeDesignerSelection(
+            delta.x,
+            delta.y,
+            `keyboard:nudge:${event.timeStamp}`,
+          );
+          return;
+        }
       }
 
       if (selectedSourceIds.length > 0 && (event.key === "[" || event.key === "]")) {
@@ -2266,6 +2307,51 @@ function DesignerPage(props: {
     setTransitionPreviewProgress(0);
   }, [activeTransition?.id]);
 
+  function applyDesignerSourcePatches(
+    patches: Array<{ sourceId: string; patch: SceneSourcePatch }>,
+    options?: SceneUpdateOptions,
+  ) {
+    patches.forEach(({ sourceId, patch }) => {
+      props.onUpdateSource(props.scene.id, sourceId, patch, options);
+    });
+  }
+
+  function nudgeDesignerSelection(
+    deltaX: number,
+    deltaY: number,
+    historyGroup: string,
+    sourceIds = selectedSourceIds,
+  ) {
+    const selectedIds = new Set(sourceIds);
+    const targets = props.scene.sources.filter(
+      (source) => selectedIds.has(source.id) && !source.locked,
+    );
+    applyDesignerSourcePatches(
+      targets.map((source) => ({
+        sourceId: source.id,
+        patch: {
+          position: {
+            x: source.position.x + deltaX,
+            y: source.position.y + deltaY,
+          },
+        },
+      })),
+      { historyGroup },
+    );
+  }
+
+  function beginSelectionTransform(
+    event: ReactPointerEvent,
+    mode: "resize" | "rotate",
+  ) {
+    if (!selectionBounds || unlockedSelectedSources.length === 0 || event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    startDesignerDrag(event, mode, unlockedSelectedSources, selectionBounds);
+  }
+
   function beginSourceDrag(
     event: ReactPointerEvent,
     source: SceneSource,
@@ -2274,39 +2360,59 @@ function DesignerPage(props: {
     if (source.locked || event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
-    props.onSelectSource(
-      source.id,
-      event.shiftKey || event.metaKey || event.ctrlKey,
-    );
+    const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+    if (additive || !selectedSourceIds.includes(source.id)) {
+      props.onSelectSource(source.id, additive);
+    }
+    const dragSources =
+      !additive &&
+      selectedSourceIds.includes(source.id) &&
+      unlockedSelectedSources.length > 1
+        ? unlockedSelectedSources
+        : [source];
+    startDesignerDrag(event, mode, dragSources, sceneSourceBounds(dragSources));
+  }
+
+  function startDesignerDrag(
+    event: ReactPointerEvent,
+    mode: "move" | "resize" | "rotate",
+    sources: SceneSource[],
+    bounds: SceneRect,
+  ) {
+    suppressSourceClickRef.current = false;
     const rect = canvasRef.current?.getBoundingClientRect();
-    const centerClientX = rect
-      ? rect.left +
-        ((source.position.x + source.size.width / 2) / props.scene.canvas.width) *
-          rect.width
+    const centerPoint = sceneRectCenter(bounds);
+    const centerClient = rect
+      ? scenePointToClientPoint(centerPoint, props.scene, rect)
+      : null;
+    const startAngleDegrees = centerClient
+      ? pointerAngleDegrees(
+          event.clientX,
+          event.clientY,
+          centerClient.x,
+          centerClient.y,
+        )
       : undefined;
-    const centerClientY = rect
-      ? rect.top +
-        ((source.position.y + source.size.height / 2) /
-          props.scene.canvas.height) *
-          rect.height
-      : undefined;
-    const startAngleDegrees =
-      centerClientX !== undefined && centerClientY !== undefined
-        ? pointerAngleDegrees(event.clientX, event.clientY, centerClientX, centerClientY)
-        : undefined;
     canvasRef.current?.setPointerCapture(event.pointerId);
     setSnapGuides([]);
     setDragState({
       mode,
       pointerId: event.pointerId,
-      sourceId: source.id,
+      sourceId: sources[0]?.id ?? "",
       startClientX: event.clientX,
       startClientY: event.clientY,
-      startPosition: { ...source.position },
-      startSize: { ...source.size },
-      startRotation: source.rotation_degrees,
-      centerClientX,
-      centerClientY,
+      startPosition: { x: bounds.x, y: bounds.y },
+      startSize: { width: bounds.width, height: bounds.height },
+      startRotation: sources[0]?.rotation_degrees ?? 0,
+      startSources: sources.map((item) => ({
+        id: item.id,
+        position: { ...item.position },
+        size: { ...item.size },
+        rotation_degrees: item.rotation_degrees,
+      })),
+      startSelectionBounds: { ...bounds },
+      centerClientX: centerClient?.x,
+      centerClientY: centerClient?.y,
       startAngleDegrees,
     });
   }
@@ -2315,6 +2421,7 @@ function DesignerPage(props: {
     if (!dragState || dragState.pointerId !== event.pointerId) return;
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
+    suppressSourceClickRef.current = true;
     const deltaX =
       ((event.clientX - dragState.startClientX) / rect.width) *
       props.scene.canvas.width;
@@ -2322,6 +2429,9 @@ function DesignerPage(props: {
       ((event.clientY - dragState.startClientY) / rect.height) *
       props.scene.canvas.height;
     const options = { historyGroup: `drag:${dragState.sourceId}` };
+    const ignoredSourceIds = new Set(
+      dragState.startSources.map((source) => source.id),
+    );
 
     if (dragState.mode === "rotate") {
       if (
@@ -2337,14 +2447,32 @@ function DesignerPage(props: {
         dragState.centerClientX,
         dragState.centerClientY,
       );
-      props.onUpdateSource(
-        props.scene.id,
-        dragState.sourceId,
-        {
-          rotation_degrees: Math.round(
-            dragState.startRotation + angle - dragState.startAngleDegrees,
-          ),
-        },
+      const rotationDelta = angle - dragState.startAngleDegrees;
+      const center = sceneRectCenter(dragState.startSelectionBounds);
+      setSnapGuides([]);
+      applyDesignerSourcePatches(
+        dragState.startSources.map((source) => {
+          const sourceCenter = {
+            x: source.position.x + source.size.width / 2,
+            y: source.position.y + source.size.height / 2,
+          };
+          const rotatedCenter =
+            dragState.startSources.length > 1
+              ? rotatePointAroundCenter(sourceCenter, center, rotationDelta)
+              : sourceCenter;
+          return {
+            sourceId: source.id,
+            patch: {
+              position: {
+                x: Math.round(rotatedCenter.x - source.size.width / 2),
+                y: Math.round(rotatedCenter.y - source.size.height / 2),
+              },
+              rotation_degrees: Math.round(
+                source.rotation_degrees + rotationDelta,
+              ),
+            },
+          };
+        }),
         options,
       );
       return;
@@ -2353,19 +2481,26 @@ function DesignerPage(props: {
     if (dragState.mode === "move") {
       const snapped = snapSourcePosition(
         props.scene,
-        dragState.startSize,
+        dragState.startSelectionBounds,
         {
           x: Math.round(dragState.startPosition.x + deltaX),
           y: Math.round(dragState.startPosition.y + deltaY),
         },
+        ignoredSourceIds,
       );
+      const appliedDeltaX = snapped.position.x - dragState.startSelectionBounds.x;
+      const appliedDeltaY = snapped.position.y - dragState.startSelectionBounds.y;
       setSnapGuides(snapped.guides);
-      props.onUpdateSource(
-        props.scene.id,
-        dragState.sourceId,
-        {
-          position: snapped.position,
-        },
+      applyDesignerSourcePatches(
+        dragState.startSources.map((source) => ({
+          sourceId: source.id,
+          patch: {
+            position: {
+              x: Math.round(source.position.x + appliedDeltaX),
+              y: Math.round(source.position.y + appliedDeltaY),
+            },
+          },
+        })),
         options,
       );
       return;
@@ -2373,19 +2508,34 @@ function DesignerPage(props: {
 
     const snapped = snapSourceSize(
       props.scene,
-      dragState.startPosition,
+      dragState.startSelectionBounds,
       {
         width: Math.max(16, Math.round(dragState.startSize.width + deltaX)),
         height: Math.max(16, Math.round(dragState.startSize.height + deltaY)),
       },
+      ignoredSourceIds,
     );
+    const scaleX = snapped.size.width / dragState.startSelectionBounds.width;
+    const scaleY = snapped.size.height / dragState.startSelectionBounds.height;
     setSnapGuides(snapped.guides);
-    props.onUpdateSource(
-      props.scene.id,
-      dragState.sourceId,
-      {
-        size: snapped.size,
-      },
+    applyDesignerSourcePatches(
+      dragState.startSources.map((source) => {
+        const relativeX = source.position.x - dragState.startSelectionBounds.x;
+        const relativeY = source.position.y - dragState.startSelectionBounds.y;
+        return {
+          sourceId: source.id,
+          patch: {
+            position: {
+              x: Math.round(dragState.startSelectionBounds.x + relativeX * scaleX),
+              y: Math.round(dragState.startSelectionBounds.y + relativeY * scaleY),
+            },
+            size: {
+              width: Math.max(16, Math.round(source.size.width * scaleX)),
+              height: Math.max(16, Math.round(source.size.height * scaleY)),
+            },
+          },
+        };
+      }),
       options,
     );
   }
@@ -2972,44 +3122,65 @@ function DesignerPage(props: {
                 ]
                   .filter(Boolean)
                   .join(" ")}
+                data-source-id={source.id}
+                data-source-kind={source.kind}
+                data-testid="designer-preview-source"
                 key={source.id}
-                onClick={(event) =>
+                onClick={(event) => {
+                  if (suppressSourceClickRef.current) {
+                    suppressSourceClickRef.current = false;
+                    return;
+                  }
                   props.onSelectSource(
                     source.id,
                     event.shiftKey || event.metaKey || event.ctrlKey,
-                  )
-                }
+                  );
+                }}
                 onKeyDown={(event) => {
                   if (source.locked) return;
                   const nudge = event.shiftKey ? 10 : 1;
+                  const keyboardSourceIds = selectedSourceIds.includes(source.id)
+                    ? selectedSourceIds
+                    : [source.id];
                   if (event.key === "ArrowLeft") {
-                    props.onUpdateSource(props.scene.id, source.id, {
-                      position: { x: source.position.x - nudge },
-                    });
+                    nudgeDesignerSelection(
+                      -nudge,
+                      0,
+                      `keyboard:nudge:${event.timeStamp}`,
+                      keyboardSourceIds,
+                    );
                   } else if (event.key === "ArrowRight") {
-                    props.onUpdateSource(props.scene.id, source.id, {
-                      position: { x: source.position.x + nudge },
-                    });
+                    nudgeDesignerSelection(
+                      nudge,
+                      0,
+                      `keyboard:nudge:${event.timeStamp}`,
+                      keyboardSourceIds,
+                    );
                   } else if (event.key === "ArrowUp") {
-                    props.onUpdateSource(props.scene.id, source.id, {
-                      position: { y: source.position.y - nudge },
-                    });
+                    nudgeDesignerSelection(
+                      0,
+                      -nudge,
+                      `keyboard:nudge:${event.timeStamp}`,
+                      keyboardSourceIds,
+                    );
                   } else if (event.key === "ArrowDown") {
-                    props.onUpdateSource(props.scene.id, source.id, {
-                      position: { y: source.position.y + nudge },
-                    });
+                    nudgeDesignerSelection(
+                      0,
+                      nudge,
+                      `keyboard:nudge:${event.timeStamp}`,
+                      keyboardSourceIds,
+                    );
                   } else if (event.key === "[" || event.key === "]") {
                     props.onRotateSelection(
                       props.scene.id,
-                      selectedSourceIds.includes(source.id)
-                        ? selectedSourceIds
-                        : [source.id],
+                      keyboardSourceIds,
                       event.key === "]" ? (event.shiftKey ? 15 : 1) : event.shiftKey ? -15 : -1,
                     );
                   } else {
                     return;
                   }
                   event.preventDefault();
+                  event.stopPropagation();
                 }}
                 onPointerDown={(event) => beginSourceDrag(event, source, "move")}
                 role="button"
@@ -3052,6 +3223,42 @@ function DesignerPage(props: {
                 )}
               </div>
             ))}
+            {selectionBounds && (
+              <div
+                aria-label={`${selectedSourceIds.length} selected sources`}
+                className="designer-selection-bounds"
+                data-testid="designer-selection-bounds"
+                role="group"
+                style={selectionBoundsStyle(selectionBounds, props.scene)}
+              >
+                <button
+                  aria-label="Rotate selected sources"
+                  className="designer-selection-rotate-handle"
+                  data-testid="designer-selection-rotate-handle"
+                  disabled={unlockedSelectedSources.length === 0}
+                  onClick={(event) => event.stopPropagation()}
+                  onPointerDown={(event) =>
+                    beginSelectionTransform(event, "rotate")
+                  }
+                  title="Rotate selected sources"
+                  type="button"
+                >
+                  <RotateCcw size={12} />
+                </button>
+                <button
+                  aria-label="Resize selected sources"
+                  className="designer-selection-resize-handle"
+                  data-testid="designer-selection-resize-handle"
+                  disabled={unlockedSelectedSources.length === 0}
+                  onClick={(event) => event.stopPropagation()}
+                  onPointerDown={(event) =>
+                    beginSelectionTransform(event, "resize")
+                  }
+                  title="Resize selected sources"
+                  type="button"
+                />
+              </div>
+            )}
           </div>
         </div>
         <div className="designer-preview-meta">
@@ -5843,6 +6050,49 @@ function marqueeStyle(
   };
 }
 
+function selectionBoundsStyle(rect: SceneRect, scene: Scene): CSSProperties {
+  return {
+    left: `${(rect.x / scene.canvas.width) * 100}%`,
+    top: `${(rect.y / scene.canvas.height) * 100}%`,
+    width: `${(rect.width / scene.canvas.width) * 100}%`,
+    height: `${(rect.height / scene.canvas.height) * 100}%`,
+  };
+}
+
+function sceneRectCenter(rect: SceneRect): ScenePoint {
+  return {
+    x: rect.x + rect.width / 2,
+    y: rect.y + rect.height / 2,
+  };
+}
+
+function scenePointToClientPoint(
+  point: ScenePoint,
+  scene: Scene,
+  canvasRect: DOMRect,
+): ScenePoint {
+  return {
+    x: canvasRect.left + (point.x / scene.canvas.width) * canvasRect.width,
+    y: canvasRect.top + (point.y / scene.canvas.height) * canvasRect.height,
+  };
+}
+
+function rotatePointAroundCenter(
+  point: ScenePoint,
+  center: ScenePoint,
+  degrees: number,
+): ScenePoint {
+  const radians = (degrees * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const translatedX = point.x - center.x;
+  const translatedY = point.y - center.y;
+  return {
+    x: center.x + translatedX * cos - translatedY * sin,
+    y: center.y + translatedX * sin + translatedY * cos,
+  };
+}
+
 function pointerAngleDegrees(
   clientX: number,
   clientY: number,
@@ -5869,35 +6119,30 @@ function snapGuideStyle(guide: DesignerSnapGuide, scene: Scene): CSSProperties {
 
 function snapSourcePosition(
   scene: Scene,
-  size: SceneSize,
+  rect: SceneRect,
   position: ScenePoint,
+  ignoredSourceIds: Set<string> = new Set(),
 ): { position: ScenePoint; guides: DesignerSnapGuide[] } {
   const guides: DesignerSnapGuide[] = [];
   const snappedPosition = { ...position };
-  const horizontalTargets = [
-    { coordinate: 0, position: 0 },
-    {
-      coordinate: scene.canvas.width / 2,
-      position: Math.round((scene.canvas.width - size.width) / 2),
-    },
-    {
-      coordinate: scene.canvas.width,
-      position: Math.round(scene.canvas.width - size.width),
-    },
-  ];
-  const verticalTargets = [
-    { coordinate: 0, position: 0 },
-    {
-      coordinate: scene.canvas.height / 2,
-      position: Math.round((scene.canvas.height - size.height) / 2),
-    },
-    {
-      coordinate: scene.canvas.height,
-      position: Math.round(scene.canvas.height - size.height),
-    },
-  ];
-  const xTarget = nearestSnapTarget(position.x, horizontalTargets);
-  const yTarget = nearestSnapTarget(position.y, verticalTargets);
+  const horizontalTargets = snapTargetsForAxis(scene, "x", ignoredSourceIds);
+  const verticalTargets = snapTargetsForAxis(scene, "y", ignoredSourceIds);
+  const xTarget = nearestSnapCandidate(
+    [
+      { coordinate: position.x, offset: 0 },
+      { coordinate: position.x + rect.width / 2, offset: rect.width / 2 },
+      { coordinate: position.x + rect.width, offset: rect.width },
+    ],
+    horizontalTargets,
+  );
+  const yTarget = nearestSnapCandidate(
+    [
+      { coordinate: position.y, offset: 0 },
+      { coordinate: position.y + rect.height / 2, offset: rect.height / 2 },
+      { coordinate: position.y + rect.height, offset: rect.height },
+    ],
+    verticalTargets,
+  );
 
   if (xTarget) {
     snappedPosition.x = xTarget.position;
@@ -5913,41 +6158,77 @@ function snapSourcePosition(
 
 function snapSourceSize(
   scene: Scene,
-  position: ScenePoint,
+  rect: SceneRect,
   size: SceneSize,
+  ignoredSourceIds: Set<string> = new Set(),
 ): { size: SceneSize; guides: DesignerSnapGuide[] } {
   const guides: DesignerSnapGuide[] = [];
   const snappedSize = { ...size };
-  const rightEdge = position.x + size.width;
-  const bottomEdge = position.y + size.height;
-  const rightTarget = nearestSnapTarget(rightEdge, [
-    { coordinate: scene.canvas.width / 2, position: scene.canvas.width / 2 },
-    { coordinate: scene.canvas.width, position: scene.canvas.width },
-  ]);
-  const bottomTarget = nearestSnapTarget(bottomEdge, [
-    { coordinate: scene.canvas.height / 2, position: scene.canvas.height / 2 },
-    { coordinate: scene.canvas.height, position: scene.canvas.height },
-  ]);
+  const rightEdge = rect.x + size.width;
+  const bottomEdge = rect.y + size.height;
+  const rightTarget = nearestSnapCandidate(
+    [{ coordinate: rightEdge, offset: rect.x }],
+    snapTargetsForAxis(scene, "x", ignoredSourceIds),
+  );
+  const bottomTarget = nearestSnapCandidate(
+    [{ coordinate: bottomEdge, offset: rect.y }],
+    snapTargetsForAxis(scene, "y", ignoredSourceIds),
+  );
 
   if (rightTarget) {
-    snappedSize.width = Math.max(16, Math.round(rightTarget.position - position.x));
+    snappedSize.width = Math.max(16, Math.round(rightTarget.coordinate - rect.x));
     guides.push({ axis: "x", position: rightTarget.coordinate });
   }
   if (bottomTarget) {
-    snappedSize.height = Math.max(16, Math.round(bottomTarget.position - position.y));
+    snappedSize.height = Math.max(16, Math.round(bottomTarget.coordinate - rect.y));
     guides.push({ axis: "y", position: bottomTarget.coordinate });
   }
 
   return { size: snappedSize, guides };
 }
 
-function nearestSnapTarget(
-  value: number,
-  targets: Array<{ coordinate: number; position: number }>,
-) {
-  return targets.find(
-    (target) => Math.abs(value - target.position) <= designerSnapThreshold,
-  );
+function snapTargetsForAxis(
+  scene: Scene,
+  axis: "x" | "y",
+  ignoredSourceIds: Set<string>,
+): Array<{ coordinate: number }> {
+  const canvasSize = axis === "x" ? scene.canvas.width : scene.canvas.height;
+  const targets = [{ coordinate: 0 }, { coordinate: canvasSize / 2 }, { coordinate: canvasSize }];
+  scene.sources.forEach((source) => {
+    if (ignoredSourceIds.has(source.id)) return;
+    const start = axis === "x" ? source.position.x : source.position.y;
+    const size = axis === "x" ? source.size.width : source.size.height;
+    targets.push(
+      { coordinate: start },
+      { coordinate: start + size / 2 },
+      { coordinate: start + size },
+    );
+  });
+  return targets;
+}
+
+function nearestSnapCandidate(
+  edges: Array<{ coordinate: number; offset: number }>,
+  targets: Array<{ coordinate: number }>,
+): { coordinate: number; position: number } | null {
+  let nearest: { coordinate: number; position: number; distance: number } | null =
+    null;
+  edges.forEach((edge) => {
+    targets.forEach((target) => {
+      const distance = Math.abs(edge.coordinate - target.coordinate);
+      if (
+        distance <= designerSnapThreshold &&
+        (!nearest || distance < nearest.distance)
+      ) {
+        nearest = {
+          coordinate: target.coordinate,
+          position: Math.round(target.coordinate - edge.offset),
+          distance,
+        };
+      }
+    });
+  });
+  return nearest;
 }
 
 type SourceCanvasAlignment =
