@@ -2,6 +2,7 @@ import {
   Activity,
   AlignCenterHorizontal,
   AlignCenterVertical,
+  AlertTriangle,
   ArrowDown,
   ArrowUp,
   Cable,
@@ -1193,6 +1194,16 @@ function App() {
       const result = await importSceneCollectionBundle();
       if (config) {
         const collection = await StudioApi.sceneCollection(config);
+        const validation = validateSceneCollection(collection);
+        if (!validation.ok) {
+          setSceneSaveStatus(
+            `Import validation failed: ${formatSceneValidationSummary(
+              validation.issues,
+            )}`,
+          );
+          setError("Imported scene collection did not pass validation.");
+          return;
+        }
         setSceneCollection(collection);
         const scene =
           collection.scenes.find(
@@ -1215,6 +1226,25 @@ function App() {
         error instanceof Error ? error.message : "Scene import failed",
       );
     }
+  }
+
+  function handleResetDesignerCollection() {
+    if (
+      !window.confirm(
+        "Reset the scene collection to the default valid starter collection?",
+      )
+    ) {
+      return;
+    }
+    const collection = createDefaultSceneCollection();
+    updateDesignerCollection(() => collection);
+    const scene =
+      collection.scenes.find((item) => item.id === collection.active_scene_id) ??
+      collection.scenes[0];
+    selectDesignerSources([scene?.sources[0]?.id ?? ""]);
+    setSceneHistory({ past: [sceneCollection].slice(-designerHistoryLimit), future: [] });
+    setSceneSaveStatus("Reset to the default valid scene collection.");
+    setError(null);
   }
 
   function handleSelectDesignerScene(sceneId: string) {
@@ -1989,6 +2019,13 @@ function App() {
 
   async function handleSaveDesignerScenes() {
     if (!config) return;
+    const validation = validateSceneCollection(sceneCollection);
+    if (!validation.ok) {
+      setSceneSaveStatus(
+        `Save blocked: ${formatSceneValidationSummary(validation.issues)}`,
+      );
+      return;
+    }
     try {
       const saved = await StudioApi.saveSceneCollection(config, sceneCollection);
       setSceneCollection(saved);
@@ -2053,6 +2090,7 @@ function App() {
             onImportCollection={handleImportSceneCollectionBundle}
             onPasteSource={handlePasteDesignerSource}
             onRenameScene={handleRenameDesignerScene}
+            onResetCollection={handleResetDesignerCollection}
             onAlignSelection={handleAlignDesignerSelection}
             onDistributeSelection={handleDistributeDesignerSelection}
             canRedo={sceneHistory.future.length > 0}
@@ -2397,6 +2435,7 @@ function DesignerPage(props: {
   onImportCollection: () => void;
   onPasteSource: (sceneId: string) => void;
   onRenameScene: (sceneId: string, name: string) => void;
+  onResetCollection: () => void;
   onAlignSelection: (
     sceneId: string,
     sourceIds: string[],
@@ -4081,6 +4120,66 @@ function DesignerPage(props: {
             <PanelBottom size={14} />
             Back
           </button>
+        </div>
+        <div
+          className={
+            validation.ok && graphValidation.ready
+              ? "designer-validation-panel valid"
+              : "designer-validation-panel"
+          }
+          data-testid="designer-validation-panel"
+        >
+          <div className="designer-validation-header">
+            {validation.ok && graphValidation.ready ? (
+              <CheckCircle2 size={16} />
+            ) : (
+              <AlertTriangle size={16} />
+            )}
+            <div>
+              <strong>
+                {validation.ok && graphValidation.ready
+                  ? "Scene validation ready"
+                  : "Scene validation needs attention"}
+              </strong>
+              <span>
+                {validation.issues.length} collection issue(s),{" "}
+                {graphValidation.errors.length} graph error(s),{" "}
+                {graphValidation.warnings.length} graph warning(s)
+              </span>
+            </div>
+            <button
+              className="secondary-button compact"
+              onClick={props.onResetCollection}
+              type="button"
+            >
+              <RotateCcw size={14} />
+              Reset
+            </button>
+          </div>
+          {(!validation.ok ||
+            graphValidation.errors.length > 0 ||
+            graphValidation.warnings.length > 0) && (
+            <div className="designer-validation-list">
+              {validation.issues.slice(0, 5).map((issue) => (
+                <div className="validation-issue" key={`${issue.path}-${issue.message}`}>
+                  <code>{issue.path}</code>
+                  <span>{issue.message}</span>
+                </div>
+              ))}
+              {graphValidation.errors.slice(0, 3).map((message) => (
+                <div className="validation-issue" key={`graph-error-${message}`}>
+                  <code>graph</code>
+                  <span>{message}</span>
+                </div>
+              ))}
+              {graphValidation.warnings.slice(0, 3).map((message) => (
+                <div className="validation-issue warning" key={`graph-warning-${message}`}>
+                  <code>graph</code>
+                  <span>{message}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 
@@ -6641,6 +6740,15 @@ function mergeSceneSourcePatch(
     crop: patch.crop ? { ...source.crop, ...patch.crop } : source.crop,
     config: patch.config ? { ...source.config, ...patch.config } : source.config,
   } as SceneSource;
+}
+
+function formatSceneValidationSummary(
+  issues: Array<{ path: string; message: string }>,
+): string {
+  if (issues.length === 0) return "no validation issues";
+  const firstIssue = issues[0];
+  const suffix = issues.length > 1 ? ` and ${issues.length - 1} more` : "";
+  return `${firstIssue.path}: ${firstIssue.message}${suffix}`;
 }
 
 function mergeSceneTransitionPatch(
