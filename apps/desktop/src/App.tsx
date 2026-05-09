@@ -204,6 +204,13 @@ const sceneSourceBoundsModeLabels: Record<SceneSourceBoundsMode, string> = {
   original_size: "Original Size",
 };
 
+const sceneTransitionKindLabels: Record<SceneTransition["kind"], string> = {
+  cut: "Cut",
+  fade: "Fade",
+  swipe: "Swipe",
+  stinger: "Stinger",
+};
+
 type SceneRect = ScenePoint & SceneSize;
 
 type SourceStackTreeItem = {
@@ -1604,17 +1611,54 @@ function App() {
       ...current,
       transitions: current.transitions.map((transition) =>
         transition.id === transitionId
-          ? {
-              ...transition,
-              ...patch,
-              duration_ms:
-                patch.kind === "cut"
-                  ? 0
-                  : (patch.duration_ms ?? transition.duration_ms),
-            }
+          ? mergeSceneTransitionPatch(transition, patch)
           : transition,
       ),
     }));
+  }
+
+  function handleCreateDesignerTransition(kind: SceneTransition["kind"]) {
+    const transition = createDesignerTransition(kind);
+    updateDesignerCollection((current) => ({
+      ...current,
+      active_transition_id: transition.id,
+      transitions: [...current.transitions, transition],
+    }));
+  }
+
+  function handleDuplicateDesignerTransition(transitionId: string) {
+    const transition = sceneCollection.transitions.find(
+      (item) => item.id === transitionId,
+    );
+    if (!transition) return;
+    const duplicate = {
+      ...JSON.parse(JSON.stringify(transition)),
+      id: designerId(`transition-${transition.kind}`),
+      name: `${transition.name} Copy`,
+    } as SceneTransition;
+    updateDesignerCollection((current) => ({
+      ...current,
+      active_transition_id: duplicate.id,
+      transitions: [...current.transitions, duplicate],
+    }));
+  }
+
+  function handleDeleteDesignerTransition(transitionId: string) {
+    if (sceneCollection.transitions.length <= 1) return;
+    updateDesignerCollection((current) => {
+      const transitions = current.transitions.filter(
+        (transition) => transition.id !== transitionId,
+      );
+      const active_transition_id =
+        current.active_transition_id === transitionId
+          ? (transitions[0]?.id ?? current.active_transition_id)
+          : current.active_transition_id;
+      return {
+        ...current,
+        active_transition_id,
+        transitions,
+      };
+    });
   }
 
   function handleCreateDesignerSource(
@@ -1992,12 +2036,15 @@ function App() {
             onCopySource={handleCopyDesignerSource}
             onCreateScene={handleCreateDesignerScene}
             onCreateSource={handleCreateDesignerSource}
+            onCreateTransition={handleCreateDesignerTransition}
             onDeleteScene={handleDeleteDesignerScene}
             onDeleteSource={handleDeleteDesignerSource}
             onDeleteSources={handleDeleteDesignerSources}
+            onDeleteTransition={handleDeleteDesignerTransition}
             onDropReorderSource={handleDropReorderDesignerSource}
             onDuplicateScene={handleDuplicateDesignerScene}
             onDuplicateSource={handleDuplicateDesignerSource}
+            onDuplicateTransition={handleDuplicateDesignerTransition}
             onExportCollection={handleExportSceneCollectionBundle}
             onFinishContinuousEdit={handleFinishDesignerContinuousEdit}
             onGroupSources={handleGroupDesignerSources}
@@ -2329,9 +2376,11 @@ function DesignerPage(props: {
     kind: SceneSourceKind,
     defaults?: SceneSourceDefaults,
   ) => void;
+  onCreateTransition: (kind: SceneTransition["kind"]) => void;
   onDeleteScene: (sceneId: string) => void;
   onDeleteSource: (sceneId: string, sourceId: string) => void;
   onDeleteSources: (sceneId: string, sourceIds: string[]) => void;
+  onDeleteTransition: (transitionId: string) => void;
   onDropReorderSource: (
     sceneId: string,
     sourceId: string,
@@ -2339,6 +2388,7 @@ function DesignerPage(props: {
   ) => void;
   onDuplicateScene: (sceneId: string) => void;
   onDuplicateSource: (sceneId: string, sourceId: string) => void;
+  onDuplicateTransition: (transitionId: string) => void;
   onExportCollection: () => void;
   onFinishContinuousEdit: () => void;
   onGroupSources: (sceneId: string, sourceIds: string[]) => void;
@@ -2425,6 +2475,8 @@ function DesignerPage(props: {
   );
   const [snapGuides, setSnapGuides] = useState<DesignerSnapGuide[]>([]);
   const [newSourceKind, setNewSourceKind] = useState<SceneSourceKind>("display");
+  const [newTransitionKind, setNewTransitionKind] =
+    useState<SceneTransition["kind"]>("fade");
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [snapStrength, setSnapStrength] = useState(designerSnapThreshold);
   const [aspectRatioLocked, setAspectRatioLocked] = useState(false);
@@ -3079,7 +3131,34 @@ function DesignerPage(props: {
         </section>
 
         <section className="panel">
-          <PanelTitle title="Transitions" />
+          <PanelTitle
+            action={
+              <div className="source-add-controls">
+                <select
+                  aria-label="New transition kind"
+                  onChange={(event) =>
+                    setNewTransitionKind(event.target.value as SceneTransition["kind"])
+                  }
+                  value={newTransitionKind}
+                >
+                  {Object.entries(sceneTransitionKindLabels).map(([kind, label]) => (
+                    <option key={kind} value={kind}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="secondary-button compact"
+                  onClick={() => props.onCreateTransition(newTransitionKind)}
+                  type="button"
+                >
+                  <Plus size={14} />
+                  Transition
+                </button>
+              </div>
+            }
+            title="Transitions"
+          />
           <div className="designer-list compact-list">
             {props.collection.transitions.map((transition) => (
               <div
@@ -3113,6 +3192,27 @@ function DesignerPage(props: {
                     ? "Active"
                     : "Ready"}
                 </Pill>
+                <div className="source-stack-actions">
+                  <button
+                    aria-label={`Duplicate ${transition.name}`}
+                    className="icon-button compact"
+                    onClick={() => props.onDuplicateTransition(transition.id)}
+                    title={`Duplicate ${transition.name}`}
+                    type="button"
+                  >
+                    <Copy size={14} />
+                  </button>
+                  <button
+                    aria-label={`Delete ${transition.name}`}
+                    className="icon-button compact danger"
+                    disabled={props.collection.transitions.length <= 1}
+                    onClick={() => props.onDeleteTransition(transition.id)}
+                    title={`Delete ${transition.name}`}
+                    type="button"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -3171,6 +3271,17 @@ function DesignerPage(props: {
                   <option value="ease_in_out">Ease In Out</option>
                 </select>
               </label>
+              <TransitionConfigEditor
+                onChange={(configPatch) =>
+                  props.onUpdateTransition(activeTransition.id, {
+                    config: {
+                      ...activeTransition.config,
+                      ...configPatch,
+                    },
+                  })
+                }
+                transition={activeTransition}
+              />
               <div className="designer-preview-meta transition-preview-meta">
                 <KeyValue
                   label="Frames"
@@ -4418,6 +4529,98 @@ function DesignerPage(props: {
           <div className="empty">No source selected</div>
         )}
       </section>
+    </div>
+  );
+}
+
+function TransitionConfigEditor(props: {
+  onChange: (configPatch: Record<string, unknown>) => void;
+  transition: SceneTransition;
+}) {
+  const config = props.transition.config ?? {};
+
+  if (props.transition.kind === "cut") {
+    return (
+      <div className="transition-config-editor">
+        <KeyValue label="Config" value="Instant scene switch" />
+      </div>
+    );
+  }
+
+  if (props.transition.kind === "fade") {
+    return (
+      <div className="transition-config-editor">
+        <TextInput
+          label="Fade Color"
+          onChange={(color) => props.onChange({ color })}
+          value={String(config.color ?? "#000000")}
+        />
+      </div>
+    );
+  }
+
+  if (props.transition.kind === "swipe") {
+    return (
+      <div className="transition-config-editor">
+        <div className="form-grid">
+          <label>
+            Direction
+            <select
+              onChange={(event) =>
+                props.onChange({ direction: event.target.value })
+              }
+              value={String(config.direction ?? "left")}
+            >
+              <option value="left">Left</option>
+              <option value="right">Right</option>
+              <option value="up">Up</option>
+              <option value="down">Down</option>
+            </select>
+          </label>
+          <SceneNumberInput
+            label="Softness"
+            max={1}
+            min={0}
+            onChange={(edge_softness) => props.onChange({ edge_softness })}
+            step={0.05}
+            value={Number(config.edge_softness ?? 0.12)}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="transition-config-editor">
+      <TextInput
+        label="Stinger Asset URI"
+        onChange={(asset_uri) => props.onChange({ asset_uri })}
+        value={String(config.asset_uri ?? "")}
+      />
+      <div className="form-grid">
+        <SceneNumberInput
+          label="Trigger ms"
+          min={0}
+          onChange={(trigger_time_ms) =>
+            props.onChange({ trigger_time_ms: Math.round(trigger_time_ms) })
+          }
+          step={50}
+          value={Number(config.trigger_time_ms ?? 500)}
+        />
+        <label>
+          Audio
+          <select
+            onChange={(event) =>
+              props.onChange({ audio_behavior: event.target.value })
+            }
+            value={String(config.audio_behavior ?? "mix")}
+          >
+            <option value="mix">Mix</option>
+            <option value="duck">Duck</option>
+            <option value="mute">Mute</option>
+          </select>
+        </label>
+      </div>
     </div>
   );
 }
@@ -6305,6 +6508,39 @@ function mergeSceneSourcePatch(
   } as SceneSource;
 }
 
+function mergeSceneTransitionPatch(
+  transition: SceneTransition,
+  patch: SceneTransitionPatch,
+): SceneTransition {
+  const nextKind = patch.kind ?? transition.kind;
+  const kindChanged = nextKind !== transition.kind;
+  const config = kindChanged
+    ? {
+        ...defaultSceneTransitionConfig(nextKind),
+        ...(patch.config ?? {}),
+      }
+    : patch.config
+      ? { ...transition.config, ...patch.config }
+      : transition.config;
+
+  return {
+    ...transition,
+    ...patch,
+    config,
+    duration_ms:
+      nextKind === "cut"
+        ? 0
+        : (patch.duration_ms ??
+          (kindChanged
+            ? defaultSceneTransitionDuration(nextKind)
+            : transition.duration_ms)),
+    easing:
+      patch.easing ??
+      (kindChanged ? defaultSceneTransitionEasing(nextKind) : transition.easing),
+    kind: nextKind,
+  };
+}
+
 function isLockedSourcePatchAllowed(patch: SceneSourcePatch): boolean {
   return Object.keys(patch).every((key) => key === "locked" || key === "visible");
 }
@@ -6397,6 +6633,55 @@ function defaultDesignerSourceSize(kind: SceneSourceKind): SceneSize {
       return { width: 640, height: 110 };
     case "group":
       return { width: 720, height: 420 };
+  }
+}
+
+function createDesignerTransition(kind: SceneTransition["kind"]): SceneTransition {
+  return {
+    id: designerId(`transition-${kind}`),
+    name: sceneTransitionKindLabels[kind],
+    kind,
+    duration_ms: defaultSceneTransitionDuration(kind),
+    easing: defaultSceneTransitionEasing(kind),
+    config: defaultSceneTransitionConfig(kind),
+  };
+}
+
+function defaultSceneTransitionDuration(kind: SceneTransition["kind"]): number {
+  switch (kind) {
+    case "cut":
+      return 0;
+    case "fade":
+      return 300;
+    case "swipe":
+      return 450;
+    case "stinger":
+      return 1200;
+  }
+}
+
+function defaultSceneTransitionEasing(
+  kind: SceneTransition["kind"],
+): SceneTransition["easing"] {
+  return kind === "cut" ? "linear" : "ease_in_out";
+}
+
+function defaultSceneTransitionConfig(
+  kind: SceneTransition["kind"],
+): Record<string, unknown> {
+  switch (kind) {
+    case "cut":
+      return {};
+    case "fade":
+      return { color: "#000000" };
+    case "swipe":
+      return { direction: "left", edge_softness: 0.12 };
+    case "stinger":
+      return {
+        asset_uri: "",
+        audio_behavior: "mix",
+        trigger_time_ms: 500,
+      };
   }
 }
 
