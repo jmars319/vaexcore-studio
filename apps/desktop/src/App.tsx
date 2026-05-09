@@ -53,6 +53,7 @@ import {
 } from "lucide-react";
 import {
   CSSProperties,
+  DragEvent as ReactDragEvent,
   FormEvent,
   PointerEvent as ReactPointerEvent,
   ReactNode,
@@ -201,19 +202,31 @@ const sceneSourceBoundsModeLabels: Record<SceneSourceBoundsMode, string> = {
 };
 
 type DesignerDragState = {
-  mode: "move" | "resize";
+  mode: "move" | "resize" | "rotate";
   pointerId: number;
   sourceId: string;
   startClientX: number;
   startClientY: number;
   startPosition: ScenePoint;
   startSize: SceneSize;
+  startRotation: number;
+  centerClientX?: number;
+  centerClientY?: number;
+  startAngleDegrees?: number;
 };
 
 type DesignerSnapGuide = {
   axis: "x" | "y";
   position: number;
 };
+
+type DesignerMarqueeState = {
+  pointerId: number;
+  start: ScenePoint;
+  current: ScenePoint;
+};
+
+type SceneRect = ScenePoint & SceneSize;
 
 type SceneHistory = {
   past: SceneCollection[];
@@ -367,6 +380,9 @@ function App() {
   const [selectedSceneSourceId, setSelectedSceneSourceId] = useState(
     "source-main-display",
   );
+  const [selectedSceneSourceIds, setSelectedSceneSourceIds] = useState<string[]>([
+    "source-main-display",
+  ]);
   const [sceneSaveStatus, setSceneSaveStatus] = useState<string | null>(null);
   const [sceneDirty, setSceneDirty] = useState(false);
   const [sceneHistory, setSceneHistory] = useState<SceneHistory>({
@@ -523,7 +539,9 @@ function App() {
           collection.scenes.find(
             (item) => item.id === collection.active_scene_id,
           ) ?? collection.scenes[0];
-        setSelectedSceneSourceId(scene?.sources[0]?.id ?? "");
+        const sourceId = scene?.sources[0]?.id ?? "";
+        setSelectedSceneSourceId(sourceId);
+        setSelectedSceneSourceIds(sourceId ? [sourceId] : []);
         setSceneDirty(false);
         setSceneSaveStatus(null);
         setSceneHistory({ past: [], future: [] });
@@ -607,6 +625,11 @@ function App() {
     ) ??
     activeDesignerScene?.sources[0] ??
     null;
+  const selectedDesignerSources = activeDesignerScene
+    ? activeDesignerScene.sources.filter((source) =>
+        selectedSceneSourceIds.includes(source.id),
+      )
+    : [];
 
   async function refreshProfiles() {
     if (!config) return;
@@ -1045,7 +1068,7 @@ function App() {
           collection.scenes.find(
             (item) => item.id === collection.active_scene_id,
           ) ?? collection.scenes[0];
-        setSelectedSceneSourceId(scene?.sources[0]?.id ?? "");
+        selectDesignerSources([scene?.sources[0]?.id ?? ""]);
         StudioApi.mediaPlan(config).then(setPipelinePlan).catch(() => undefined);
       }
       setSceneDirty(false);
@@ -1071,7 +1094,33 @@ function App() {
       ...current,
       active_scene_id: sceneId,
     }));
-    setSelectedSceneSourceId(scene.sources[0]?.id ?? "");
+    selectDesignerSources([scene.sources[0]?.id ?? ""]);
+  }
+
+  function handleSelectDesignerSource(sourceId: string, additive = false) {
+    if (!additive) {
+      selectDesignerSources([sourceId]);
+      return;
+    }
+
+    setSelectedSceneSourceIds((current) => {
+      const selected = current.includes(sourceId);
+      const next = selected
+        ? current.filter((id) => id !== sourceId)
+        : [...current, sourceId];
+      const normalized = next.length > 0 ? next : [sourceId];
+      const fallback = normalized.includes(selectedSceneSourceId)
+        ? selectedSceneSourceId
+        : normalized[0];
+      setSelectedSceneSourceId(selected ? fallback : sourceId);
+      return normalized;
+    });
+  }
+
+  function selectDesignerSources(sourceIds: string[]) {
+    const next = uniqueSourceIds(sourceIds).filter(Boolean);
+    setSelectedSceneSourceIds(next);
+    setSelectedSceneSourceId(next[0] ?? "");
   }
 
   function updateDesignerCollection(
@@ -1114,11 +1163,13 @@ function App() {
       });
       return previous;
     });
-    setSelectedSceneSourceId((current) =>
-      sceneCollectionContainsSource(previous, current)
+    setSelectedSceneSourceId((current) => {
+      const next = sceneCollectionContainsSource(previous, current)
         ? current
-        : firstSceneSourceId(previous),
-    );
+        : firstSceneSourceId(previous);
+      setSelectedSceneSourceIds(next ? [next] : []);
+      return next;
+    });
     setSceneDirty(true);
     setSceneSaveStatus("Unsaved scene changes");
   }
@@ -1134,9 +1185,13 @@ function App() {
       });
       return next;
     });
-    setSelectedSceneSourceId((current) =>
-      sceneCollectionContainsSource(next, current) ? current : firstSceneSourceId(next),
-    );
+    setSelectedSceneSourceId((current) => {
+      const sourceId = sceneCollectionContainsSource(next, current)
+        ? current
+        : firstSceneSourceId(next);
+      setSelectedSceneSourceIds(sourceId ? [sourceId] : []);
+      return sourceId;
+    });
     setSceneDirty(true);
     setSceneSaveStatus("Unsaved scene changes");
   }
@@ -1156,7 +1211,9 @@ function App() {
                 ...scene,
                 sources: scene.sources.map((source) =>
                   source.id === sourceId
-                    ? mergeSceneSourcePatch(source, patch)
+                    ? source.locked && !isLockedSourcePatchAllowed(patch)
+                      ? source
+                      : mergeSceneSourcePatch(source, patch)
                     : source,
                 ),
               }
@@ -1187,6 +1244,7 @@ function App() {
 
         const source = ordered[index];
         const swap = ordered[swapIndex];
+        if (source.locked) return scene;
         return {
           ...scene,
           sources: scene.sources.map((item) => {
@@ -1194,6 +1252,44 @@ function App() {
             if (item.id === swap.id) return { ...item, z_index: source.z_index };
             return item;
           }),
+        };
+      }),
+    }));
+  }
+
+  function handleDropReorderDesignerSource(
+    sceneId: string,
+    sourceId: string,
+    targetSourceId: string,
+  ) {
+    if (sourceId === targetSourceId) return;
+    updateDesignerCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) => {
+        if (scene.id !== sceneId) return scene;
+        const dragged = scene.sources.find((source) => source.id === sourceId);
+        if (!dragged || dragged.locked) return scene;
+        const ordered = sortedSceneSources(scene).filter(
+          (source) => source.id !== sourceId,
+        );
+        const targetIndex = ordered.findIndex(
+          (source) => source.id === targetSourceId,
+        );
+        if (targetIndex < 0) return scene;
+        ordered.splice(targetIndex, 0, dragged);
+        const zIndexById = new Map(
+          ordered.map((source, index) => [
+            source.id,
+            (ordered.length - index) * 10,
+          ]),
+        );
+
+        return {
+          ...scene,
+          sources: scene.sources.map((source) => ({
+            ...source,
+            z_index: zIndexById.get(source.id) ?? source.z_index,
+          })),
         };
       }),
     }));
@@ -1223,7 +1319,7 @@ function App() {
       ],
       updated_at: now,
     }));
-    setSelectedSceneSourceId(source.id);
+    selectDesignerSources([source.id]);
   }
 
   function handleDuplicateDesignerScene(sceneId: string) {
@@ -1243,7 +1339,7 @@ function App() {
       active_scene_id: nextScene.id,
       scenes: [...current.scenes, nextScene],
     }));
-    setSelectedSceneSourceId(nextScene.sources[0]?.id ?? "");
+    selectDesignerSources([nextScene.sources[0]?.id ?? ""]);
   }
 
   function handleDeleteDesignerScene(sceneId: string) {
@@ -1259,7 +1355,7 @@ function App() {
       };
     });
     const nextScene = sceneCollection.scenes.find((scene) => scene.id !== sceneId);
-    setSelectedSceneSourceId(nextScene?.sources[0]?.id ?? "");
+    selectDesignerSources([nextScene?.sources[0]?.id ?? ""]);
   }
 
   function handleRenameDesignerScene(sceneId: string, name: string) {
@@ -1318,7 +1414,7 @@ function App() {
           : scene,
       ),
     }));
-    setSelectedSceneSourceId(source.id);
+    selectDesignerSources([source.id]);
   }
 
   function handleDuplicateDesignerSource(sceneId: string, sourceId: string) {
@@ -1334,7 +1430,7 @@ function App() {
           : scene,
       ),
     }));
-    setSelectedSceneSourceId(duplicate.id);
+    selectDesignerSources([duplicate.id]);
   }
 
   function handleCopyDesignerSource(sceneId: string, sourceId: string) {
@@ -1362,25 +1458,222 @@ function App() {
           : scene,
       ),
     }));
-    setSelectedSceneSourceId(pasted.id);
+    selectDesignerSources([pasted.id]);
   }
 
   function handleDeleteDesignerSource(sceneId: string, sourceId: string) {
+    handleDeleteDesignerSources(sceneId, [sourceId]);
+  }
+
+  function handleDeleteDesignerSources(sceneId: string, sourceIds: string[]) {
+    const sourceIdSet = new Set(sourceIds);
     updateDesignerCollection((current) => ({
       ...current,
       scenes: current.scenes.map((scene) =>
         scene.id === sceneId
           ? {
               ...scene,
-              sources: scene.sources.filter((source) => source.id !== sourceId),
+              sources: scene.sources
+                .filter((source) => !sourceIdSet.has(source.id) || source.locked)
+                .map((source) => removeGroupChildRefs(source, sourceIdSet)),
             }
           : scene,
       ),
     }));
     const nextSource = activeDesignerScene.sources.find(
-      (source) => source.id !== sourceId,
+      (source) => !sourceIdSet.has(source.id) || source.locked,
     );
-    setSelectedSceneSourceId(nextSource?.id ?? "");
+    selectDesignerSources([nextSource?.id ?? ""]);
+  }
+
+  function handleGroupDesignerSources(sceneId: string, sourceIds: string[]) {
+    const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
+    if (!scene) return;
+    const selectedIds = new Set(sourceIds);
+    const children = scene.sources.filter(
+      (source) =>
+        selectedIds.has(source.id) &&
+        !source.locked &&
+        source.kind !== "group",
+    );
+    if (children.length < 2) return;
+    const bounds = sceneSourceBounds(children);
+    const group = createDefaultSceneSource("group", {
+      id: designerId("source-group"),
+      name: `Group ${scene.sources.filter((source) => source.kind === "group").length + 1}`,
+      position: { x: bounds.x, y: bounds.y },
+      size: { width: bounds.width, height: bounds.height },
+      z_index: nextSceneZIndex(scene),
+      config: { child_source_ids: children.map((source) => source.id) },
+    });
+
+    updateDesignerCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((item) =>
+        item.id === sceneId
+          ? {
+              ...item,
+              sources: [
+                ...item.sources.map((source) =>
+                  selectedIds.has(source.id) &&
+                  !source.locked &&
+                  source.kind !== "group"
+                    ? {
+                        ...source,
+                        position: {
+                          x: source.position.x - bounds.x,
+                          y: source.position.y - bounds.y,
+                        },
+                      }
+                    : source,
+                ),
+                group,
+              ],
+            }
+          : item,
+      ),
+    }));
+    selectDesignerSources([group.id]);
+  }
+
+  function handleUngroupDesignerSources(sceneId: string, sourceIds: string[]) {
+    const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
+    if (!scene) return;
+    const selectedIds = new Set(sourceIds);
+    const groups = scene.sources.filter(
+      (source): source is Extract<SceneSource, { kind: "group" }> =>
+        selectedIds.has(source.id) && source.kind === "group" && !source.locked,
+    );
+    if (groups.length === 0) return;
+    const groupByChildId = new Map<string, SceneSource>();
+    groups.forEach((group) => {
+      group.config.child_source_ids.forEach((childId) => {
+        groupByChildId.set(childId, group);
+      });
+    });
+    const groupIds = new Set(groups.map((group) => group.id));
+    const childIds = uniqueSourceIds(
+      groups.flatMap((group) => group.config.child_source_ids),
+    );
+
+    updateDesignerCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((item) =>
+        item.id === sceneId
+          ? {
+              ...item,
+              sources: item.sources
+                .filter((source) => !groupIds.has(source.id))
+                .map((source) => {
+                  const group = groupByChildId.get(source.id);
+                  const ungrouped =
+                    group && !groupIds.has(source.id)
+                      ? {
+                          ...source,
+                          position: {
+                            x: source.position.x + group.position.x,
+                            y: source.position.y + group.position.y,
+                          },
+                        }
+                      : source;
+                  return removeGroupChildRefs(ungrouped, groupIds);
+                }),
+            }
+          : item,
+      ),
+    }));
+    selectDesignerSources(childIds);
+  }
+
+  function handleAlignDesignerSelection(
+    sceneId: string,
+    sourceIds: string[],
+    alignment: SourceCanvasAlignment,
+  ) {
+    const selectedIds = new Set(sourceIds);
+    updateDesignerCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) => {
+        if (scene.id !== sceneId) return scene;
+        const targets = scene.sources.filter(
+          (source) => selectedIds.has(source.id) && !source.locked,
+        );
+        if (targets.length < 2) return scene;
+        const bounds = sceneSourceBounds(targets);
+        return {
+          ...scene,
+          sources: scene.sources.map((source) =>
+            selectedIds.has(source.id) && !source.locked
+              ? mergeSceneSourcePatch(
+                  source,
+                  alignSourceToSelectionBounds(bounds, source, alignment),
+                )
+              : source,
+          ),
+        };
+      }),
+    }));
+  }
+
+  function handleDistributeDesignerSelection(
+    sceneId: string,
+    sourceIds: string[],
+    axis: "horizontal" | "vertical",
+  ) {
+    const selectedIds = new Set(sourceIds);
+    updateDesignerCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) => {
+        if (scene.id !== sceneId) return scene;
+        const targets = scene.sources.filter(
+          (source) => selectedIds.has(source.id) && !source.locked,
+        );
+        if (targets.length < 3) return scene;
+        const positions = distributeSourcePositions(targets, axis);
+        return {
+          ...scene,
+          sources: scene.sources.map((source) =>
+            positions.has(source.id)
+              ? {
+                  ...source,
+                  position: {
+                    ...source.position,
+                    ...positions.get(source.id),
+                  },
+                }
+              : source,
+          ),
+        };
+      }),
+    }));
+  }
+
+  function handleRotateDesignerSelection(
+    sceneId: string,
+    sourceIds: string[],
+    deltaDegrees: number,
+  ) {
+    const selectedIds = new Set(sourceIds);
+    updateDesignerCollection((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) =>
+        scene.id === sceneId
+          ? {
+              ...scene,
+              sources: scene.sources.map((source) =>
+                selectedIds.has(source.id) && !source.locked
+                  ? {
+                      ...source,
+                      rotation_degrees: Math.round(
+                        source.rotation_degrees + deltaDegrees,
+                      ),
+                    }
+                  : source,
+              ),
+            }
+          : scene,
+      ),
+    }));
   }
 
   async function handleSaveDesignerScenes() {
@@ -1391,11 +1684,13 @@ function App() {
       const scene =
         saved.scenes.find((item) => item.id === saved.active_scene_id) ??
         saved.scenes[0];
-      setSelectedSceneSourceId((current) =>
-        scene.sources.some((source) => source.id === current)
+      setSelectedSceneSourceId((current) => {
+        const sourceId = scene.sources.some((source) => source.id === current)
           ? current
-          : (scene.sources[0]?.id ?? ""),
-      );
+          : (scene.sources[0]?.id ?? "");
+        setSelectedSceneSourceIds(sourceId ? [sourceId] : []);
+        return sourceId;
+      });
       setSceneDirty(false);
       setSceneSaveStatus("Scene collection saved");
       setError(null);
@@ -1434,13 +1729,18 @@ function App() {
             onCreateSource={handleCreateDesignerSource}
             onDeleteScene={handleDeleteDesignerScene}
             onDeleteSource={handleDeleteDesignerSource}
+            onDeleteSources={handleDeleteDesignerSources}
+            onDropReorderSource={handleDropReorderDesignerSource}
             onDuplicateScene={handleDuplicateDesignerScene}
             onDuplicateSource={handleDuplicateDesignerSource}
             onExportCollection={handleExportSceneCollectionBundle}
             onFinishContinuousEdit={handleFinishDesignerContinuousEdit}
+            onGroupSources={handleGroupDesignerSources}
             onImportCollection={handleImportSceneCollectionBundle}
             onPasteSource={handlePasteDesignerSource}
             onRenameScene={handleRenameDesignerScene}
+            onAlignSelection={handleAlignDesignerSelection}
+            onDistributeSelection={handleDistributeDesignerSelection}
             canRedo={sceneHistory.future.length > 0}
             canUndo={sceneHistory.past.length > 0}
             scene={activeDesignerScene}
@@ -1448,13 +1748,18 @@ function App() {
             saveStatus={sceneSaveStatus}
             selectedSource={selectedDesignerSource}
             selectedSourceId={selectedSceneSourceId}
+            selectedSourceIds={selectedSceneSourceIds}
+            selectedSources={selectedDesignerSources}
             onReorderSource={handleReorderDesignerSource}
             onRedo={handleRedoDesignerChange}
+            onRotateSelection={handleRotateDesignerSelection}
             onSave={handleSaveDesignerScenes}
             onSelectScene={handleSelectDesignerScene}
-            onSelectSource={setSelectedSceneSourceId}
+            onSelectSource={handleSelectDesignerSource}
+            onSelectSources={selectDesignerSources}
             onSelectTransition={handleSelectDesignerTransition}
             onUndo={handleUndoDesignerChange}
+            onUngroupSources={handleUngroupDesignerSources}
             onUpdateSource={handleUpdateDesignerSource}
             onUpdateTransition={handleUpdateDesignerTransition}
           />
@@ -1755,29 +2060,55 @@ function DesignerPage(props: {
   onCreateSource: (sceneId: string, kind: SceneSourceKind) => void;
   onDeleteScene: (sceneId: string) => void;
   onDeleteSource: (sceneId: string, sourceId: string) => void;
+  onDeleteSources: (sceneId: string, sourceIds: string[]) => void;
+  onDropReorderSource: (
+    sceneId: string,
+    sourceId: string,
+    targetSourceId: string,
+  ) => void;
   onDuplicateScene: (sceneId: string) => void;
   onDuplicateSource: (sceneId: string, sourceId: string) => void;
   onExportCollection: () => void;
   onFinishContinuousEdit: () => void;
+  onGroupSources: (sceneId: string, sourceIds: string[]) => void;
   onImportCollection: () => void;
   onPasteSource: (sceneId: string) => void;
   onRenameScene: (sceneId: string, name: string) => void;
+  onAlignSelection: (
+    sceneId: string,
+    sourceIds: string[],
+    alignment: SourceCanvasAlignment,
+  ) => void;
+  onDistributeSelection: (
+    sceneId: string,
+    sourceIds: string[],
+    axis: "horizontal" | "vertical",
+  ) => void;
   graph: CompositorGraph;
   scene: Scene;
   saveStatus: string | null;
   selectedSource: SceneSource | null;
   selectedSourceId: string;
+  selectedSourceIds: string[];
+  selectedSources: SceneSource[];
   onReorderSource: (
     sceneId: string,
     sourceId: string,
     direction: "up" | "down",
   ) => void;
   onRedo: () => void;
+  onRotateSelection: (
+    sceneId: string,
+    sourceIds: string[],
+    deltaDegrees: number,
+  ) => void;
   onSelectScene: (sceneId: string) => void;
-  onSelectSource: (sourceId: string) => void;
+  onSelectSource: (sourceId: string, additive?: boolean) => void;
+  onSelectSources: (sourceIds: string[]) => void;
   onSave: () => void;
   onUndo: () => void;
   onSelectTransition: (transitionId: string) => void;
+  onUngroupSources: (sceneId: string, sourceIds: string[]) => void;
   onUpdateSource: (
     sceneId: string,
     sourceId: string,
@@ -1805,8 +2136,21 @@ function DesignerPage(props: {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const renderCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [dragState, setDragState] = useState<DesignerDragState | null>(null);
+  const [marqueeState, setMarqueeState] = useState<DesignerMarqueeState | null>(
+    null,
+  );
   const [snapGuides, setSnapGuides] = useState<DesignerSnapGuide[]>([]);
   const [newSourceKind, setNewSourceKind] = useState<SceneSourceKind>("display");
+  const selectedSourceIds = props.selectedSourceIds.filter((sourceId) =>
+    props.scene.sources.some((source) => source.id === sourceId),
+  );
+  const hasGroupSelection = props.selectedSources.some(
+    (source) => source.kind === "group",
+  );
+  const canGroupSelection =
+    props.selectedSources.filter(
+      (source) => !source.locked && source.kind !== "group",
+    ).length >= 2;
 
   useEffect(() => {
     function handleDesignerKeyDown(event: KeyboardEvent) {
@@ -1856,12 +2200,23 @@ function DesignerPage(props: {
         return;
       }
 
+      if (selectedSourceIds.length > 0 && (event.key === "[" || event.key === "]")) {
+        event.preventDefault();
+        const step = event.shiftKey ? 15 : 1;
+        props.onRotateSelection(
+          props.scene.id,
+          selectedSourceIds,
+          event.key === "]" ? step : -step,
+        );
+        return;
+      }
+
       if (
-        props.selectedSource &&
+        selectedSourceIds.length > 0 &&
         (event.key === "Delete" || event.key === "Backspace")
       ) {
         event.preventDefault();
-        props.onDeleteSource(props.scene.id, props.selectedSource.id);
+        props.onDeleteSources(props.scene.id, selectedSourceIds);
       }
     }
 
@@ -1875,6 +2230,7 @@ function DesignerPage(props: {
     props.dirty,
     props.scene.id,
     props.selectedSource,
+    selectedSourceIds,
     validation.ok,
   ]);
 
@@ -1889,12 +2245,31 @@ function DesignerPage(props: {
   function beginSourceDrag(
     event: ReactPointerEvent,
     source: SceneSource,
-    mode: "move" | "resize",
+    mode: "move" | "resize" | "rotate",
   ) {
     if (source.locked || event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
-    props.onSelectSource(source.id);
+    props.onSelectSource(
+      source.id,
+      event.shiftKey || event.metaKey || event.ctrlKey,
+    );
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const centerClientX = rect
+      ? rect.left +
+        ((source.position.x + source.size.width / 2) / props.scene.canvas.width) *
+          rect.width
+      : undefined;
+    const centerClientY = rect
+      ? rect.top +
+        ((source.position.y + source.size.height / 2) /
+          props.scene.canvas.height) *
+          rect.height
+      : undefined;
+    const startAngleDegrees =
+      centerClientX !== undefined && centerClientY !== undefined
+        ? pointerAngleDegrees(event.clientX, event.clientY, centerClientX, centerClientY)
+        : undefined;
     canvasRef.current?.setPointerCapture(event.pointerId);
     setSnapGuides([]);
     setDragState({
@@ -1905,6 +2280,10 @@ function DesignerPage(props: {
       startClientY: event.clientY,
       startPosition: { ...source.position },
       startSize: { ...source.size },
+      startRotation: source.rotation_degrees,
+      centerClientX,
+      centerClientY,
+      startAngleDegrees,
     });
   }
 
@@ -1919,6 +2298,33 @@ function DesignerPage(props: {
       ((event.clientY - dragState.startClientY) / rect.height) *
       props.scene.canvas.height;
     const options = { historyGroup: `drag:${dragState.sourceId}` };
+
+    if (dragState.mode === "rotate") {
+      if (
+        dragState.centerClientX === undefined ||
+        dragState.centerClientY === undefined ||
+        dragState.startAngleDegrees === undefined
+      ) {
+        return;
+      }
+      const angle = pointerAngleDegrees(
+        event.clientX,
+        event.clientY,
+        dragState.centerClientX,
+        dragState.centerClientY,
+      );
+      props.onUpdateSource(
+        props.scene.id,
+        dragState.sourceId,
+        {
+          rotation_degrees: Math.round(
+            dragState.startRotation + angle - dragState.startAngleDegrees,
+          ),
+        },
+        options,
+      );
+      return;
+    }
 
     if (dragState.mode === "move") {
       const snapped = snapSourcePosition(
@@ -1971,6 +2377,46 @@ function DesignerPage(props: {
   function updateSelectedSource(patch: SceneSourcePatch) {
     if (!props.selectedSource) return;
     props.onUpdateSource(props.scene.id, props.selectedSource.id, patch);
+  }
+
+  function beginMarquee(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      target.closest(".designer-source-box")
+    ) {
+      return;
+    }
+    const point = canvasPointFromPointerEvent(event, props.scene, canvasRef.current);
+    if (!point) return;
+    event.preventDefault();
+    canvasRef.current?.setPointerCapture(event.pointerId);
+    setMarqueeState({ pointerId: event.pointerId, start: point, current: point });
+  }
+
+  function updateMarquee(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!marqueeState || marqueeState.pointerId !== event.pointerId) return;
+    const point = canvasPointFromPointerEvent(event, props.scene, canvasRef.current);
+    if (!point) return;
+    setMarqueeState({ ...marqueeState, current: point });
+  }
+
+  function endMarquee(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!marqueeState || marqueeState.pointerId !== event.pointerId) return;
+    const selectionBounds = sceneRectFromPoints(
+      marqueeState.start,
+      marqueeState.current,
+    );
+    const isClick =
+      selectionBounds.width < 4 && selectionBounds.height < 4;
+    const selectedIds = isClick
+      ? []
+      : sortedSceneSources(props.scene, "asc")
+          .filter((source) => sourceIntersectsRect(source, selectionBounds))
+          .map((source) => source.id);
+    props.onSelectSources(selectedIds);
+    setMarqueeState(null);
   }
 
   return (
@@ -2197,15 +2643,36 @@ function DesignerPage(props: {
             {sourceStack.map((source, index) => (
               <div
                 className={
-                  source.id === props.selectedSourceId
+                  selectedSourceIds.includes(source.id)
                     ? "designer-list-item source-stack-item selected"
                     : "designer-list-item source-stack-item"
                 }
+                draggable={!source.locked}
+                onDragOver={(event) => event.preventDefault()}
+                onDragStart={(event: ReactDragEvent<HTMLDivElement>) => {
+                  event.dataTransfer.setData("text/plain", source.id);
+                  event.dataTransfer.effectAllowed = "move";
+                }}
+                onDrop={(event: ReactDragEvent<HTMLDivElement>) => {
+                  const draggedSourceId = event.dataTransfer.getData("text/plain");
+                  if (draggedSourceId) {
+                    props.onDropReorderSource(
+                      props.scene.id,
+                      draggedSourceId,
+                      source.id,
+                    );
+                  }
+                }}
                 key={source.id}
               >
                 <button
                   className="source-stack-select-button"
-                  onClick={() => props.onSelectSource(source.id)}
+                  onClick={(event) =>
+                    props.onSelectSource(
+                      source.id,
+                      event.shiftKey || event.metaKey || event.ctrlKey,
+                    )
+                  }
                   type="button"
                 >
                   <div className="source-stack-main">
@@ -2217,6 +2684,20 @@ function DesignerPage(props: {
                       </span>
                     </div>
                   </div>
+                  {source.kind === "group" && (
+                    <div className="source-stack-children">
+                      {source.config.child_source_ids.length > 0
+                        ? source.config.child_source_ids
+                            .map(
+                              (childId) =>
+                                props.scene.sources.find(
+                                  (candidate) => candidate.id === childId,
+                                )?.name ?? childId,
+                            )
+                            .join(", ")
+                        : "Empty group"}
+                    </div>
+                  )}
                 </button>
                 <div className="source-stack-actions">
                   <button
@@ -2248,7 +2729,7 @@ function DesignerPage(props: {
                   <button
                     aria-label={`Move ${source.name} forward`}
                     className="icon-button compact"
-                    disabled={index === 0}
+                    disabled={source.locked || index === 0}
                     onClick={() => {
                       props.onReorderSource(props.scene.id, source.id, "up");
                     }}
@@ -2260,7 +2741,7 @@ function DesignerPage(props: {
                   <button
                     aria-label={`Move ${source.name} backward`}
                     className="icon-button compact"
-                    disabled={index === sourceStack.length - 1}
+                    disabled={source.locked || index === sourceStack.length - 1}
                     onClick={() => {
                       props.onReorderSource(props.scene.id, source.id, "down");
                     }}
@@ -2292,6 +2773,7 @@ function DesignerPage(props: {
                   <button
                     aria-label={`Delete ${source.name}`}
                     className="icon-button compact danger"
+                    disabled={source.locked}
                     onClick={() => props.onDeleteSource(props.scene.id, source.id)}
                     title={`Delete ${source.name}`}
                     type="button"
@@ -2376,9 +2858,19 @@ function DesignerPage(props: {
         <div className="designer-preview-shell">
           <div
             className="designer-preview-canvas"
-            onPointerMove={updateDrag}
-            onPointerUp={endDrag}
-            onPointerCancel={endDrag}
+            onPointerDown={beginMarquee}
+            onPointerMove={(event) => {
+              updateDrag(event);
+              updateMarquee(event);
+            }}
+            onPointerUp={(event) => {
+              endDrag(event);
+              endMarquee(event);
+            }}
+            onPointerCancel={(event) => {
+              endDrag(event);
+              setMarqueeState(null);
+            }}
             ref={canvasRef}
             style={{
               aspectRatio: `${props.scene.canvas.width} / ${props.scene.canvas.height}`,
@@ -2400,19 +2892,31 @@ function DesignerPage(props: {
                 style={snapGuideStyle(guide, props.scene)}
               />
             ))}
+            {marqueeState && (
+              <div
+                aria-hidden="true"
+                className="designer-marquee"
+                style={marqueeStyle(marqueeState, props.scene)}
+              />
+            )}
             {sortedSceneSources(props.scene, "asc").map((source) => (
               <div
                 className={[
                   "designer-source-box",
                   `source-${source.kind}`,
-                  source.id === props.selectedSourceId ? "selected" : "",
+                  selectedSourceIds.includes(source.id) ? "selected" : "",
                   source.visible ? "" : "hidden-source",
                   source.locked ? "locked-source" : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
                 key={source.id}
-                onClick={() => props.onSelectSource(source.id)}
+                onClick={(event) =>
+                  props.onSelectSource(
+                    source.id,
+                    event.shiftKey || event.metaKey || event.ctrlKey,
+                  )
+                }
                 onKeyDown={(event) => {
                   if (source.locked) return;
                   const nudge = event.shiftKey ? 10 : 1;
@@ -2432,6 +2936,14 @@ function DesignerPage(props: {
                     props.onUpdateSource(props.scene.id, source.id, {
                       position: { y: source.position.y + nudge },
                     });
+                  } else if (event.key === "[" || event.key === "]") {
+                    props.onRotateSelection(
+                      props.scene.id,
+                      selectedSourceIds.includes(source.id)
+                        ? selectedSourceIds
+                        : [source.id],
+                      event.key === "]" ? (event.shiftKey ? 15 : 1) : event.shiftKey ? -15 : -1,
+                    );
                   } else {
                     return;
                   }
@@ -2451,16 +2963,30 @@ function DesignerPage(props: {
                   <small>{sceneSourceAvailability(source)?.detail}</small>
                 )}
                 {!source.locked && (
-                  <button
-                    aria-label={`Resize ${source.name}`}
-                    className="designer-resize-handle"
-                    onClick={(event) => event.stopPropagation()}
-                    onPointerDown={(event) =>
-                      beginSourceDrag(event, source, "resize")
-                    }
-                    title={`Resize ${source.name}`}
-                    type="button"
-                  />
+                  <>
+                    <button
+                      aria-label={`Rotate ${source.name}`}
+                      className="designer-rotate-handle"
+                      onClick={(event) => event.stopPropagation()}
+                      onPointerDown={(event) =>
+                        beginSourceDrag(event, source, "rotate")
+                      }
+                      title={`Rotate ${source.name}`}
+                      type="button"
+                    >
+                      <RotateCcw size={11} />
+                    </button>
+                    <button
+                      aria-label={`Resize ${source.name}`}
+                      className="designer-resize-handle"
+                      onClick={(event) => event.stopPropagation()}
+                      onPointerDown={(event) =>
+                        beginSourceDrag(event, source, "resize")
+                      }
+                      title={`Resize ${source.name}`}
+                      type="button"
+                    />
+                  </>
                 )}
               </div>
             ))}
@@ -2499,6 +3025,158 @@ function DesignerPage(props: {
               onChange={(name) => props.onRenameScene(props.scene.id, name)}
               value={props.scene.name}
             />
+            {selectedSourceIds.length > 1 && (
+              <div className="designer-selection-tools">
+                <div className="designer-selection-tools-header">
+                  <strong>{selectedSourceIds.length} selected</strong>
+                  <span>
+                    {props.selectedSources.filter((source) => source.locked).length} locked
+                  </span>
+                </div>
+                <div className="designer-transform-tools compact-tools">
+                  <button
+                    className="secondary-button compact"
+                    disabled={!canGroupSelection}
+                    onClick={() =>
+                      props.onGroupSources(props.scene.id, selectedSourceIds)
+                    }
+                    type="button"
+                  >
+                    <Group size={14} />
+                    Group
+                  </button>
+                  <button
+                    className="secondary-button compact"
+                    disabled={!hasGroupSelection}
+                    onClick={() =>
+                      props.onUngroupSources(props.scene.id, selectedSourceIds)
+                    }
+                    type="button"
+                  >
+                    <Layers size={14} />
+                    Ungroup
+                  </button>
+                  <button
+                    className="secondary-button compact danger"
+                    onClick={() =>
+                      props.onDeleteSources(props.scene.id, selectedSourceIds)
+                    }
+                    type="button"
+                  >
+                    <Trash2 size={14} />
+                    Delete
+                  </button>
+                </div>
+                <div className="designer-align-tools">
+                  <button
+                    aria-label="Align selected left"
+                    className="icon-button compact"
+                    onClick={() =>
+                      props.onAlignSelection(props.scene.id, selectedSourceIds, "left")
+                    }
+                    title="Align selected left"
+                    type="button"
+                  >
+                    <PanelLeft size={14} />
+                  </button>
+                  <button
+                    aria-label="Align selected horizontal center"
+                    className="icon-button compact"
+                    onClick={() =>
+                      props.onAlignSelection(
+                        props.scene.id,
+                        selectedSourceIds,
+                        "horizontal-center",
+                      )
+                    }
+                    title="Align selected horizontal center"
+                    type="button"
+                  >
+                    <AlignCenterHorizontal size={14} />
+                  </button>
+                  <button
+                    aria-label="Align selected right"
+                    className="icon-button compact"
+                    onClick={() =>
+                      props.onAlignSelection(props.scene.id, selectedSourceIds, "right")
+                    }
+                    title="Align selected right"
+                    type="button"
+                  >
+                    <PanelRight size={14} />
+                  </button>
+                  <button
+                    aria-label="Align selected top"
+                    className="icon-button compact"
+                    onClick={() =>
+                      props.onAlignSelection(props.scene.id, selectedSourceIds, "top")
+                    }
+                    title="Align selected top"
+                    type="button"
+                  >
+                    <PanelTop size={14} />
+                  </button>
+                  <button
+                    aria-label="Align selected vertical center"
+                    className="icon-button compact"
+                    onClick={() =>
+                      props.onAlignSelection(
+                        props.scene.id,
+                        selectedSourceIds,
+                        "vertical-center",
+                      )
+                    }
+                    title="Align selected vertical center"
+                    type="button"
+                  >
+                    <AlignCenterVertical size={14} />
+                  </button>
+                  <button
+                    aria-label="Align selected bottom"
+                    className="icon-button compact"
+                    onClick={() =>
+                      props.onAlignSelection(props.scene.id, selectedSourceIds, "bottom")
+                    }
+                    title="Align selected bottom"
+                    type="button"
+                  >
+                    <PanelBottom size={14} />
+                  </button>
+                </div>
+                <div className="designer-transform-tools compact-tools">
+                  <button
+                    className="secondary-button compact"
+                    disabled={selectedSourceIds.length < 3}
+                    onClick={() =>
+                      props.onDistributeSelection(
+                        props.scene.id,
+                        selectedSourceIds,
+                        "horizontal",
+                      )
+                    }
+                    type="button"
+                  >
+                    <AlignCenterHorizontal size={14} />
+                    Distribute H
+                  </button>
+                  <button
+                    className="secondary-button compact"
+                    disabled={selectedSourceIds.length < 3}
+                    onClick={() =>
+                      props.onDistributeSelection(
+                        props.scene.id,
+                        selectedSourceIds,
+                        "vertical",
+                      )
+                    }
+                    type="button"
+                  >
+                    <AlignCenterVertical size={14} />
+                    Distribute V
+                  </button>
+                </div>
+              </div>
+            )}
             <TextInput
               label="Name"
               onChange={(name) =>
@@ -4171,6 +4849,30 @@ function mergeSceneSourcePatch(
   } as SceneSource;
 }
 
+function isLockedSourcePatchAllowed(patch: SceneSourcePatch): boolean {
+  return Object.keys(patch).every((key) => key === "locked" || key === "visible");
+}
+
+function uniqueSourceIds(sourceIds: string[]): string[] {
+  return [...new Set(sourceIds.filter(Boolean))];
+}
+
+function removeGroupChildRefs(
+  source: SceneSource,
+  removedSourceIds: Set<string>,
+): SceneSource {
+  if (source.kind !== "group") return source;
+  return {
+    ...source,
+    config: {
+      ...source.config,
+      child_source_ids: source.config.child_source_ids.filter(
+        (childId) => !removedSourceIds.has(childId),
+      ),
+    },
+  };
+}
+
 function cloneSceneSource(source: SceneSource): SceneSource {
   return JSON.parse(JSON.stringify(source)) as SceneSource;
 }
@@ -4181,16 +4883,45 @@ function cloneDesignerSourceForInsert(
   suffix: string,
 ): SceneSource {
   const clone = cloneSceneSource(source);
+  const position = findAvailableDuplicatePosition(scene, source);
   return {
     ...clone,
     id: designerId("source"),
     name: `${source.name} ${suffix}`,
-    position: {
-      x: source.position.x + 32,
-      y: source.position.y + 32,
-    },
+    position,
+    config:
+      clone.kind === "group"
+        ? { ...clone.config, child_source_ids: [] }
+        : clone.config,
     z_index: nextSceneZIndex(scene),
   } as SceneSource;
+}
+
+function findAvailableDuplicatePosition(
+  scene: Scene,
+  source: SceneSource,
+): ScenePoint {
+  const baseOffset = 32;
+  for (let index = 1; index <= 12; index += 1) {
+    const position = {
+      x: source.position.x + baseOffset * index,
+      y: source.position.y + baseOffset * index,
+    };
+    const candidate = { ...source, position };
+    if (
+      !scene.sources.some(
+        (existing) =>
+          existing.id !== source.id && sourceIntersectsSource(candidate, existing),
+      )
+    ) {
+      return position;
+    }
+  }
+
+  return {
+    x: source.position.x + baseOffset,
+    y: source.position.y + baseOffset,
+  };
 }
 
 function defaultDesignerSourceSize(kind: SceneSourceKind): SceneSize {
@@ -4566,6 +5297,173 @@ function sceneSourcePreviewStyle(
     transform: `rotate(${source.rotation_degrees}deg)`,
     zIndex: source.z_index,
   };
+}
+
+function sceneSourceBounds(sources: SceneSource[]): SceneRect {
+  const left = Math.min(...sources.map((source) => source.position.x));
+  const top = Math.min(...sources.map((source) => source.position.y));
+  const right = Math.max(
+    ...sources.map((source) => source.position.x + source.size.width),
+  );
+  const bottom = Math.max(
+    ...sources.map((source) => source.position.y + source.size.height),
+  );
+  return {
+    x: Math.round(left),
+    y: Math.round(top),
+    width: Math.max(1, Math.round(right - left)),
+    height: Math.max(1, Math.round(bottom - top)),
+  };
+}
+
+function alignSourceToSelectionBounds(
+  bounds: SceneRect,
+  source: SceneSource,
+  alignment: SourceCanvasAlignment,
+): SceneSourcePatch {
+  switch (alignment) {
+    case "left":
+      return { position: { x: bounds.x } };
+    case "horizontal-center":
+      return {
+        position: {
+          x: Math.round(bounds.x + bounds.width / 2 - source.size.width / 2),
+        },
+      };
+    case "right":
+      return {
+        position: {
+          x: Math.round(bounds.x + bounds.width - source.size.width),
+        },
+      };
+    case "top":
+      return { position: { y: bounds.y } };
+    case "vertical-center":
+      return {
+        position: {
+          y: Math.round(bounds.y + bounds.height / 2 - source.size.height / 2),
+        },
+      };
+    case "bottom":
+      return {
+        position: {
+          y: Math.round(bounds.y + bounds.height - source.size.height),
+        },
+      };
+  }
+}
+
+function distributeSourcePositions(
+  sources: SceneSource[],
+  axis: "horizontal" | "vertical",
+): Map<string, Partial<ScenePoint>> {
+  const ordered = [...sources].sort((left, right) =>
+    axis === "horizontal"
+      ? left.position.x + left.size.width / 2 -
+        (right.position.x + right.size.width / 2)
+      : left.position.y + left.size.height / 2 -
+        (right.position.y + right.size.height / 2),
+  );
+  const first = ordered[0];
+  const last = ordered[ordered.length - 1];
+  const firstCenter =
+    axis === "horizontal"
+      ? first.position.x + first.size.width / 2
+      : first.position.y + first.size.height / 2;
+  const lastCenter =
+    axis === "horizontal"
+      ? last.position.x + last.size.width / 2
+      : last.position.y + last.size.height / 2;
+  const spacing = (lastCenter - firstCenter) / (ordered.length - 1);
+  const positions = new Map<string, Partial<ScenePoint>>();
+
+  ordered.forEach((source, index) => {
+    const center = firstCenter + spacing * index;
+    positions.set(
+      source.id,
+      axis === "horizontal"
+        ? { x: Math.round(center - source.size.width / 2) }
+        : { y: Math.round(center - source.size.height / 2) },
+    );
+  });
+
+  return positions;
+}
+
+function sourceIntersectsSource(
+  left: SceneSource,
+  right: SceneSource,
+): boolean {
+  return sourceIntersectsRect(right, {
+    x: left.position.x,
+    y: left.position.y,
+    width: left.size.width,
+    height: left.size.height,
+  });
+}
+
+function sourceIntersectsRect(source: SceneSource, rect: SceneRect): boolean {
+  const sourceRect = {
+    x: source.position.x,
+    y: source.position.y,
+    width: source.size.width,
+    height: source.size.height,
+  };
+  return !(
+    sourceRect.x + sourceRect.width < rect.x ||
+    rect.x + rect.width < sourceRect.x ||
+    sourceRect.y + sourceRect.height < rect.y ||
+    rect.y + rect.height < sourceRect.y
+  );
+}
+
+function sceneRectFromPoints(start: ScenePoint, current: ScenePoint): SceneRect {
+  const x = Math.min(start.x, current.x);
+  const y = Math.min(start.y, current.y);
+  return {
+    x,
+    y,
+    width: Math.abs(current.x - start.x),
+    height: Math.abs(current.y - start.y),
+  };
+}
+
+function canvasPointFromPointerEvent(
+  event: ReactPointerEvent,
+  scene: Scene,
+  canvas: HTMLDivElement | null,
+): ScenePoint | null {
+  const rect = canvas?.getBoundingClientRect();
+  if (!rect) return null;
+  return {
+    x: Math.round(((event.clientX - rect.left) / rect.width) * scene.canvas.width),
+    y: Math.round(((event.clientY - rect.top) / rect.height) * scene.canvas.height),
+  };
+}
+
+function marqueeStyle(
+  state: DesignerMarqueeState,
+  scene: Scene,
+): CSSProperties {
+  const rect = sceneRectFromPoints(state.start, state.current);
+  return {
+    left: `${(rect.x / scene.canvas.width) * 100}%`,
+    top: `${(rect.y / scene.canvas.height) * 100}%`,
+    width: `${(rect.width / scene.canvas.width) * 100}%`,
+    height: `${(rect.height / scene.canvas.height) * 100}%`,
+  };
+}
+
+function pointerAngleDegrees(
+  clientX: number,
+  clientY: number,
+  centerClientX: number,
+  centerClientY: number,
+): number {
+  return (
+    (Math.atan2(clientY - centerClientY, clientX - centerClientX) * 180) /
+    Math.PI
+  );
 }
 
 function snapGuideStyle(guide: DesignerSnapGuide, scene: Scene): CSSProperties {
