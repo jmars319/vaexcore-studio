@@ -997,6 +997,40 @@ nav {
   background: #0b0c13;
 }
 
+.runtime-binding-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(34, 216, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(34, 216, 255, 0.055);
+}
+
+.runtime-binding-header,
+.runtime-binding-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.runtime-binding-header strong,
+.runtime-binding-header span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.runtime-binding-header span {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.runtime-binding-actions {
+  justify-content: flex-start;
+}
+
 .source-filter-editor {
   display: grid;
   gap: 12px;

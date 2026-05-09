@@ -551,6 +551,16 @@ test("capture inventory binding updates scene source availability", async () => 
     createDefaultSceneCollection,
   } = await sharedTypes;
   const collection = createDefaultSceneCollection("2026-05-08T12:00:00.000Z");
+  const camera = collection.scenes[0].sources.find((source) => source.kind === "camera");
+  const microphone = collection.scenes[0].sources.find(
+    (source) => source.kind === "audio_meter",
+  );
+  assert.ok(camera);
+  assert.ok(microphone);
+  camera.config.device_id = "camera:facecam";
+  microphone.config.device_id = "system:loopback";
+  microphone.config.channel = "system";
+
   const bound = bindSceneCollectionCaptureInventory(collection, {
     candidates: [
       {
@@ -567,14 +577,33 @@ test("capture inventory binding updates scene source availability", async () => 
         available: false,
         notes: "Microphone permission is required.",
       },
+      {
+        id: "camera:facecam",
+        kind: "camera",
+        name: "Facecam",
+        available: true,
+        notes: null,
+      },
+      {
+        id: "system:loopback",
+        kind: "system_audio",
+        name: "Desktop Audio",
+        available: false,
+        notes: "System audio capture is unavailable.",
+      },
     ],
     selected: [],
   });
 
   const display = bound.scenes[0].sources.find((source) => source.kind === "display");
-  const microphone = bound.scenes[0].sources.find((source) => source.kind === "audio_meter");
+  const boundCamera = bound.scenes[0].sources.find((source) => source.kind === "camera");
+  const boundMicrophone = bound.scenes[0].sources.find(
+    (source) => source.kind === "audio_meter",
+  );
 
   assert.equal(display.config.availability.state, "available");
-  assert.equal(microphone.config.availability.state, "unavailable");
+  assert.equal(boundCamera.config.availability.state, "available");
+  assert.equal(boundMicrophone.config.availability.state, "unavailable");
+  assert.match(boundMicrophone.config.availability.detail, /System audio capture/);
   assert.equal(collection.scenes[0].sources[0].config.availability.state, "permission_required");
 });

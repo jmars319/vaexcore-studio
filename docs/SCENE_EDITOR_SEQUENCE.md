@@ -110,6 +110,13 @@ metadata, diagnostics, and runtime-frame canvas drawing from backend contract
 frames. The preview still uses deterministic contract frames, not real captured
 pixels.
 
+Phase E capture binding, covering steps 41-50, is now started in Designer with
+source-to-inventory candidate matching for display, window, camera, microphone,
+and system-audio sources. The Inspector surfaces runtime binding status, target,
+media shape, candidate availability, refresh, and auto-bind controls. This still
+does not start real capture; it prepares the saved scene graph and runtime
+contracts for capture-backed frames in later phases.
+
 ## Validation Contract
 
 Every chunk from step 4 onward must keep these gates green unless a platform

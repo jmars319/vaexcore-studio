@@ -93,6 +93,8 @@ import type {
   RecordingContainer,
   RecordingHistoryEntry,
   PreviewFrameResponse,
+  RuntimeAudioSourceBinding,
+  RuntimeCaptureSourceBinding,
   Scene,
   SceneCollection,
   SceneCrop,
@@ -206,6 +208,16 @@ type SceneSourcePatch = Partial<
 type SceneTransitionPatch = Partial<
   Pick<SceneTransition, "name" | "kind" | "duration_ms" | "easing" | "config">
 >;
+
+type SelectedRuntimeBinding =
+  | {
+      kind: "capture";
+      binding: RuntimeCaptureSourceBinding;
+    }
+  | {
+      kind: "audio";
+      binding: RuntimeAudioSourceBinding;
+    };
 
 const sceneSourceBoundsModeLabels: Record<SceneSourceBoundsMode, string> = {
   stretch: "Stretch",
@@ -789,6 +801,172 @@ function previewFrameRequestForScene(scene: Scene) {
   });
 }
 
+function sourceCaptureCandidateKinds(source: SceneSource): CaptureSourceKind[] {
+  switch (source.kind) {
+    case "display":
+      return ["display"];
+    case "window":
+      return ["window"];
+    case "camera":
+      return ["camera"];
+    case "audio_meter":
+      return ["microphone", "system_audio"];
+    default:
+      return [];
+  }
+}
+
+function captureCandidatesForSource(
+  source: SceneSource,
+  inventory: CaptureSourceInventory | null,
+): CaptureSourceCandidate[] {
+  const kinds = sourceCaptureCandidateKinds(source);
+  if (!inventory || kinds.length === 0) return [];
+  return inventory.candidates.filter((candidate) => kinds.includes(candidate.kind));
+}
+
+function captureLabelForSource(source: SceneSource): string {
+  switch (source.kind) {
+    case "display":
+      return "display";
+    case "window":
+      return "window";
+    case "camera":
+      return "camera";
+    case "audio_meter":
+      return "audio device";
+    default:
+      return "capture source";
+  }
+}
+
+function captureAvailabilityForCandidate(candidate: CaptureSourceCandidate) {
+  return {
+    state: candidate.available ? "available" : "unavailable",
+    detail: candidate.available
+      ? `${candidate.name} is available.`
+      : (candidate.notes ?? `${candidate.name} is not available.`),
+  };
+}
+
+function unassignedCaptureAvailability(source: SceneSource) {
+  return {
+    state: "unknown",
+    detail: `No ${captureLabelForSource(source)} has been assigned.`,
+  };
+}
+
+function captureConfigPatchForCandidate(
+  source: SceneSource,
+  candidate: CaptureSourceCandidate | null,
+): Record<string, unknown> {
+  const availability = candidate
+    ? captureAvailabilityForCandidate(candidate)
+    : unassignedCaptureAvailability(source);
+
+  switch (source.kind) {
+    case "display":
+      return {
+        display_id: candidate?.id ?? null,
+        availability,
+      };
+    case "window":
+      return {
+        window_id: candidate?.id ?? null,
+        application_name: candidate?.name ?? null,
+        title: candidate?.name ?? null,
+        availability,
+      };
+    case "camera":
+      return {
+        device_id: candidate?.id ?? null,
+        availability,
+      };
+    case "audio_meter":
+      return {
+        device_id: candidate?.id ?? null,
+        channel:
+          candidate?.kind === "system_audio"
+            ? "system"
+            : candidate
+              ? "microphone"
+              : source.config.channel,
+        availability,
+      };
+    default:
+      return {};
+  }
+}
+
+function runtimeBindingForSource(
+  bindings: SceneRuntimeBindingsSnapshot | null,
+  source: SceneSource,
+): SelectedRuntimeBinding | null {
+  const audioBinding = bindings?.audio.bindings.find(
+    (binding) => binding.scene_source_id === source.id,
+  );
+  if (source.kind === "audio_meter" && audioBinding) {
+    return { kind: "audio", binding: audioBinding };
+  }
+
+  const captureBinding = bindings?.capture.bindings.find(
+    (binding) => binding.scene_source_id === source.id,
+  );
+  if (captureBinding) {
+    return { kind: "capture", binding: captureBinding };
+  }
+
+  if (audioBinding) {
+    return { kind: "audio", binding: audioBinding };
+  }
+
+  return null;
+}
+
+function runtimeBindingTone(
+  status: string | null | undefined,
+): "green" | "red" | "amber" | "muted" {
+  switch (status) {
+    case "ready":
+      return "green";
+    case "permission_required":
+    case "placeholder":
+      return "amber";
+    case "unavailable":
+      return "red";
+    default:
+      return "muted";
+  }
+}
+
+function runtimeBindingTarget(binding: SelectedRuntimeBinding | null): string {
+  if (!binding) return "No runtime binding";
+  return binding.binding.capture_source_id ?? "Unassigned";
+}
+
+function runtimeBindingMedia(binding: SelectedRuntimeBinding | null): string {
+  if (!binding) return "Not resolved";
+  if (binding.kind === "capture") {
+    return `${binding.binding.capture_kind} / ${binding.binding.media_kind}`;
+  }
+  return `${binding.binding.capture_kind} / audio mixer`;
+}
+
+function runtimeBindingShape(binding: SelectedRuntimeBinding | null): string {
+  if (!binding) return "Pending";
+  if (binding.kind === "capture") {
+    if (binding.binding.media_kind === "audio") {
+      return `${binding.binding.sample_rate ?? "auto"} Hz / ${
+        binding.binding.channels ?? "auto"
+      } ch`;
+    }
+    return `${binding.binding.width ?? "auto"}x${
+      binding.binding.height ?? "auto"
+    } @ ${binding.binding.framerate ?? "auto"} fps`;
+  }
+  return `${binding.binding.bus_ids.length} buses / ${binding.binding.gain_db} dB`;
+}
+
 function App() {
   const isSettingsWindow = useMemo(
     () => new URLSearchParams(window.location.search).get("window") === "settings",
@@ -836,6 +1014,7 @@ function App() {
   const [previewPolling, setPreviewPolling] = useState(true);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [captureBindingRefreshing, setCaptureBindingRefreshing] = useState(false);
   const [suiteLaunchStatus, setSuiteLaunchStatus] = useState<string | null>(null);
   const [suiteStatus, setSuiteStatus] = useState<SuiteAppStatus[]>([]);
   const [suiteSession, setSuiteSession] = useState<SuiteSession | null>(null);
@@ -1220,6 +1399,47 @@ function App() {
     ]);
     setCaptureInventory(inventory);
     setPermissionStatuses({ camera, microphone });
+  }
+
+  async function refreshDesignerRuntimeBindings() {
+    setCaptureBindingRefreshing(true);
+    try {
+      await refreshCaptureContext();
+      if (config) {
+        const [runtime, bindings] = await Promise.all([
+          StudioApi.sceneRuntime(config),
+          StudioApi.sceneRuntimeBindings(config),
+        ]);
+        setSceneRuntime(runtime);
+        setSceneRuntimeBindings(bindings);
+      }
+      setSceneSaveStatus("Capture bindings refreshed");
+      setError(null);
+    } catch (error) {
+      setSceneSaveStatus(
+        error instanceof Error ? error.message : "Capture binding refresh failed",
+      );
+    } finally {
+      setCaptureBindingRefreshing(false);
+    }
+  }
+
+  function handleRebindDesignerSource(sceneId: string, sourceId: string) {
+    const scene = sceneCollection.scenes.find((scene) => scene.id === sceneId);
+    const source = scene?.sources.find((source) => source.id === sourceId);
+    if (!source || !captureInventory) return;
+    const candidate =
+      captureCandidatesForSource(source, captureInventory).find(
+        (candidate) => candidate.available,
+      ) ?? captureCandidatesForSource(source, captureInventory)[0];
+    if (!candidate) {
+      setSceneSaveStatus("No compatible capture candidate found.");
+      return;
+    }
+    handleUpdateDesignerSource(sceneId, sourceId, {
+      config: captureConfigPatchForCandidate(source, candidate),
+    });
+    setSceneSaveStatus(`Bound ${source.name} to ${candidate.name}. Save to update runtime.`);
   }
 
   async function runCommand(action: () => Promise<{ status: StudioStatus["status"] }>) {
@@ -2458,7 +2678,17 @@ function App() {
       setSceneDirty(false);
       setSceneSaveStatus("Scene collection saved");
       setError(null);
-      StudioApi.mediaPlan(config).then(setPipelinePlan).catch(() => undefined);
+      Promise.all([
+        StudioApi.mediaPlan(config),
+        StudioApi.sceneRuntime(config),
+        StudioApi.sceneRuntimeBindings(config),
+      ])
+        .then(([plan, runtime, bindings]) => {
+          setPipelinePlan(plan);
+          setSceneRuntime(runtime);
+          setSceneRuntimeBindings(bindings);
+        })
+        .catch(() => undefined);
     } catch (error) {
       setSceneSaveStatus(
         error instanceof Error ? error.message : "Scene save failed",
@@ -2487,6 +2717,7 @@ function App() {
             captureInventory={captureInventory}
             collection={designerSceneCollection}
             clipboardSource={designerSourceClipboard}
+            captureBindingRefreshing={captureBindingRefreshing}
             dirty={sceneDirty}
             previewError={previewError}
             previewFrame={previewFrame}
@@ -2513,6 +2744,8 @@ function App() {
             onPasteSource={handlePasteDesignerSource}
             onPreviewPollingChange={setPreviewPolling}
             onRequestPreviewFrame={requestDesignerPreviewFrame}
+            onRefreshCaptureBindings={refreshDesignerRuntimeBindings}
+            onRebindSource={handleRebindDesignerSource}
             onRenameScene={handleRenameDesignerScene}
             onResetCollection={handleResetDesignerCollection}
             onAlignSelection={handleAlignDesignerSelection}
@@ -2685,15 +2918,24 @@ function App() {
     streamBandwidthTest,
     twitchReadiness,
     activeDesignerScene,
+    captureBindingRefreshing,
     captureInventory,
     designerSceneCollection,
     designerSourceClipboard,
+    previewError,
+    previewFrame,
+    previewLoading,
+    previewPolling,
     sceneCollection,
     sceneDirty,
     sceneHistory,
+    sceneRuntime,
+    sceneRuntimeBindings,
     sceneSaveStatus,
     selectedDesignerSource,
+    selectedDesignerSources,
     selectedSceneSourceId,
+    selectedSceneSourceIds,
   ]);
 
   if (isSettingsWindow) {
@@ -2829,6 +3071,7 @@ function App() {
 function DesignerPage(props: {
   canRedo: boolean;
   canUndo: boolean;
+  captureBindingRefreshing: boolean;
   captureInventory: CaptureSourceInventory | null;
   collection: SceneCollection;
   clipboardSource: SceneSource | null;
@@ -2866,6 +3109,8 @@ function DesignerPage(props: {
   onPasteSource: (sceneId: string) => void;
   onPreviewPollingChange: (enabled: boolean) => void;
   onRequestPreviewFrame: () => void;
+  onRefreshCaptureBindings: () => void;
+  onRebindSource: (sceneId: string, sourceId: string) => void;
   onRenameScene: (sceneId: string, name: string) => void;
   onResetCollection: () => void;
   onAlignSelection: (
@@ -2976,6 +3221,12 @@ function DesignerPage(props: {
   const selectedEffectiveState = props.selectedSource
     ? sourceEffectiveState(props.scene, props.selectedSource.id)
     : null;
+  const selectedRuntimeBinding = props.selectedSource
+    ? runtimeBindingForSource(props.runtimeBindings, props.selectedSource)
+    : null;
+  const selectedCaptureCandidates = props.selectedSource
+    ? captureCandidatesForSource(props.selectedSource, props.captureInventory)
+    : [];
   const unlockedSelectedSources = selectedSceneSources.filter(
     (source) => !sourceEffectiveState(props.scene, source.id).locked,
   );
@@ -5507,6 +5758,16 @@ function DesignerPage(props: {
                 }`}
               />
             </div>
+            <RuntimeBindingPanel
+              binding={selectedRuntimeBinding}
+              candidates={selectedCaptureCandidates}
+              onRebind={() =>
+                props.onRebindSource(props.scene.id, props.selectedSource!.id)
+              }
+              onRefresh={props.onRefreshCaptureBindings}
+              refreshing={props.captureBindingRefreshing}
+              source={props.selectedSource}
+            />
             <SourceConfigEditor
               captureInventory={props.captureInventory}
               onChange={(config) =>
@@ -5535,6 +5796,75 @@ function DesignerPage(props: {
           <div className="empty">No source selected</div>
         )}
       </section>
+    </div>
+  );
+}
+
+function RuntimeBindingPanel(props: {
+  binding: SelectedRuntimeBinding | null;
+  candidates: CaptureSourceCandidate[];
+  onRebind: () => void;
+  onRefresh: () => void;
+  refreshing: boolean;
+  source: SceneSource;
+}) {
+  if (sourceCaptureCandidateKinds(props.source).length === 0) {
+    return null;
+  }
+
+  const status = props.binding?.binding.status ?? "placeholder";
+  const detail =
+    props.binding?.binding.status_detail ??
+    sceneSourceAvailability(props.source)?.detail ??
+    "No runtime binding has been resolved for this source.";
+  const availableCandidates = props.candidates.filter((candidate) => candidate.available);
+
+  return (
+    <div className="runtime-binding-panel">
+      <div className="runtime-binding-header">
+        <div>
+          <strong>Runtime Binding</strong>
+          <span>{detail}</span>
+        </div>
+        <Pill tone={runtimeBindingTone(status)}>{status.replace("_", " ")}</Pill>
+      </div>
+      <div className="designer-preview-meta">
+        <KeyValue label="Target" value={runtimeBindingTarget(props.binding)} />
+        <KeyValue label="Media" value={runtimeBindingMedia(props.binding)} />
+        <KeyValue label="Shape" value={runtimeBindingShape(props.binding)} />
+        <KeyValue
+          label="Candidates"
+          value={`${availableCandidates.length}/${props.candidates.length} available`}
+        />
+      </div>
+      {status !== "ready" && (
+        <div className="validation-issue warning">
+          <strong>{status.replace("_", " ")}</strong>
+          <span>{detail}</span>
+        </div>
+      )}
+      <div className="runtime-binding-actions">
+        <button
+          className="secondary-button compact"
+          disabled={props.refreshing}
+          onClick={props.onRefresh}
+          title="Refresh capture inventory and runtime bindings"
+          type="button"
+        >
+          <RefreshCw size={14} />
+          {props.refreshing ? "Refreshing" : "Refresh"}
+        </button>
+        <button
+          className="secondary-button compact"
+          disabled={props.candidates.length === 0}
+          onClick={props.onRebind}
+          title="Bind this source to the first available compatible capture candidate"
+          type="button"
+        >
+          <Link2 size={14} />
+          Auto Bind
+        </button>
+      </div>
     </div>
   );
 }
@@ -6380,9 +6710,11 @@ function SourceConfigEditor(props: {
             Display
             <select
               value={source.config.display_id ?? ""}
-              onChange={(event) =>
-                props.onChange({ display_id: event.target.value || null })
-              }
+              onChange={(event) => {
+                const candidate =
+                  candidates.find((item) => item.id === event.target.value) ?? null;
+                props.onChange(captureConfigPatchForCandidate(source, candidate));
+              }}
             >
               <option value="">Unassigned display</option>
               {candidates
@@ -6447,9 +6779,11 @@ function SourceConfigEditor(props: {
             Window
             <select
               value={source.config.window_id ?? ""}
-              onChange={(event) =>
-                props.onChange({ window_id: event.target.value || null })
-              }
+              onChange={(event) => {
+                const candidate =
+                  candidates.find((item) => item.id === event.target.value) ?? null;
+                props.onChange(captureConfigPatchForCandidate(source, candidate));
+              }}
             >
               <option value="">Unassigned window</option>
               {candidates
@@ -6514,9 +6848,11 @@ function SourceConfigEditor(props: {
             Camera
             <select
               value={source.config.device_id ?? ""}
-              onChange={(event) =>
-                props.onChange({ device_id: event.target.value || null })
-              }
+              onChange={(event) => {
+                const candidate =
+                  candidates.find((item) => item.id === event.target.value) ?? null;
+                props.onChange(captureConfigPatchForCandidate(source, candidate));
+              }}
             >
               <option value="">Unassigned camera</option>
               {candidates
@@ -6577,9 +6913,11 @@ function SourceConfigEditor(props: {
             Audio Device
             <select
               value={source.config.device_id ?? ""}
-              onChange={(event) =>
-                props.onChange({ device_id: event.target.value || null })
-              }
+              onChange={(event) => {
+                const candidate =
+                  candidates.find((item) => item.id === event.target.value) ?? null;
+                props.onChange(captureConfigPatchForCandidate(source, candidate));
+              }}
             >
               <option value="">Unassigned audio device</option>
               {candidates
