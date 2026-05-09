@@ -92,6 +92,7 @@ import type {
   SceneSize,
   SceneSource,
   SceneSourceBoundsMode,
+  SceneSourceDefaults,
   SceneSourceFilter,
   SceneSourceFilterKind,
   SceneSourceKind,
@@ -258,6 +259,14 @@ type DesignerMarqueeState = {
   current: ScenePoint;
 };
 
+type SourceCreatePreset = {
+  id: string;
+  kind: SceneSourceKind;
+  name: string;
+  detail: string;
+  defaults?: SceneSourceDefaults;
+};
+
 type SceneHistory = {
   past: SceneCollection[];
   future: SceneCollection[];
@@ -269,6 +278,88 @@ type SceneUpdateOptions = {
 
 const designerHistoryLimit = 50;
 const designerSnapThreshold = 12;
+
+const sourceCreatePresets: SourceCreatePreset[] = [
+  {
+    id: "display-fullscreen",
+    kind: "display",
+    name: "Display Capture",
+    detail: "Full display placeholder",
+    defaults: {
+      size: { width: 1280, height: 720 },
+      config: { capture_cursor: true },
+    },
+  },
+  {
+    id: "window-app",
+    kind: "window",
+    name: "Window Capture",
+    detail: "Application window placeholder",
+    defaults: {
+      size: { width: 960, height: 540 },
+    },
+  },
+  {
+    id: "camera-facecam",
+    kind: "camera",
+    name: "Camera",
+    detail: "Webcam frame placeholder",
+    defaults: {
+      position: { x: 1420, y: 700 },
+      size: { width: 420, height: 236 },
+      config: { framerate: 30, resolution: { width: 1280, height: 720 } },
+    },
+  },
+  {
+    id: "audio-meter",
+    kind: "audio_meter",
+    name: "Audio Meter",
+    detail: "Mic/system meter placeholder",
+    defaults: {
+      position: { x: 80, y: 910 },
+      size: { width: 420, height: 80 },
+    },
+  },
+  {
+    id: "image-media",
+    kind: "image_media",
+    name: "Image / Media",
+    detail: "Local media placeholder",
+    defaults: {
+      size: { width: 640, height: 360 },
+    },
+  },
+  {
+    id: "browser-overlay",
+    kind: "browser_overlay",
+    name: "Browser Overlay",
+    detail: "Web overlay placeholder",
+    defaults: {
+      size: { width: 640, height: 360 },
+      config: { viewport: { width: 1280, height: 720 } },
+    },
+  },
+  {
+    id: "text-title",
+    kind: "text",
+    name: "Title Text",
+    detail: "Editable text layer",
+    defaults: {
+      position: { x: 120, y: 80 },
+      size: { width: 720, height: 120 },
+      config: { text: "Starting Soon", font_size: 72, align: "center" },
+    },
+  },
+  {
+    id: "group",
+    kind: "group",
+    name: "Group",
+    detail: "Nested source container",
+    defaults: {
+      size: { width: 640, height: 360 },
+    },
+  },
+];
 
 const sceneFilterKindLabels: Record<SceneSourceFilterKind, string> = {
   color_correction: "Color Correction",
@@ -1526,13 +1617,21 @@ function App() {
     }));
   }
 
-  function handleCreateDesignerSource(sceneId: string, kind: SceneSourceKind) {
+  function handleCreateDesignerSource(
+    sceneId: string,
+    kind: SceneSourceKind,
+    defaults: SceneSourceDefaults = {},
+  ) {
+    const scene =
+      sceneCollection.scenes.find((item) => item.id === sceneId) ??
+      activeDesignerScene;
     const source = createDefaultSceneSource(kind, {
+      ...defaults,
       id: designerId(`source-${kind}`),
-      name: sceneSourceKindLabels[kind],
-      position: { x: 120, y: 120 },
-      size: defaultDesignerSourceSize(kind),
-      z_index: nextSceneZIndex(activeDesignerScene),
+      name: defaults.name ?? sceneSourceKindLabels[kind],
+      position: { x: 120, y: 120, ...defaults.position },
+      size: { ...defaultDesignerSourceSize(kind), ...defaults.size },
+      z_index: nextSceneZIndex(scene),
     });
     updateDesignerCollection((current) => ({
       ...current,
@@ -2225,7 +2324,11 @@ function DesignerPage(props: {
   dirty: boolean;
   onCopySource: (sceneId: string, sourceId: string) => void;
   onCreateScene: () => void;
-  onCreateSource: (sceneId: string, kind: SceneSourceKind) => void;
+  onCreateSource: (
+    sceneId: string,
+    kind: SceneSourceKind,
+    defaults?: SceneSourceDefaults,
+  ) => void;
   onDeleteScene: (sceneId: string) => void;
   onDeleteSource: (sceneId: string, sourceId: string) => void;
   onDeleteSources: (sceneId: string, sourceIds: string[]) => void;
@@ -2337,6 +2440,9 @@ function DesignerPage(props: {
   const selectedSceneSources = props.scene.sources.filter((source) =>
     selectedSourceIds.includes(source.id),
   );
+  const selectedEffectiveState = props.selectedSource
+    ? sourceEffectiveState(props.scene, props.selectedSource.id)
+    : null;
   const unlockedSelectedSources = selectedSceneSources.filter(
     (source) => !sourceEffectiveState(props.scene, source.id).locked,
   );
@@ -3118,27 +3224,6 @@ function DesignerPage(props: {
           <PanelTitle
             action={
               <div className="source-add-controls">
-                <select
-                  aria-label="New source kind"
-                  value={newSourceKind}
-                  onChange={(event) =>
-                    setNewSourceKind(event.target.value as SceneSourceKind)
-                  }
-                >
-                  {Object.entries(sceneSourceKindLabels).map(([kind, label]) => (
-                    <option key={kind} value={kind}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  className="secondary-button compact"
-                  onClick={() => props.onCreateSource(props.scene.id, newSourceKind)}
-                  type="button"
-                >
-                  <Plus size={14} />
-                  Source
-                </button>
                 <button
                   className="secondary-button compact"
                   disabled={!props.clipboardSource}
@@ -3156,6 +3241,14 @@ function DesignerPage(props: {
               </div>
             }
             title="Source Stack"
+          />
+          <SourceCreationPanel
+            captureInventory={props.captureInventory}
+            newSourceKind={newSourceKind}
+            onCreateSource={(kind, defaults) =>
+              props.onCreateSource(props.scene.id, kind, defaults)
+            }
+            onNewSourceKindChange={setNewSourceKind}
           />
           <div className="designer-list source-stack">
             <div
@@ -4284,6 +4377,19 @@ function DesignerPage(props: {
               label="Source Kind"
               value={sceneSourceKindLabels[props.selectedSource.kind]}
             />
+            <div className="identity-panel">
+              <KeyValue label="Source ID" value={props.selectedSource.id} />
+              <KeyValue
+                label="Parent"
+                value={selectedEffectiveState?.parentId ?? "Root"}
+              />
+              <KeyValue
+                label="Effective"
+                value={`${selectedEffectiveState?.visible ? "visible" : "hidden"} / ${
+                  selectedEffectiveState?.locked ? "locked" : "unlocked"
+                }`}
+              />
+            </div>
             <SourceConfigEditor
               captureInventory={props.captureInventory}
               onChange={(config) =>
@@ -4314,6 +4420,171 @@ function DesignerPage(props: {
       </section>
     </div>
   );
+}
+
+function SourceCreationPanel(props: {
+  captureInventory: CaptureSourceInventory | null;
+  newSourceKind: SceneSourceKind;
+  onCreateSource: (kind: SceneSourceKind, defaults?: SceneSourceDefaults) => void;
+  onNewSourceKindChange: (kind: SceneSourceKind) => void;
+}) {
+  const captureCandidates = props.captureInventory?.candidates ?? [];
+  const createFromPreset = (preset: SourceCreatePreset) => {
+    props.onCreateSource(preset.kind, {
+      ...preset.defaults,
+      name: preset.name,
+    });
+  };
+
+  return (
+    <div className="source-create-panel" data-testid="designer-source-create-panel">
+      <div className="source-create-manual">
+        <label>
+          Blank Source
+          <select
+            aria-label="New source kind"
+            onChange={(event) =>
+              props.onNewSourceKindChange(event.target.value as SceneSourceKind)
+            }
+            value={props.newSourceKind}
+          >
+            {Object.entries(sceneSourceKindLabels).map(([kind, label]) => (
+              <option key={kind} value={kind}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          className="secondary-button compact"
+          onClick={() => props.onCreateSource(props.newSourceKind)}
+          type="button"
+        >
+          <Plus size={14} />
+          Add Blank
+        </button>
+      </div>
+
+      <div className="source-create-grid">
+        {sourceCreatePresets.map((preset) => (
+          <button
+            className="source-create-card"
+            data-testid="designer-source-preset"
+            key={preset.id}
+            onClick={() => createFromPreset(preset)}
+            type="button"
+          >
+            <SourceKindIcon kind={preset.kind} />
+            <span>
+              <strong>{preset.name}</strong>
+              <small>{preset.detail}</small>
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {captureCandidates.length > 0 && (
+        <div className="capture-candidate-list">
+          <div className="source-filter-editor-header compact-header">
+            <div>
+              <strong>Capture Candidates</strong>
+              <span>{captureCandidates.length} detected</span>
+            </div>
+          </div>
+          {captureCandidates.map((candidate) => {
+            const createRequest = sourceCreateRequestFromCaptureCandidate(candidate);
+            return (
+              <button
+                className={
+                  candidate.available
+                    ? "capture-candidate-create"
+                    : "capture-candidate-create unavailable"
+                }
+                data-testid="designer-capture-candidate-create"
+                key={candidate.id}
+                onClick={() =>
+                  props.onCreateSource(createRequest.kind, createRequest.defaults)
+                }
+                type="button"
+              >
+                <SourceKindIcon kind={createRequest.kind} />
+                <span>
+                  <strong>{candidate.name}</strong>
+                  <small>
+                    {candidate.available
+                      ? sceneSourceKindLabels[createRequest.kind]
+                      : (candidate.notes ?? "Unavailable")}
+                  </small>
+                </span>
+                <Pill tone={candidate.available ? "green" : "amber"}>
+                  {candidate.available ? "Ready" : "Placeholder"}
+                </Pill>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function sourceCreateRequestFromCaptureCandidate(
+  candidate: CaptureSourceCandidate,
+): { kind: SceneSourceKind; defaults: SceneSourceDefaults } {
+  switch (candidate.kind) {
+    case "display":
+      return {
+        kind: "display",
+        defaults: {
+          name: candidate.name,
+          size: { width: 1280, height: 720 },
+          config: { display_id: candidate.id },
+        },
+      };
+    case "window":
+      return {
+        kind: "window",
+        defaults: {
+          name: candidate.name,
+          size: { width: 960, height: 540 },
+          config: {
+            application_name: candidate.name,
+            title: candidate.name,
+            window_id: candidate.id,
+          },
+        },
+      };
+    case "camera":
+      return {
+        kind: "camera",
+        defaults: {
+          name: candidate.name,
+          position: { x: 1420, y: 700 },
+          size: { width: 420, height: 236 },
+          config: { device_id: candidate.id },
+        },
+      };
+    case "system_audio":
+      return {
+        kind: "audio_meter",
+        defaults: {
+          name: candidate.name,
+          position: { x: 80, y: 910 },
+          size: { width: 420, height: 80 },
+          config: { channel: "system", device_id: candidate.id },
+        },
+      };
+    case "microphone":
+      return {
+        kind: "audio_meter",
+        defaults: {
+          name: candidate.name,
+          position: { x: 80, y: 910 },
+          size: { width: 420, height: 80 },
+          config: { channel: "microphone", device_id: candidate.id },
+        },
+      };
+  }
 }
 
 function SourceFilterEditor(props: {
@@ -4860,6 +5131,40 @@ function SourceConfigEditor(props: {
             />
             Capture cursor
           </label>
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Source Width"
+              min={1}
+              onChange={(width) =>
+                props.onChange({
+                  resolution: {
+                    ...(source.config.resolution ?? {
+                      width: 1920,
+                      height: 1080,
+                    }),
+                    width,
+                  },
+                })
+              }
+              value={source.config.resolution?.width ?? 1920}
+            />
+            <SceneNumberInput
+              label="Source Height"
+              min={1}
+              onChange={(height) =>
+                props.onChange({
+                  resolution: {
+                    ...(source.config.resolution ?? {
+                      width: 1920,
+                      height: 1080,
+                    }),
+                    height,
+                  },
+                })
+              }
+              value={source.config.resolution?.height ?? 1080}
+            />
+          </div>
         </div>
       );
     case "window":
@@ -4893,6 +5198,40 @@ function SourceConfigEditor(props: {
             onChange={(title) => props.onChange({ title })}
             value={source.config.title ?? ""}
           />
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Source Width"
+              min={1}
+              onChange={(width) =>
+                props.onChange({
+                  resolution: {
+                    ...(source.config.resolution ?? {
+                      width: 1280,
+                      height: 720,
+                    }),
+                    width,
+                  },
+                })
+              }
+              value={source.config.resolution?.width ?? 1280}
+            />
+            <SceneNumberInput
+              label="Source Height"
+              min={1}
+              onChange={(height) =>
+                props.onChange({
+                  resolution: {
+                    ...(source.config.resolution ?? {
+                      width: 1280,
+                      height: 720,
+                    }),
+                    height,
+                  },
+                })
+              }
+              value={source.config.resolution?.height ?? 720}
+            />
+          </div>
         </div>
       );
     case "camera":
@@ -5126,6 +5465,16 @@ function SourceConfigEditor(props: {
               value={source.config.viewport.height}
             />
           </div>
+          <label>
+            Custom CSS
+            <textarea
+              onChange={(event) =>
+                props.onChange({ custom_css: event.target.value || null })
+              }
+              rows={3}
+              value={source.config.custom_css ?? ""}
+            />
+          </label>
         </div>
       );
     case "text":
