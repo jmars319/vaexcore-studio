@@ -1,4 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -16,6 +23,72 @@ const targets = [
     name: "designer",
     path: "/?section=designer",
     minBytes: 50_000,
+  },
+  {
+    name: "designer-multi-select",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "click",
+        selector: '[data-testid="designer-source-select"][data-source-id="source-main-display"]',
+      },
+      {
+        type: "click",
+        selector: '[data-testid="designer-source-select"][data-source-id="source-camera-placeholder"]',
+        shiftKey: true,
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-selection-tools\\"]"))',
+        message: "Designer multi-select tools did not render.",
+      },
+    ],
+  },
+  {
+    name: "designer-grouping",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "click",
+        selector: '[data-testid="designer-source-select"][data-source-id="source-main-display"]',
+      },
+      {
+        type: "click",
+        selector: '[data-testid="designer-source-select"][data-source-id="source-camera-placeholder"]',
+        shiftKey: true,
+      },
+      {
+        type: "click",
+        selector: '[data-testid="designer-group-selection"]',
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-source-stack-item\\"][data-source-kind=\\"group\\"]"))',
+        message: "Designer grouping did not create a group source.",
+      },
+    ],
+  },
+  {
+    name: "designer-transition-preview",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "click",
+        selector: '[data-testid="transition-preview-button"]',
+      },
+      {
+        type: "wait",
+        ms: 240,
+      },
+      {
+        type: "assert",
+        expression: 'Number(document.querySelector(".transition-preview-track")?.getAttribute("aria-valuenow") ?? 0) > 0',
+        message: "Transition preview progress did not advance.",
+      },
+    ],
   },
   {
     name: "broadcast-setup",
@@ -45,7 +118,7 @@ try {
   for (const target of targets) {
     const url = `${baseUrl}${target.path}`;
     const screenshot = join(outputDir, `studio-${target.name}.png`);
-    await capture(url, screenshot);
+    await capture(url, screenshot, target);
     assertScreenshot(screenshot, target);
     console.log(`visual smoke: wrote ${screenshot}`);
   }
@@ -79,7 +152,12 @@ async function waitFor(url) {
   throw new Error(`Timed out waiting for ${url}`);
 }
 
-async function capture(url, screenshot) {
+async function capture(url, screenshot, target) {
+  if (target?.interactions?.length) {
+    await captureWithInteractions(url, screenshot, target);
+    return;
+  }
+
   const userDataDir = join(tmpdir(), `vaexcore-studio-smoke-${Date.now()}`);
   if (existsSync(screenshot)) unlinkSync(screenshot);
   const child = spawn(chrome, [
@@ -109,6 +187,192 @@ async function capture(url, screenshot) {
   } finally {
     stop(child);
   }
+}
+
+async function captureWithInteractions(url, screenshot, target) {
+  const userDataDir = join(tmpdir(), `vaexcore-studio-smoke-${Date.now()}`);
+  const port = 9300 + Math.floor(Math.random() * 400);
+  if (existsSync(screenshot)) unlinkSync(screenshot);
+  const child = spawn(chrome, [
+    "--headless=new",
+    "--disable-gpu",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--hide-scrollbars",
+    "--run-all-compositor-stages-before-draw",
+    "--window-size=1440,1000",
+    `--remote-debugging-port=${port}`,
+    `--user-data-dir=${userDataDir}`,
+    "about:blank"
+  ], { cwd: root, detached: true, stdio: "ignore" });
+
+  let cdp;
+  try {
+    const targetInfo = await waitForCdpTarget(port);
+    cdp = await createCdpClient(targetInfo.webSocketDebuggerUrl);
+    await cdp.send("Page.enable");
+    await cdp.send("Runtime.enable");
+    await cdp.send("Page.navigate", { url });
+    await waitForCdpExpression(
+      cdp,
+      'Boolean(document.querySelector(".designer-grid"))',
+      10_000,
+    );
+
+    for (const interaction of target.interactions) {
+      await runInteraction(cdp, interaction);
+    }
+    await delay(300);
+
+    const result = await cdp.send("Page.captureScreenshot", {
+      captureBeyondViewport: false,
+      format: "png",
+    });
+    writeFileSync(screenshot, Buffer.from(result.data, "base64"));
+  } finally {
+    cdp?.close();
+    stop(child);
+  }
+}
+
+async function waitForCdpTarget(port) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 15_000) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`);
+      if (response.ok) {
+        const targets = await response.json();
+        const page = targets.find((target) => target.type === "page");
+        if (page?.webSocketDebuggerUrl) return page;
+      }
+    } catch {
+      await delay(200);
+    }
+  }
+  throw new Error(`Timed out waiting for Chrome DevTools on ${port}`);
+}
+
+async function createCdpClient(webSocketDebuggerUrl) {
+  const socket = new WebSocket(webSocketDebuggerUrl);
+  const pending = new Map();
+  const listeners = new Map();
+  let nextId = 1;
+
+  await new Promise((resolveOpen, reject) => {
+    socket.addEventListener("open", resolveOpen, { once: true });
+    socket.addEventListener("error", reject, { once: true });
+  });
+
+  socket.addEventListener("message", (event) => {
+    const message = JSON.parse(String(event.data));
+    if (message.id) {
+      const request = pending.get(message.id);
+      if (!request) return;
+      pending.delete(message.id);
+      if (message.error) {
+        request.reject(new Error(message.error.message));
+      } else {
+        request.resolve(message.result ?? {});
+      }
+      return;
+    }
+
+    if (message.method) {
+      const queue = listeners.get(message.method) ?? [];
+      listeners.set(message.method, []);
+      queue.forEach((listener) => listener(message.params ?? {}));
+    }
+  });
+
+  return {
+    close() {
+      socket.close();
+    },
+    send(method, params = {}) {
+      const id = nextId;
+      nextId += 1;
+      socket.send(JSON.stringify({ id, method, params }));
+      return new Promise((resolveSend, reject) => {
+        pending.set(id, { resolve: resolveSend, reject });
+      });
+    },
+    waitForEvent(method, timeoutMs) {
+      return new Promise((resolveEvent, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error(`Timed out waiting for ${method}`)),
+          timeoutMs,
+        );
+        const queue = listeners.get(method) ?? [];
+        queue.push((params) => {
+          clearTimeout(timeout);
+          resolveEvent(params);
+        });
+        listeners.set(method, queue);
+      });
+    },
+  };
+}
+
+async function runInteraction(cdp, interaction) {
+  if (interaction.type === "wait") {
+    await delay(interaction.ms);
+    return;
+  }
+
+  if (interaction.type === "assert") {
+    await waitForCdpExpression(cdp, interaction.expression, 5_000, interaction.message);
+    return;
+  }
+
+  if (interaction.type === "click") {
+    await waitForCdpExpression(
+      cdp,
+      `Boolean(document.querySelector(${JSON.stringify(interaction.selector)}))`,
+      5_000,
+      `Could not find ${interaction.selector}`,
+    );
+    await evaluateCdp(
+      cdp,
+      `(() => {
+        const element = document.querySelector(${JSON.stringify(interaction.selector)});
+        element.scrollIntoView({ block: "center", inline: "center" });
+        element.dispatchEvent(new MouseEvent("click", {
+          bubbles: true,
+          cancelable: true,
+          shiftKey: ${Boolean(interaction.shiftKey)},
+          metaKey: ${Boolean(interaction.metaKey)},
+          ctrlKey: ${Boolean(interaction.ctrlKey)}
+        }));
+        return true;
+      })()`,
+    );
+    await delay(interaction.delayMs ?? 160);
+    return;
+  }
+
+  throw new Error(`Unknown visual smoke interaction: ${interaction.type}`);
+}
+
+async function waitForCdpExpression(cdp, expression, timeoutMs, message) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const result = await evaluateCdp(cdp, expression);
+    if (result) return;
+    await delay(100);
+  }
+  throw new Error(message ?? `Timed out waiting for expression: ${expression}`);
+}
+
+async function evaluateCdp(cdp, expression) {
+  const response = await cdp.send("Runtime.evaluate", {
+    awaitPromise: true,
+    expression,
+    returnByValue: true,
+  });
+  if (response.exceptionDetails) {
+    throw new Error(response.exceptionDetails.text ?? "CDP evaluation failed");
+  }
+  return response.result?.value;
 }
 
 function assertScreenshot(path, target) {

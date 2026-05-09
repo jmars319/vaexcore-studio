@@ -2619,6 +2619,7 @@ function DesignerPage(props: {
               <div className="transition-preview-player">
                 <button
                   className="secondary-button compact"
+                  data-testid="transition-preview-button"
                   onClick={() => {
                     if (transitionPreviewPlaying) {
                       setTransitionPreviewPlaying(false);
@@ -2703,6 +2704,9 @@ function DesignerPage(props: {
                     ? "designer-list-item source-stack-item selected"
                     : "designer-list-item source-stack-item"
                 }
+                data-source-id={source.id}
+                data-source-kind={source.kind}
+                data-testid="designer-source-stack-item"
                 draggable={!source.locked}
                 onDragOver={(event) => event.preventDefault()}
                 onDragStart={(event: ReactDragEvent<HTMLDivElement>) => {
@@ -2723,6 +2727,8 @@ function DesignerPage(props: {
               >
                 <button
                   className="source-stack-select-button"
+                  data-source-id={source.id}
+                  data-testid="designer-source-select"
                   onClick={(event) =>
                     props.onSelectSource(
                       source.id,
@@ -3082,7 +3088,10 @@ function DesignerPage(props: {
               value={props.scene.name}
             />
             {selectedSourceIds.length > 1 && (
-              <div className="designer-selection-tools">
+              <div
+                className="designer-selection-tools"
+                data-testid="designer-selection-tools"
+              >
                 <div className="designer-selection-tools-header">
                   <strong>{selectedSourceIds.length} selected</strong>
                   <span>
@@ -3092,6 +3101,7 @@ function DesignerPage(props: {
                 <div className="designer-transform-tools compact-tools">
                   <button
                     className="secondary-button compact"
+                    data-testid="designer-group-selection"
                     disabled={!canGroupSelection}
                     onClick={() =>
                       props.onGroupSources(props.scene.id, selectedSourceIds)
@@ -3103,6 +3113,7 @@ function DesignerPage(props: {
                   </button>
                   <button
                     className="secondary-button compact"
+                    data-testid="designer-ungroup-selection"
                     disabled={!hasGroupSelection}
                     onClick={() =>
                       props.onUngroupSources(props.scene.id, selectedSourceIds)
