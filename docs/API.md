@@ -239,7 +239,7 @@ Accepts a `SceneRuntimeStateUpdateRequest`, applies active-scene, active-transit
 
 ### `POST /scene-runtime/preview-frame`
 
-Accepts a `PreviewFrameRequest` and returns a `PreviewFrameResponse` with software-rendered preview pixels, frame metadata, checksum, and optional encoded image data. Local `image_media` sources with `media_type = "image"` decode PNG, JPEG, WebP, and first-frame GIF assets into the software compositor, and single-line `text` sources rasterize with the bundled Inter font. Enabled visual source filters apply to software input pixels for color correction, chroma key, crop/pad alpha crop, blur, sharpen, still-image mask/blend, and `.cube` LUT transforms; audio filter families report deferred diagnostics without mutating pixels. Capture, video media, browser, and output pipelines remain placeholder-backed. Image, text, and filter diagnostics report source readiness, fallback behavior, dimensions or bounds, format/font metadata, checksum, cache state, and filter runtime state where applicable.
+Accepts a `PreviewFrameRequest` and returns a `PreviewFrameResponse` with software-rendered preview pixels, frame metadata, checksum, and optional encoded image data. Local `image_media` sources with `media_type = "image"` decode PNG, JPEG, WebP, and first-frame GIF assets into the software compositor, and single-line `text` sources rasterize with the bundled Inter font. Enabled visual source filters apply to software input pixels for color correction, chroma key, crop/pad alpha crop, blur, sharpen, still-image mask/blend, and `.cube` LUT transforms; audio filter families remain non-pixel filters and are evaluated by the audio graph runtime instead. Capture, video media, browser, and output pipelines remain placeholder-backed. Image, text, and filter diagnostics report source readiness, fallback behavior, dimensions or bounds, format/font metadata, checksum, cache state, and filter runtime state where applicable.
 
 ### `POST /scene-runtime/validate-graph`
 
@@ -251,7 +251,7 @@ Returns capture and audio binding contracts for the active saved scene.
 
 ### `GET /scene-runtime/audio-graph`
 
-Returns the active scene audio graph runtime snapshot with simulated meter levels, gain, mute, monitor, sync offset, bus state, and validation metadata.
+Returns the active scene audio graph runtime snapshot with simulated pre-filter and post-filter meter levels, ordered `audio_gain` / `noise_gate` / `compressor` diagnostics, gain, mute, monitor, sync offset, bus state, and validation metadata. This endpoint does not start live audio capture.
 
 ### `GET /media/plan`
 

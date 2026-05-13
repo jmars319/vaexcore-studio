@@ -35,8 +35,9 @@ Scene sources also carry ordered filter chains for effects such as color
 correction, chroma key, crop/pad, blur, LUTs, noise gates, and compressors.
 The software preview compositor applies visual filters for color correction,
 chroma key, crop/pad alpha crop, blur, sharpen, still-image mask/blend, and
-`.cube` LUT transforms to source input pixels. Audio filter families remain
-explicit deferred diagnostics.
+`.cube` LUT transforms to source input pixels. The simulated audio graph applies
+audio gain, noise gate, and compressor filters to audio meter runtime levels;
+real captured audio mixing remains deferred.
 
 The software preview compositor can decode local still-image `image_media`
 sources when `media_type = "image"`. It supports PNG, JPEG, WebP, and the first
@@ -59,7 +60,9 @@ contract and validation layer only; it does not start platform capture.
 `AudioMixerPlan` maps visible audio meter sources to the master, monitor,
 recording, and stream buses. It carries gain, mute, monitoring, meter, and sync
 offset fields so the UI and future mixer engine agree on routing before real
-audio mixing is implemented.
+audio mixing is implemented. `AudioGraphRuntimeSnapshot` reports deterministic
+pre-filter and post-filter meter levels plus ordered audio filter diagnostics for
+`audio_gain`, `noise_gate`, and `compressor`.
 
 `PerformanceTelemetryPlan` maps enabled compositor render targets to frame
 budget, render budget, encode budget, dropped-frame tolerance, latency ceiling,

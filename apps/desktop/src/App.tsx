@@ -73,6 +73,7 @@ import {
 } from "react";
 import type {
   AppSettings,
+  AudioFilterRuntimeMetadata,
   AudioGraphRuntimeSnapshot,
   AudioGraphRuntimeSource,
   AuditLogEntry,
@@ -1147,6 +1148,10 @@ function filterRuntimeStatusLabel(status: string | null | undefined): string {
   return (status ?? "pending").replaceAll("_", " ");
 }
 
+function isAudioSourceFilterKind(kind: SceneSourceFilterKind): boolean {
+  return kind === "audio_gain" || kind === "noise_gate" || kind === "compressor";
+}
+
 function filterRuntimeSummary(
   filters: Array<{ status?: string | null }>,
 ): { label: string; tone: "green" | "red" | "amber" | "muted" } {
@@ -1223,6 +1228,29 @@ function formatAudioLevel(value: number | null | undefined): string {
     return "-90.0 dB";
   }
   return `${value.toFixed(1)} dB`;
+}
+
+function formatAudioDelta(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "0.0 dB";
+  }
+  return `${value >= 0 ? "+" : ""}${value.toFixed(1)} dB`;
+}
+
+function audioFilterAdjustmentLabel(
+  filter: Pick<
+    AudioFilterRuntimeMetadata,
+    "attenuation_db" | "gain_reduction_db" | "level_change_db"
+  > | null,
+): string {
+  if (!filter) return "pending";
+  if (filter.gain_reduction_db && filter.gain_reduction_db > 0) {
+    return `GR ${formatAudioLevel(filter.gain_reduction_db)}`;
+  }
+  if (filter.attenuation_db && filter.attenuation_db > 0) {
+    return `Att ${formatAudioLevel(filter.attenuation_db)}`;
+  }
+  return `Delta ${formatAudioDelta(filter.level_change_db)}`;
 }
 
 function App() {
@@ -6552,6 +6580,10 @@ function DesignerPage(props: {
               }
               source={props.selectedSource}
             />
+            <AudioFilterRuntimePanel
+              audioGraphSource={selectedAudioGraphSource}
+              source={props.selectedSource}
+            />
             <FilterRuntimePanel
               node={selectedRuntimeNode}
               source={props.selectedSource}
@@ -6957,11 +6989,112 @@ function TextRuntimePanel(props: {
   );
 }
 
+function AudioFilterRuntimePanel(props: {
+  audioGraphSource: AudioGraphRuntimeSource | null;
+  source: SceneSource;
+}) {
+  if (props.source.kind !== "audio_meter") return null;
+  const configuredFilters = sortedSceneSourceFilters(props.source.filters ?? []).filter(
+    (filter) => isAudioSourceFilterKind(filter.kind),
+  );
+  if (configuredFilters.length === 0) return null;
+
+  const runtimeById = new Map(
+    (props.audioGraphSource?.filters ?? []).map((filter) => [filter.id, filter]),
+  );
+  const rows = configuredFilters.map((filter) => {
+    const runtime = runtimeById.get(filter.id);
+    return {
+      id: filter.id,
+      name: filter.name,
+      kind: filter.kind,
+      order: filter.order,
+      status: runtime?.status ?? "pending",
+      detail:
+        runtime?.status_detail ??
+        "Waiting for the next audio graph snapshot to evaluate this filter.",
+      runtime,
+    };
+  });
+  const summary = filterRuntimeSummary(rows);
+  const sourceLevel = props.audioGraphSource;
+
+  return (
+    <div
+      className="audio-filter-runtime-panel"
+      data-testid="designer-audio-filter-runtime"
+    >
+      <div className="runtime-binding-header">
+        <div>
+          <strong>Audio Filter Runtime</strong>
+          <span>
+            {configuredFilters.length} configured /{" "}
+            {props.audioGraphSource?.filters.length ?? 0} runtime result(s)
+          </span>
+        </div>
+        <Pill tone={summary.tone}>{summary.label}</Pill>
+      </div>
+      <div className="designer-preview-meta">
+        <KeyValue
+          label="Pre"
+          value={formatAudioLevel(sourceLevel?.pre_filter_level_db)}
+        />
+        <KeyValue
+          label="Post"
+          value={formatAudioLevel(sourceLevel?.post_filter_level_db)}
+        />
+        <KeyValue
+          label="Peak"
+          value={formatAudioLevel(sourceLevel?.post_filter_peak_db)}
+        />
+        <KeyValue
+          label="Delta"
+          value={formatAudioDelta(
+            sourceLevel
+              ? sourceLevel.post_filter_level_db - sourceLevel.pre_filter_level_db
+              : 0,
+          )}
+        />
+      </div>
+      <div className="filter-runtime-list">
+        {rows.map((filter) => (
+          <div className="filter-runtime-row audio-filter-runtime-row" key={filter.id}>
+            <div>
+              <strong>{filter.name}</strong>
+              <span>{sceneFilterKindLabels[filter.kind]}</span>
+            </div>
+            <div>
+              <Pill tone={filterRuntimeStatusTone(filter.status)}>
+                {filterRuntimeStatusLabel(filter.status)}
+              </Pill>
+              <code>#{filter.order}</code>
+            </div>
+            <div className="audio-filter-levels">
+              <span>
+                {formatAudioLevel(filter.runtime?.input_level_db)} to{" "}
+                {formatAudioLevel(filter.runtime?.output_level_db)}
+              </span>
+              <span>{audioFilterAdjustmentLabel(filter.runtime ?? null)}</span>
+            </div>
+            {filter.runtime?.control_summary && (
+              <span>{filter.runtime.control_summary}</span>
+            )}
+            <span>{filter.detail}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function FilterRuntimePanel(props: {
   node: CompositorEvaluatedNode | null;
   source: SceneSource;
 }) {
-  const configuredFilters = sortedSceneSourceFilters(props.source.filters ?? []);
+  const configuredFilters = sortedSceneSourceFilters(props.source.filters ?? []).filter(
+    (filter) =>
+      props.source.kind !== "audio_meter" || !isAudioSourceFilterKind(filter.kind),
+  );
   if (configuredFilters.length === 0) return null;
 
   const runtimeById = new Map(

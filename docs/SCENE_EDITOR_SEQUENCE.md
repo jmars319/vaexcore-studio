@@ -34,8 +34,8 @@ foundation to OBS-class scene editing and output.
     availability, capture-frame plan bindings, and audio source routing fields;
     real audio capture is not started.
 15. Audio mixer model, meters, and routing: started with serializable mixer
-    buses, gain/mute/monitor/sync controls, and pipeline validation; real audio
-    mixing and live meters are not started.
+    buses, gain/mute/monitor/sync controls, simulated pre/post-filter levels,
+    and pipeline validation; real audio mixing and live meters are not started.
 16. Image and media source engine: started with real local still-image decode
     for PNG, JPEG, WebP, and first-frame GIF preview rendering. Video media
     playback remains placeholder-only.
@@ -64,7 +64,8 @@ foundation to OBS-class scene editing and output.
     compositor graph propagation, first-pass Designer filter chain editing, and
     software preview execution for color correction, chroma key, crop/pad alpha
     crop, blur, sharpen, still-image mask/blend, and `.cube` LUT transforms.
-    Audio filter execution and output pipeline filter parity remain deferred.
+    Simulated audio graph execution is done for audio gain, noise gate, and
+    compressor filters; output pipeline filter parity remains deferred.
 23. Scene transitions and transition preview: done for offline editor V1 with
     persisted transition contracts, validation, Designer controls, from/to scene
     selection, scrub/playback controls, and deterministic placeholder preview
@@ -138,7 +139,8 @@ smoke coverage. It remains a software placeholder preview until real capture
 providers are connected.
 
 Phase H audio foundation, covering steps 71-80, now has an audio graph runtime
-snapshot, simulated meter levels, gain/mute/monitor/sync metadata, runtime
+snapshot, simulated pre/post-filter meter levels, gain/mute/monitor/sync
+metadata, audio gain/noise gate/compressor filter diagnostics, runtime
 validation, API/SDK/Desktop client access, and Designer meter displays in the
 preview and Inspector. The meters are deterministic simulation, not live device
 audio capture.

@@ -1174,6 +1174,7 @@ nav {
 .runtime-binding-panel,
 .image-asset-runtime-panel,
 .text-runtime-panel,
+.audio-filter-runtime-panel,
 .filter-runtime-panel {
   display: grid;
   gap: 10px;
@@ -1209,7 +1210,8 @@ nav {
 }
 
 .image-asset-runtime-panel .designer-preview-meta,
-.text-runtime-panel .designer-preview-meta {
+.text-runtime-panel .designer-preview-meta,
+.audio-filter-runtime-panel .designer-preview-meta {
   margin-top: 0;
 }
 
@@ -1244,6 +1246,14 @@ nav {
 .filter-runtime-row span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.audio-filter-levels {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .source-filter-editor {

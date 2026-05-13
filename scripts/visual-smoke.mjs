@@ -196,6 +196,45 @@ const targets = [
     ],
   },
   {
+    name: "designer-audio-filter-runtime",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "click",
+        selector: '[data-testid="designer-source-select"][data-source-id="source-mic-meter"]',
+      },
+      {
+        type: "select",
+        selector: '[data-testid="designer-new-source-filter-kind"]',
+        value: "audio_gain",
+      },
+      {
+        type: "click",
+        selector: '[data-testid="designer-add-source-filter"]',
+      },
+      {
+        type: "wait",
+        ms: 1200,
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-audio-filter-runtime\\"]"))',
+        message: "Designer audio filter runtime panel did not render.",
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelector("[data-testid=\\"designer-audio-filter-runtime\\"]")?.textContent?.includes("Audio Gain")',
+        message: "Designer audio filter runtime panel did not show the added audio filter.",
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelector("[data-testid=\\"designer-audio-filter-runtime\\"]")?.textContent?.includes("Post")',
+        message: "Designer audio filter runtime panel did not show post-filter level metadata.",
+      },
+    ],
+  },
+  {
     name: "designer-filter-mask-blend",
     path: "/?section=designer",
     minBytes: 50_000,
