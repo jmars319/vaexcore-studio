@@ -32,8 +32,9 @@ pub use compositor::{
     CompositorNode, CompositorNodeRole, CompositorNodeStatus, CompositorOutput, CompositorRect,
     CompositorRenderPlan, CompositorRenderTarget, CompositorRenderTargetKind,
     CompositorRenderedFrame, CompositorRenderedTarget, CompositorRendererKind, CompositorScaleMode,
-    CompositorTransform, CompositorValidation, SoftwareCompositorFrame,
-    SoftwareCompositorInputFrame, SoftwareCompositorRenderResult,
+    CompositorTransform, CompositorValidation, SoftwareCompositorAssetMetadata,
+    SoftwareCompositorAssetStatus, SoftwareCompositorFrame, SoftwareCompositorInputFrame,
+    SoftwareCompositorRenderResult,
 };
 pub use events::{StudioEvent, StudioEventKind};
 pub use performance::{

@@ -1,5 +1,12 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
+use image::ImageReader;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -160,6 +167,9 @@ pub struct CompositorEvaluatedNode {
     pub name: String,
     pub role: CompositorNodeRole,
     pub status: CompositorNodeStatus,
+    pub status_detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<SoftwareCompositorAssetMetadata>,
     pub rect: CompositorRect,
     pub crop: SceneCrop,
     pub rotation_degrees: f64,
@@ -208,8 +218,40 @@ pub struct SoftwareCompositorInputFrame {
     pub frame_format: CompositorFrameFormat,
     pub status: CompositorNodeStatus,
     pub status_detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<SoftwareCompositorAssetMetadata>,
     pub checksum: u64,
     pub pixels: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SoftwareCompositorAssetStatus {
+    Decoded,
+    MissingFile,
+    UnsupportedExtension,
+    DecodeFailed,
+    VideoPlaceholder,
+    NoAsset,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SoftwareCompositorAssetMetadata {
+    pub uri: String,
+    pub status: SoftwareCompositorAssetStatus,
+    pub status_detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checksum: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_unix_ms: Option<u64>,
+    #[serde(default)]
+    pub cache_hit: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -218,6 +260,31 @@ pub struct SoftwareCompositorRenderResult {
     pub input_frames: Vec<SoftwareCompositorInputFrame>,
     pub pixel_frames: Vec<SoftwareCompositorFrame>,
 }
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct ImageAssetCacheKey {
+    path: String,
+    modified_unix_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+struct CachedDecodedImage {
+    width: u32,
+    height: u32,
+    format: String,
+    checksum: u64,
+    pixels: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct DecodedImageAsset {
+    modified_unix_ms: u64,
+    cache_hit: bool,
+    image: CachedDecodedImage,
+}
+
+static IMAGE_ASSET_CACHE: OnceLock<Mutex<HashMap<ImageAssetCacheKey, CachedDecodedImage>>> =
+    OnceLock::new();
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct CompositorValidation {
@@ -536,19 +603,19 @@ pub fn render_software_compositor_frame(
     plan: &CompositorRenderPlan,
     frame_index: u64,
 ) -> SoftwareCompositorRenderResult {
-    let mut frame = evaluate_compositor_frame(plan, frame_index);
-    frame.renderer = CompositorRendererKind::Software;
     let background = parse_background_color(&plan.graph.output.background_color);
     let input_frames = build_software_compositor_input_frames(&plan.graph);
     let input_frame_by_source = input_frames
         .iter()
         .map(|input| (input.source_id.as_str(), input))
         .collect::<HashMap<_, _>>();
+    let mut frame = evaluate_software_compositor_frame(plan, frame_index, &input_frame_by_source);
     let pixel_frames = frame
         .targets
         .iter()
         .map(|target| render_software_target(target, background, &input_frame_by_source))
         .collect();
+    apply_software_input_validation(&mut frame.validation, &input_frames);
 
     SoftwareCompositorRenderResult {
         frame,
@@ -568,20 +635,77 @@ pub fn build_software_compositor_input_frames(
         .collect()
 }
 
+fn evaluate_software_compositor_frame(
+    plan: &CompositorRenderPlan,
+    frame_index: u64,
+    input_frames: &HashMap<&str, &SoftwareCompositorInputFrame>,
+) -> CompositorRenderedFrame {
+    let mut frame = evaluate_compositor_frame(plan, frame_index);
+    frame.renderer = CompositorRendererKind::Software;
+
+    for rendered_target in &mut frame.targets {
+        let Some(plan_target) = plan
+            .targets
+            .iter()
+            .find(|target| target.id == rendered_target.target_id)
+        else {
+            continue;
+        };
+        for node in &mut rendered_target.nodes {
+            let Some(input_frame) = input_frames.get(node.source_id.as_str()) else {
+                continue;
+            };
+            if let Some(graph_node) = plan
+                .graph
+                .nodes
+                .iter()
+                .find(|candidate| candidate.source_id == node.source_id)
+            {
+                *node = evaluate_node_for_target_with_input(
+                    graph_node,
+                    &plan.graph,
+                    plan_target,
+                    Some(input_frame),
+                );
+            }
+        }
+    }
+
+    frame
+}
+
 fn evaluate_node_for_target(
     node: &CompositorNode,
     graph: &CompositorGraph,
     target: &CompositorRenderTarget,
 ) -> CompositorEvaluatedNode {
+    evaluate_node_for_target_with_input(node, graph, target, None)
+}
+
+fn evaluate_node_for_target_with_input(
+    node: &CompositorNode,
+    graph: &CompositorGraph,
+    target: &CompositorRenderTarget,
+    input_frame: Option<&SoftwareCompositorInputFrame>,
+) -> CompositorEvaluatedNode {
     let transform = effective_node_transform(node, graph);
-    let source_rect = node_bounds_rect(&transform, node);
+    let source_rect = node_bounds_rect(&transform, node, input_frame);
     let (scale_x, scale_y, offset_x, offset_y) = target_mapping(&graph.output, target);
+    let status = input_frame
+        .map(|frame| frame.status.clone())
+        .unwrap_or_else(|| node.status.clone());
+    let status_detail = input_frame
+        .map(|frame| frame.status_detail.clone())
+        .unwrap_or_else(|| node.status_detail.clone());
+    let asset = input_frame.and_then(|frame| frame.asset.clone());
     CompositorEvaluatedNode {
         node_id: node.id.clone(),
         source_id: node.source_id.clone(),
         name: node.name.clone(),
         role: node.role.clone(),
-        status: node.status.clone(),
+        status,
+        status_detail,
+        asset,
         rect: CompositorRect {
             x: offset_x + source_rect.x * scale_x,
             y: offset_y + source_rect.y * scale_y,
@@ -600,14 +724,18 @@ fn evaluate_node_for_target(
     }
 }
 
-fn node_bounds_rect(transform: &CompositorTransform, node: &CompositorNode) -> CompositorRect {
+fn node_bounds_rect(
+    transform: &CompositorTransform,
+    node: &CompositorNode,
+    input_frame: Option<&SoftwareCompositorInputFrame>,
+) -> CompositorRect {
     let bounds = CompositorRect {
         x: transform.position.x,
         y: transform.position.y,
         width: transform.size.width,
         height: transform.size.height,
     };
-    let native_size = node_native_size(node, transform);
+    let native_size = node_native_size(node, transform, input_frame);
 
     match node.scale_mode {
         CompositorScaleMode::Stretch => bounds,
@@ -648,16 +776,27 @@ fn centered_rect(bounds: &CompositorRect, width: f64, height: f64) -> Compositor
     }
 }
 
-fn node_native_size(node: &CompositorNode, transform: &CompositorTransform) -> SceneSize {
+fn node_native_size(
+    node: &CompositorNode,
+    transform: &CompositorTransform,
+    input_frame: Option<&SoftwareCompositorInputFrame>,
+) -> SceneSize {
     let size = match node.source_kind {
         SceneSourceKind::Display | SceneSourceKind::Window | SceneSourceKind::Camera => {
             config_size(&node.config, "resolution")
         }
+        SceneSourceKind::ImageMedia => input_frame.and_then(|frame| {
+            if frame.status == CompositorNodeStatus::Ready {
+                Some(SceneSize {
+                    width: f64::from(frame.width.max(1)),
+                    height: f64::from(frame.height.max(1)),
+                })
+            } else {
+                None
+            }
+        }),
         SceneSourceKind::BrowserOverlay => config_size(&node.config, "viewport"),
-        SceneSourceKind::ImageMedia
-        | SceneSourceKind::AudioMeter
-        | SceneSourceKind::Text
-        | SceneSourceKind::Group => None,
+        SceneSourceKind::AudioMeter | SceneSourceKind::Text | SceneSourceKind::Group => None,
     }
     .unwrap_or_else(|| transform.size.clone());
 
@@ -676,6 +815,15 @@ fn config_size(config: &serde_json::Value, key: &str) -> Option<SceneSize> {
     } else {
         None
     }
+}
+
+fn config_value_string(config: &serde_json::Value, key: &str) -> Option<String> {
+    config
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn effective_node_transform(node: &CompositorNode, graph: &CompositorGraph) -> CompositorTransform {
@@ -831,12 +979,106 @@ fn draw_node(
 }
 
 fn software_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFrame {
+    if node.source_kind == SceneSourceKind::ImageMedia {
+        return image_media_input_frame_for_node(node);
+    }
+
+    placeholder_input_frame_for_node(node, node.status.clone(), node.status_detail.clone(), None)
+}
+
+fn image_media_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFrame {
+    let asset_uri = config_value_string(&node.config, "asset_uri").unwrap_or_default();
+    if asset_uri.trim().is_empty() {
+        let metadata = asset_metadata(
+            asset_uri,
+            SoftwareCompositorAssetStatus::NoAsset,
+            "No local image asset has been selected.".to_string(),
+            None,
+        );
+        return placeholder_input_frame_for_node(
+            node,
+            CompositorNodeStatus::Placeholder,
+            "No local image asset has been selected.".to_string(),
+            Some(metadata),
+        );
+    }
+
+    let media_type =
+        config_value_string(&node.config, "media_type").unwrap_or_else(|| "image".into());
+    if media_type != "image" {
+        let metadata = asset_metadata(
+            asset_uri.clone(),
+            SoftwareCompositorAssetStatus::VideoPlaceholder,
+            "Video media decode/playback is deferred for this source.".to_string(),
+            None,
+        );
+        return placeholder_input_frame_for_node(
+            node,
+            CompositorNodeStatus::Placeholder,
+            "Video media decode/playback is deferred for this source.".to_string(),
+            Some(metadata),
+        );
+    }
+
+    match decode_image_asset(&asset_uri) {
+        Ok(decoded) => decoded_image_input_frame(node, asset_uri, decoded),
+        Err(metadata) => placeholder_input_frame_for_node(
+            node,
+            CompositorNodeStatus::Placeholder,
+            metadata.status_detail.clone(),
+            Some(metadata),
+        ),
+    }
+}
+
+fn decoded_image_input_frame(
+    node: &CompositorNode,
+    asset_uri: String,
+    decoded: DecodedImageAsset,
+) -> SoftwareCompositorInputFrame {
+    let metadata = SoftwareCompositorAssetMetadata {
+        uri: asset_uri,
+        status: SoftwareCompositorAssetStatus::Decoded,
+        status_detail: format!(
+            "Decoded {} image {}x{}.",
+            decoded.image.format, decoded.image.width, decoded.image.height
+        ),
+        format: Some(decoded.image.format.clone()),
+        width: Some(decoded.image.width),
+        height: Some(decoded.image.height),
+        checksum: Some(decoded.image.checksum),
+        modified_unix_ms: Some(decoded.modified_unix_ms),
+        cache_hit: decoded.cache_hit,
+    };
+
+    SoftwareCompositorInputFrame {
+        source_id: node.source_id.clone(),
+        source_kind: node.source_kind.clone(),
+        width: decoded.image.width,
+        height: decoded.image.height,
+        frame_format: CompositorFrameFormat::Rgba8,
+        status: CompositorNodeStatus::Ready,
+        status_detail: metadata.status_detail.clone(),
+        asset: Some(metadata),
+        checksum: decoded.image.checksum,
+        pixels: decoded.image.pixels,
+    }
+}
+
+fn placeholder_input_frame_for_node(
+    node: &CompositorNode,
+    status: CompositorNodeStatus,
+    status_detail: String,
+    asset: Option<SoftwareCompositorAssetMetadata>,
+) -> SoftwareCompositorInputFrame {
     let size = input_frame_size(node);
     let width = size.width.max(1.0).round().min(3840.0) as u32;
     let height = size.height.max(1.0).round().min(2160.0) as u32;
     let mut pixels = vec![0; width as usize * height as usize * 4];
-    let base = node_base_color(node);
-    let accent = node_accent_color(node);
+    let mut style_node = node.clone();
+    style_node.status = status.clone();
+    let base = node_base_color(&style_node);
+    let accent = node_accent_color(&style_node);
     let id_tint = stable_source_tint(&node.source_id);
 
     for y in 0..height as usize {
@@ -851,7 +1093,7 @@ fn software_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInp
             if diagonal {
                 color = mix_color(color, [244, 248, 255, 255], 0.16);
             }
-            if node.status != CompositorNodeStatus::Ready {
+            if status != CompositorNodeStatus::Ready {
                 color = mix_color(color, [140, 148, 166, 255], 0.34);
             }
             let offset = (y * width as usize + x) * 4;
@@ -869,11 +1111,37 @@ fn software_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInp
         width,
         height,
         frame_format: CompositorFrameFormat::Rgba8,
-        status: node.status.clone(),
-        status_detail: node.status_detail.clone(),
+        status,
+        status_detail,
+        asset,
         checksum,
         pixels,
     }
+}
+
+fn apply_software_input_validation(
+    validation: &mut CompositorValidation,
+    input_frames: &[SoftwareCompositorInputFrame],
+) {
+    for input in input_frames {
+        let Some(asset) = &input.asset else {
+            continue;
+        };
+        match asset.status {
+            SoftwareCompositorAssetStatus::Decoded => {}
+            SoftwareCompositorAssetStatus::MissingFile
+            | SoftwareCompositorAssetStatus::UnsupportedExtension
+            | SoftwareCompositorAssetStatus::DecodeFailed
+            | SoftwareCompositorAssetStatus::VideoPlaceholder
+            | SoftwareCompositorAssetStatus::NoAsset => {
+                validation.warnings.push(format!(
+                    "{} image/media asset is using a placeholder: {}",
+                    input.source_id, asset.status_detail
+                ));
+            }
+        }
+    }
+    validation.ready = validation.errors.is_empty();
 }
 
 fn input_frame_size(node: &CompositorNode) -> SceneSize {
@@ -886,8 +1154,176 @@ fn input_frame_size(node: &CompositorNode) -> SceneSize {
             width: node.transform.size.width.max(64.0),
             height: node.transform.size.height.max(64.0),
         },
-        _ => node_native_size(node, &node.transform),
+        _ => node_native_size(node, &node.transform, None),
     }
+}
+
+fn decode_image_asset(
+    asset_uri: &str,
+) -> Result<DecodedImageAsset, SoftwareCompositorAssetMetadata> {
+    let Some(path) = asset_uri_path(asset_uri) else {
+        return Err(asset_metadata(
+            asset_uri.to_string(),
+            SoftwareCompositorAssetStatus::NoAsset,
+            "No local image asset has been selected.".to_string(),
+            None,
+        ));
+    };
+    let normalized_path = normalized_asset_path(&path);
+    let Some(format) = supported_image_extension(&path) else {
+        return Err(asset_metadata(
+            asset_uri.to_string(),
+            SoftwareCompositorAssetStatus::UnsupportedExtension,
+            "Unsupported image extension. Supported image assets are png, jpg, jpeg, webp, and gif."
+                .to_string(),
+            None,
+        ));
+    };
+    let metadata = match fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(_) => {
+            return Err(asset_metadata(
+                asset_uri.to_string(),
+                SoftwareCompositorAssetStatus::MissingFile,
+                format!("Image asset file does not exist: {normalized_path}"),
+                Some(format),
+            ));
+        }
+    };
+    if !metadata.is_file() {
+        return Err(asset_metadata(
+            asset_uri.to_string(),
+            SoftwareCompositorAssetStatus::MissingFile,
+            format!("Image asset path is not a file: {normalized_path}"),
+            Some(format),
+        ));
+    }
+    let modified_unix_ms = metadata
+        .modified()
+        .ok()
+        .and_then(system_time_unix_ms)
+        .unwrap_or(0);
+    let key = ImageAssetCacheKey {
+        path: normalized_path.clone(),
+        modified_unix_ms,
+    };
+    if let Some(image) = cached_image_asset(&key) {
+        return Ok(DecodedImageAsset {
+            modified_unix_ms,
+            cache_hit: true,
+            image,
+        });
+    }
+
+    let image = match ImageReader::open(&path)
+        .and_then(|reader| reader.with_guessed_format())
+        .map_err(|error| error.to_string())
+        .and_then(|reader| reader.decode().map_err(|error| error.to_string()))
+    {
+        Ok(image) => image,
+        Err(error) => {
+            return Err(asset_metadata(
+                asset_uri.to_string(),
+                SoftwareCompositorAssetStatus::DecodeFailed,
+                format!("Image asset could not be decoded: {error}"),
+                Some(format),
+            ));
+        }
+    };
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let pixels = rgba.into_raw();
+    let decoded = CachedDecodedImage {
+        width,
+        height,
+        format,
+        checksum: checksum_pixels(&pixels),
+        pixels,
+    };
+    store_cached_image_asset(key, decoded.clone());
+
+    Ok(DecodedImageAsset {
+        modified_unix_ms,
+        cache_hit: false,
+        image: decoded,
+    })
+}
+
+fn asset_uri_path(asset_uri: &str) -> Option<PathBuf> {
+    let trimmed = asset_uri.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = trimmed.strip_prefix("file://").unwrap_or(trimmed);
+    Some(PathBuf::from(path))
+}
+
+fn normalized_asset_path(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
+fn supported_image_extension(path: &Path) -> Option<String> {
+    let extension = path.extension()?.to_string_lossy().to_ascii_lowercase();
+    match extension.as_str() {
+        "png" | "jpg" | "jpeg" | "webp" | "gif" => Some(extension),
+        _ => None,
+    }
+}
+
+fn cached_image_asset(key: &ImageAssetCacheKey) -> Option<CachedDecodedImage> {
+    IMAGE_ASSET_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(key).cloned())
+}
+
+fn store_cached_image_asset(key: ImageAssetCacheKey, image: CachedDecodedImage) {
+    let Ok(mut cache) = IMAGE_ASSET_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    else {
+        return;
+    };
+    cache.retain(|existing_key, _| {
+        existing_key.path != key.path || existing_key.modified_unix_ms == key.modified_unix_ms
+    });
+    cache.insert(key, image);
+    if cache.len() > 64 {
+        let Some(first_key) = cache.keys().next().cloned() else {
+            return;
+        };
+        cache.remove(&first_key);
+    }
+}
+
+fn asset_metadata(
+    uri: String,
+    status: SoftwareCompositorAssetStatus,
+    status_detail: String,
+    format: Option<String>,
+) -> SoftwareCompositorAssetMetadata {
+    SoftwareCompositorAssetMetadata {
+        uri,
+        status,
+        status_detail,
+        format,
+        width: None,
+        height: None,
+        checksum: None,
+        modified_unix_ms: None,
+        cache_hit: false,
+    }
+}
+
+fn system_time_unix_ms(value: SystemTime) -> Option<u64> {
+    value
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
 }
 
 fn input_frame_pixel(
@@ -1390,6 +1826,9 @@ fn validate_non_negative(value: f64, label: &str, errors: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::{ImageFormat, Rgba, RgbaImage};
+    use std::{thread, time::Duration};
+    use tempfile::tempdir;
 
     #[test]
     fn compositor_graph_preserves_scene_order_and_status() {
@@ -1669,6 +2108,191 @@ mod tests {
     }
 
     #[test]
+    fn software_compositor_decodes_supported_image_assets() {
+        for (extension, format) in [
+            ("png", ImageFormat::Png),
+            ("jpg", ImageFormat::Jpeg),
+            ("webp", ImageFormat::WebP),
+            ("gif", ImageFormat::Gif),
+        ] {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join(format!("asset.{extension}"));
+            write_test_image(&path, format, [220, 20, 40, 255]);
+
+            let result = render_test_image_source(&path.display().to_string(), None);
+            let input = result
+                .input_frames
+                .iter()
+                .find(|frame| frame.source_id == "source-image")
+                .unwrap();
+            let asset = input.asset.as_ref().unwrap();
+
+            assert_eq!(input.status, CompositorNodeStatus::Ready);
+            assert_eq!(asset.status, SoftwareCompositorAssetStatus::Decoded);
+            assert_eq!(asset.width, Some(4));
+            assert_eq!(asset.height, Some(4));
+            assert_eq!(asset.format.as_deref(), Some(extension));
+            assert!(asset.checksum.is_some_and(|checksum| checksum > 0));
+            assert!(result.frame.validation.ready);
+            assert_ne!(
+                software_test_pixel(&result.pixel_frames[0], 4, 4),
+                [5, 7, 17, 255]
+            );
+        }
+    }
+
+    #[test]
+    fn software_compositor_reports_image_asset_placeholder_states() {
+        let dir = tempdir().unwrap();
+        let missing_path = dir.path().join("missing.png");
+        let missing = render_test_image_source(&missing_path.display().to_string(), None);
+        let missing_asset = missing.input_frames[0].asset.as_ref().unwrap();
+        assert_eq!(
+            missing_asset.status,
+            SoftwareCompositorAssetStatus::MissingFile
+        );
+        assert_eq!(
+            missing.input_frames[0].status,
+            CompositorNodeStatus::Placeholder
+        );
+        assert!(!missing.frame.validation.warnings.is_empty());
+
+        let unsupported_path = dir.path().join("asset.txt");
+        fs::write(&unsupported_path, b"not an image").unwrap();
+        let unsupported = render_test_image_source(&unsupported_path.display().to_string(), None);
+        assert_eq!(
+            unsupported.input_frames[0].asset.as_ref().unwrap().status,
+            SoftwareCompositorAssetStatus::UnsupportedExtension
+        );
+
+        let broken_path = dir.path().join("broken.png");
+        fs::write(&broken_path, b"not a png").unwrap();
+        let broken = render_test_image_source(&broken_path.display().to_string(), None);
+        assert_eq!(
+            broken.input_frames[0].asset.as_ref().unwrap().status,
+            SoftwareCompositorAssetStatus::DecodeFailed
+        );
+
+        let video = render_test_image_source("clip.webm", Some("video"));
+        assert_eq!(
+            video.input_frames[0].asset.as_ref().unwrap().status,
+            SoftwareCompositorAssetStatus::VideoPlaceholder
+        );
+    }
+
+    #[test]
+    fn software_compositor_uses_decoded_image_dimensions_for_bounds_modes() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tall.png");
+        write_test_image_size(&path, ImageFormat::Png, [40, 220, 80, 255], 2, 4);
+        let mut result = render_test_image_source(&path.display().to_string(), None);
+        let node = result.frame.targets[0]
+            .nodes
+            .iter()
+            .find(|node| node.source_id == "source-image")
+            .unwrap();
+        assert_eq!(node.rect.width, 8.0);
+        assert_eq!(node.rect.height, 8.0);
+
+        result = render_test_image_source_with_bounds(
+            &path.display().to_string(),
+            SceneSourceBoundsMode::Fit,
+            SceneSize {
+                width: 8.0,
+                height: 8.0,
+            },
+        );
+        let node = result.frame.targets[0]
+            .nodes
+            .iter()
+            .find(|node| node.source_id == "source-image")
+            .unwrap();
+        assert_eq!(node.rect.x, 2.0);
+        assert_eq!(node.rect.width, 4.0);
+        assert_eq!(node.rect.height, 8.0);
+        assert_eq!(node.asset.as_ref().unwrap().width, Some(2));
+        assert_ne!(result.pixel_frames[0].checksum, 0);
+    }
+
+    #[test]
+    fn software_compositor_invalidates_image_cache_when_file_changes() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cached.png");
+        write_test_image(&path, ImageFormat::Png, [255, 0, 0, 255]);
+
+        let first = render_test_image_source(&path.display().to_string(), None);
+        assert_eq!(
+            first.input_frames[0].asset.as_ref().unwrap().cache_hit,
+            false
+        );
+        let second = render_test_image_source(&path.display().to_string(), None);
+        assert_eq!(
+            second.input_frames[0].asset.as_ref().unwrap().cache_hit,
+            true
+        );
+
+        let first_checksum = first.input_frames[0].checksum;
+        wait_for_distinct_mtime(&path, || {
+            write_test_image(&path, ImageFormat::Png, [0, 0, 255, 255]);
+        });
+        let third = render_test_image_source(&path.display().to_string(), None);
+        assert_eq!(
+            third.input_frames[0].asset.as_ref().unwrap().cache_hit,
+            false
+        );
+        assert_ne!(third.input_frames[0].checksum, first_checksum);
+    }
+
+    #[test]
+    fn software_compositor_applies_crop_opacity_and_z_order_to_decoded_images() {
+        let dir = tempdir().unwrap();
+        let bottom_path = dir.path().join("bottom.png");
+        let top_path = dir.path().join("top.png");
+        write_test_image(&bottom_path, ImageFormat::Png, [0, 0, 255, 255]);
+        write_test_image(&top_path, ImageFormat::Png, [255, 0, 0, 255]);
+
+        let mut scene = test_image_scene(&bottom_path.display().to_string(), None);
+        scene.sources.push(SceneSource {
+            id: "source-top-image".to_string(),
+            name: "Top Image".to_string(),
+            kind: SceneSourceKind::ImageMedia,
+            position: ScenePoint { x: 0.0, y: 0.0 },
+            size: SceneSize {
+                width: 8.0,
+                height: 8.0,
+            },
+            crop: SceneCrop {
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+                left: 4.0,
+            },
+            rotation_degrees: 0.0,
+            opacity: 0.5,
+            visible: true,
+            locked: false,
+            z_index: 20,
+            bounds_mode: SceneSourceBoundsMode::Stretch,
+            filters: Vec::new(),
+            config: serde_json::json!({
+                "asset_uri": top_path.display().to_string(),
+                "media_type": "image"
+            }),
+        });
+        let result = render_test_scene(scene);
+        let left_pixel = software_test_pixel(&result.pixel_frames[0], 2, 4);
+        let right_pixel = software_test_pixel(&result.pixel_frames[0], 6, 4);
+
+        assert!(left_pixel[2] > left_pixel[0]);
+        assert!(right_pixel[0] > 100);
+        assert!(right_pixel[2] > 100);
+        assert!(result
+            .input_frames
+            .iter()
+            .all(|frame| frame.status == CompositorNodeStatus::Ready));
+    }
+
+    #[test]
     fn software_compositor_applies_crop_opacity_rotation_and_z_order() {
         let mut collection = crate::SceneCollection::default_collection(crate::now_utc());
         let scene = collection.scenes.first_mut().unwrap();
@@ -1736,6 +2360,112 @@ mod tests {
             .any(|node| node.source_id == "source-camera-placeholder"
                 && node.rotation_degrees == 12.0
                 && (node.opacity - 0.7).abs() < f64::EPSILON));
+    }
+
+    fn write_test_image(path: &Path, format: ImageFormat, color: [u8; 4]) {
+        write_test_image_size(path, format, color, 4, 4);
+    }
+
+    fn write_test_image_size(
+        path: &Path,
+        format: ImageFormat,
+        color: [u8; 4],
+        width: u32,
+        height: u32,
+    ) {
+        let image = RgbaImage::from_pixel(width, height, Rgba(color));
+        image::DynamicImage::ImageRgba8(image)
+            .save_with_format(path, format)
+            .unwrap();
+    }
+
+    fn render_test_image_source(
+        asset_uri: &str,
+        media_type: Option<&str>,
+    ) -> SoftwareCompositorRenderResult {
+        render_test_scene(test_image_scene(asset_uri, media_type))
+    }
+
+    fn render_test_image_source_with_bounds(
+        asset_uri: &str,
+        bounds_mode: SceneSourceBoundsMode,
+        size: SceneSize,
+    ) -> SoftwareCompositorRenderResult {
+        let mut scene = test_image_scene(asset_uri, None);
+        scene.sources[0].bounds_mode = bounds_mode;
+        scene.sources[0].size = size;
+        render_test_scene(scene)
+    }
+
+    fn test_image_scene(asset_uri: &str, media_type: Option<&str>) -> Scene {
+        Scene {
+            id: "scene-image".to_string(),
+            name: "Image Scene".to_string(),
+            canvas: crate::SceneCanvas {
+                width: 8,
+                height: 8,
+                background_color: "#050711".to_string(),
+            },
+            sources: vec![SceneSource {
+                id: "source-image".to_string(),
+                name: "Image".to_string(),
+                kind: SceneSourceKind::ImageMedia,
+                position: ScenePoint { x: 0.0, y: 0.0 },
+                size: SceneSize {
+                    width: 8.0,
+                    height: 8.0,
+                },
+                crop: SceneCrop {
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                },
+                rotation_degrees: 0.0,
+                opacity: 1.0,
+                visible: true,
+                locked: false,
+                z_index: 10,
+                bounds_mode: SceneSourceBoundsMode::Stretch,
+                filters: Vec::new(),
+                config: serde_json::json!({
+                    "asset_uri": asset_uri,
+                    "media_type": media_type.unwrap_or("image")
+                }),
+            }],
+        }
+    }
+
+    fn render_test_scene(scene: Scene) -> SoftwareCompositorRenderResult {
+        let graph = build_compositor_graph(&scene);
+        let plan = build_compositor_render_plan(
+            &graph,
+            vec![compositor_render_target(
+                "preview",
+                "Preview",
+                CompositorRenderTargetKind::Preview,
+                8,
+                8,
+                30,
+            )],
+        );
+        render_software_compositor_frame(&plan, 0)
+    }
+
+    fn wait_for_distinct_mtime(path: &Path, write: impl Fn()) {
+        let before = fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        for _ in 0..8 {
+            thread::sleep(Duration::from_millis(25));
+            write();
+            let after = fs::metadata(path)
+                .and_then(|metadata| metadata.modified())
+                .ok();
+            if before != after {
+                return;
+            }
+        }
     }
 
     fn software_test_pixel(frame: &SoftwareCompositorFrame, x: usize, y: usize) -> [u8; 4] {

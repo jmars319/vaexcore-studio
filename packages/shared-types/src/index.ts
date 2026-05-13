@@ -503,6 +503,8 @@ export interface CompositorEvaluatedNode {
   name: string;
   role: CompositorNodeRole;
   status: CompositorNodeStatus;
+  status_detail: string;
+  asset?: SoftwareCompositorAssetMetadata | null;
   rect: CompositorRect;
   crop: SceneCrop;
   rotation_degrees: number;
@@ -528,6 +530,26 @@ export interface CompositorRenderedFrame {
   validation: CompositorValidation;
 }
 
+export type SoftwareCompositorAssetStatus =
+  | "decoded"
+  | "missing_file"
+  | "unsupported_extension"
+  | "decode_failed"
+  | "video_placeholder"
+  | "no_asset";
+
+export interface SoftwareCompositorAssetMetadata {
+  uri: string;
+  status: SoftwareCompositorAssetStatus;
+  status_detail: string;
+  format?: string | null;
+  width?: number | null;
+  height?: number | null;
+  checksum?: number | null;
+  modified_unix_ms?: number | null;
+  cache_hit: boolean;
+}
+
 export interface SoftwareCompositorInputFrame {
   source_id: string;
   source_kind: SceneSourceKind;
@@ -536,6 +558,7 @@ export interface SoftwareCompositorInputFrame {
   frame_format: CompositorFrameFormat;
   status: CompositorNodeStatus;
   status_detail: string;
+  asset?: SoftwareCompositorAssetMetadata | null;
   checksum: number;
   pixels: number[];
 }
@@ -4380,6 +4403,8 @@ function evaluateNodeForTarget(
     name: node.name,
     role: node.role,
     status: node.status,
+    status_detail: node.status_detail,
+    asset: null,
     rect: {
       x: offsetX + sourceRect.x * scaleX,
       y: offsetY + sourceRect.y * scaleY,
