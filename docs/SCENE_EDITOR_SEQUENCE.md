@@ -62,8 +62,10 @@ foundation to OBS-class scene editing and output.
     cleanup diagnostics. Browser audio, interactive overlay input, and output
     parity are not started.
 18. Text render engine with font controls: started with backend software
-    rasterization for current single-line text source fields. Multiline layout,
-    rich text, and platform font discovery are not started.
+    rasterization and expanded in Full Scene Designer Pass 9 with multiline
+    layout, line-height controls, optional local TTF/OTF font-file rendering,
+    basic stroke, shadow, and background fills. Rich text and platform font
+    discovery are not started.
 19. Groups, nesting, and parent transforms: done for offline editor V1 with
     group preview rendering, structured child management, group child
     validation, compositor parent/depth metadata, and first-pass nested
@@ -213,13 +215,13 @@ bundle import/export, app-data fallback bundles, validation, runtime refresh,
 deterministic placeholder transition preview, real local still-image preview
 pixels, FFmpeg-backed local video preview frames when FFmpeg is available,
 timeline-aware local video preview playback controls, backend-rendered
-single-line text pixels, optional browser overlay preview snapshots, software
-visual filter preview pixels, one-shot macOS display/window capture snapshots,
-and one-shot macOS camera snapshots through optional FFmpeg when source bindings
-and permissions are available. The remaining Scene Designer work starts
-persistent capture sessions, richer editor parity, readiness/soak validation,
-and the output handoff path; offline editor completion does not imply OBS-level
-encoder, plugin, or live-output parity.
+multiline text pixels with basic effects and optional font files, optional
+browser overlay preview snapshots, software visual filter preview pixels,
+one-shot macOS display/window capture snapshots, and one-shot macOS camera
+snapshots through optional FFmpeg when source bindings and permissions are
+available. The remaining Scene Designer work starts persistent capture sessions,
+readiness/soak validation, and the output handoff path; offline editor
+completion does not imply OBS-level encoder, plugin, or live-output parity.
 
 ## Validation Contract
 

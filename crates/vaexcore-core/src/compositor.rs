@@ -323,6 +323,26 @@ pub struct SoftwareCompositorTextMetadata {
     pub align: String,
     pub text_length: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_height: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_file_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow_offset_x: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow_offset_y: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_opacity: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rendered_bounds: Option<CompositorRect>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checksum: Option<u64>,
@@ -614,11 +634,23 @@ struct DecodedCubeLut {
 struct TextRenderRequest {
     text: String,
     requested_font_family: String,
+    font_file_uri: Option<String>,
     font_size: f64,
     color: [u8; 4],
     color_string: String,
     invalid_color: bool,
     align: TextAlign,
+    line_height: f64,
+    stroke_color: [u8; 4],
+    stroke_color_string: String,
+    stroke_width: f64,
+    shadow_color: [u8; 4],
+    shadow_color_string: String,
+    shadow_offset_x: f64,
+    shadow_offset_y: f64,
+    background_color: [u8; 4],
+    background_color_string: String,
+    background_opacity: f64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -626,6 +658,21 @@ enum TextAlign {
     Left,
     Center,
     Right,
+}
+
+#[derive(Clone, Debug)]
+struct TextFontChoice {
+    font: FontArc,
+    used_font_family: String,
+    fallback_detail: Option<String>,
+}
+
+struct TextGlyphDraw<'a> {
+    font: &'a FontArc,
+    glyphs: &'a [Glyph],
+    color: [u8; 4],
+    offset_x: f32,
+    offset_y: f32,
 }
 
 static IMAGE_ASSET_CACHE: OnceLock<Mutex<HashMap<ImageAssetCacheKey, CachedDecodedImage>>> =
@@ -2381,6 +2428,7 @@ fn text_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFr
             SoftwareCompositorTextStatus::Empty,
             "Text source is empty.".to_string(),
             &request,
+            SOFTWARE_TEXT_FONT_FAMILY,
             None,
             None,
         );
@@ -2402,6 +2450,7 @@ fn text_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFr
                 SoftwareCompositorTextStatus::Empty,
                 detail,
                 &request,
+                SOFTWARE_TEXT_FONT_FAMILY,
                 None,
                 None,
             );
@@ -2426,43 +2475,83 @@ fn render_text_source(
     let width = size.width.max(1.0).round().min(3840.0) as u32;
     let height = size.height.max(1.0).round().min(2160.0) as u32;
     let mut pixels = vec![0; width as usize * height as usize * 4];
-    let font = inter_font()?;
-    let glyphs = layout_text_glyphs(&font, request, width, height);
-
-    for glyph in glyphs {
-        let Some(outlined) = font.outline_glyph(glyph) else {
-            continue;
-        };
-        let bounds = outlined.px_bounds();
-        outlined.draw(|glyph_x, glyph_y, coverage| {
-            if coverage <= 0.0 {
-                return;
-            }
-            let x = glyph_x as i32 + bounds.min.x.floor() as i32;
-            let y = glyph_y as i32 + bounds.min.y.floor() as i32;
-            if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
-                return;
-            }
-            let offset = (y as usize * width as usize + x as usize) * 4;
-            let mut color = request.color;
-            color[3] = ((coverage * f32::from(color[3])).round()).clamp(0.0, 255.0) as u8;
-            blend_pixel(&mut pixels[offset..offset + 4], color);
-        });
+    let font_choice = text_font_choice(request)?;
+    if request.background_opacity > 0.0 {
+        let mut background = request.background_color;
+        background[3] =
+            (f64::from(background[3]) * request.background_opacity).clamp(0.0, 255.0) as u8;
+        fill_rgba(&mut pixels, background);
     }
+
+    let glyphs = layout_text_glyphs(&font_choice.font, request, width, height);
+    if request.shadow_offset_x != 0.0 || request.shadow_offset_y != 0.0 {
+        draw_text_glyphs(
+            &mut pixels,
+            width,
+            height,
+            TextGlyphDraw {
+                font: &font_choice.font,
+                glyphs: &glyphs,
+                color: request.shadow_color,
+                offset_x: request.shadow_offset_x as f32,
+                offset_y: request.shadow_offset_y as f32,
+            },
+        );
+    }
+    if request.stroke_width > 0.0 {
+        let radius = request.stroke_width.ceil().clamp(1.0, 12.0) as i32;
+        for offset_y in -radius..=radius {
+            for offset_x in -radius..=radius {
+                if offset_x == 0 && offset_y == 0 {
+                    continue;
+                }
+                if offset_x * offset_x + offset_y * offset_y > radius * radius {
+                    continue;
+                }
+                draw_text_glyphs(
+                    &mut pixels,
+                    width,
+                    height,
+                    TextGlyphDraw {
+                        font: &font_choice.font,
+                        glyphs: &glyphs,
+                        color: request.stroke_color,
+                        offset_x: offset_x as f32,
+                        offset_y: offset_y as f32,
+                    },
+                );
+            }
+        }
+    }
+    draw_text_glyphs(
+        &mut pixels,
+        width,
+        height,
+        TextGlyphDraw {
+            font: &font_choice.font,
+            glyphs: &glyphs,
+            color: request.color,
+            offset_x: 0.0,
+            offset_y: 0.0,
+        },
+    );
 
     let checksum = checksum_pixels(&pixels);
     let rendered_bounds = alpha_bounds(&pixels, width, height);
     let status = if request.invalid_color {
         SoftwareCompositorTextStatus::InvalidColor
-    } else if uses_font_fallback(&request.requested_font_family) {
+    } else if font_choice.fallback_detail.is_some()
+        || (request.font_file_uri.is_none() && uses_font_fallback(&request.requested_font_family))
+    {
         SoftwareCompositorTextStatus::FontFallback
     } else {
         SoftwareCompositorTextStatus::Rendered
     };
     let metadata = text_metadata(
         status,
-        text_status_detail(request),
+        text_status_detail(request, font_choice.fallback_detail.as_deref()),
         request,
+        &font_choice.used_font_family,
         rendered_bounds,
         Some(checksum),
     );
@@ -2494,48 +2583,90 @@ fn layout_text_glyphs(
 ) -> Vec<Glyph> {
     let scale = PxScale::from(request.font_size as f32);
     let scaled_font = font.as_scaled(scale);
-    let mut cursor_x = 0.0_f32;
-    let mut previous = None;
     let mut glyphs = Vec::new();
-
-    for character in request.text.chars() {
-        let glyph_id = font.glyph_id(character);
-        if let Some(previous_id) = previous {
-            cursor_x += scaled_font.kern(previous_id, glyph_id);
-        }
-        glyphs.push(Glyph {
-            id: glyph_id,
-            scale,
-            position: point(cursor_x, 0.0),
-        });
-        cursor_x += scaled_font.h_advance(glyph_id);
-        previous = Some(glyph_id);
-    }
-
-    let text_width = cursor_x.max(1.0);
-    let inset = (width as f32 * 0.08).clamp(2.0, 24.0);
-    let start_x = match request.align {
-        TextAlign::Left => inset,
-        TextAlign::Center => (width as f32 - text_width) / 2.0,
-        TextAlign::Right => width as f32 - inset - text_width,
-    };
+    let lines = text_lines(&request.text);
+    let line_height_px = (request.font_size * request.line_height).max(1.0) as f32;
     let ascent = scaled_font.ascent();
     let descent = scaled_font.descent();
     let text_height = (ascent - descent).max(1.0);
-    let baseline = ((height as f32 - text_height) / 2.0) + ascent;
+    let total_height = (line_height_px * lines.len().max(1) as f32).max(text_height);
+    let first_baseline =
+        ((height as f32 - total_height) / 2.0) + ascent + ((line_height_px - text_height) / 2.0);
 
-    for glyph in &mut glyphs {
-        glyph.position.x += start_x;
-        glyph.position.y += baseline;
+    for (line_index, line) in lines.iter().enumerate() {
+        let mut cursor_x = 0.0_f32;
+        let mut previous = None;
+        let mut line_glyphs = Vec::new();
+
+        for character in line.chars() {
+            let glyph_id = font.glyph_id(character);
+            if let Some(previous_id) = previous {
+                cursor_x += scaled_font.kern(previous_id, glyph_id);
+            }
+            line_glyphs.push(Glyph {
+                id: glyph_id,
+                scale,
+                position: point(cursor_x, 0.0),
+            });
+            cursor_x += scaled_font.h_advance(glyph_id);
+            previous = Some(glyph_id);
+        }
+
+        let text_width = cursor_x.max(1.0);
+        let inset = (width as f32 * 0.08).clamp(2.0, 24.0);
+        let start_x = match request.align {
+            TextAlign::Left => inset,
+            TextAlign::Center => (width as f32 - text_width) / 2.0,
+            TextAlign::Right => width as f32 - inset - text_width,
+        };
+        let baseline = first_baseline + line_index as f32 * line_height_px;
+        for glyph in &mut line_glyphs {
+            glyph.position.x += start_x;
+            glyph.position.y += baseline;
+        }
+        glyphs.extend(line_glyphs);
     }
 
     glyphs
+}
+
+fn draw_text_glyphs(pixels: &mut [u8], width: u32, height: u32, draw: TextGlyphDraw<'_>) {
+    for glyph in draw.glyphs {
+        let mut glyph = glyph.clone();
+        glyph.position.x += draw.offset_x;
+        glyph.position.y += draw.offset_y;
+        let Some(outlined) = draw.font.outline_glyph(glyph) else {
+            continue;
+        };
+        let bounds = outlined.px_bounds();
+        outlined.draw(|glyph_x, glyph_y, coverage| {
+            if coverage <= 0.0 {
+                return;
+            }
+            let x = glyph_x as i32 + bounds.min.x.floor() as i32;
+            let y = glyph_y as i32 + bounds.min.y.floor() as i32;
+            if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+                return;
+            }
+            let offset = (y as usize * width as usize + x as usize) * 4;
+            let mut color = draw.color;
+            color[3] = ((coverage * f32::from(color[3])).round()).clamp(0.0, 255.0) as u8;
+            blend_pixel(&mut pixels[offset..offset + 4], color);
+        });
+    }
+}
+
+fn fill_rgba(pixels: &mut [u8], color: [u8; 4]) {
+    for pixel in pixels.chunks_exact_mut(4) {
+        blend_pixel(pixel, color);
+    }
 }
 
 fn text_render_request(node: &CompositorNode) -> TextRenderRequest {
     let text = config_value_string(&node.config, "text").unwrap_or_default();
     let requested_font_family = config_value_string(&node.config, "font_family")
         .unwrap_or_else(|| SOFTWARE_TEXT_FONT_FAMILY.to_string());
+    let font_file_uri = config_value_string(&node.config, "font_file_uri");
     let font_size = config_value_number(&node.config, "font_size")
         .filter(|value| *value > 0.0)
         .unwrap_or_else(|| node.transform.size.height.max(1.0) * 0.58)
@@ -2553,15 +2684,57 @@ fn text_render_request(node: &CompositorNode) -> TextRenderRequest {
         "right" => TextAlign::Right,
         _ => TextAlign::Center,
     };
+    let line_height = config_value_number(&node.config, "line_height")
+        .unwrap_or(1.15)
+        .clamp(0.75, 3.0);
+    let stroke_color_value =
+        config_value_string(&node.config, "stroke_color").unwrap_or_else(|| "#050711".to_string());
+    let (stroke_color, stroke_color_string) = parse_text_color(&stroke_color_value)
+        .map(|color| (color, normalized_hex_color(color)))
+        .unwrap_or(([5, 7, 17, 255], "#050711".to_string()));
+    let stroke_width = config_value_number(&node.config, "stroke_width")
+        .unwrap_or(0.0)
+        .clamp(0.0, 24.0);
+    let shadow_color_value =
+        config_value_string(&node.config, "shadow_color").unwrap_or_else(|| "#000000".to_string());
+    let (shadow_color, shadow_color_string) = parse_text_color(&shadow_color_value)
+        .map(|color| (color, normalized_hex_color(color)))
+        .unwrap_or(([0, 0, 0, 180], "#000000".to_string()));
+    let shadow_offset_x = config_value_number(&node.config, "shadow_offset_x")
+        .unwrap_or(0.0)
+        .clamp(-256.0, 256.0);
+    let shadow_offset_y = config_value_number(&node.config, "shadow_offset_y")
+        .unwrap_or(0.0)
+        .clamp(-256.0, 256.0);
+    let background_color_value = config_value_string(&node.config, "background_color")
+        .unwrap_or_else(|| "#000000".to_string());
+    let (background_color, background_color_string) = parse_text_color(&background_color_value)
+        .map(|color| (color, normalized_hex_color(color)))
+        .unwrap_or(([0, 0, 0, 255], "#000000".to_string()));
+    let background_opacity = config_value_number(&node.config, "background_opacity")
+        .unwrap_or(0.0)
+        .clamp(0.0, 1.0);
 
     TextRenderRequest {
         text,
         requested_font_family,
+        font_file_uri,
         font_size,
         color,
         color_string,
         invalid_color,
         align,
+        line_height,
+        stroke_color,
+        stroke_color_string,
+        stroke_width,
+        shadow_color,
+        shadow_color_string,
+        shadow_offset_x,
+        shadow_offset_y,
+        background_color,
+        background_color_string,
+        background_opacity,
     }
 }
 
@@ -2569,6 +2742,7 @@ fn text_metadata(
     status: SoftwareCompositorTextStatus,
     status_detail: String,
     request: &TextRenderRequest,
+    used_font_family: &str,
     rendered_bounds: Option<CompositorRect>,
     checksum: Option<u64>,
 ) -> SoftwareCompositorTextMetadata {
@@ -2576,30 +2750,94 @@ fn text_metadata(
         status,
         status_detail,
         requested_font_family: request.requested_font_family.clone(),
-        used_font_family: SOFTWARE_TEXT_FONT_FAMILY.to_string(),
+        used_font_family: used_font_family.to_string(),
         font_size: request.font_size,
         color: request.color_string.clone(),
         align: request.align.as_str().to_string(),
         text_length: request.text.chars().count(),
+        line_count: Some(text_lines(&request.text).len()),
+        line_height: Some(request.line_height),
+        font_file_uri: request.font_file_uri.clone(),
+        stroke_color: Some(request.stroke_color_string.clone()),
+        stroke_width: Some(request.stroke_width),
+        shadow_color: Some(request.shadow_color_string.clone()),
+        shadow_offset_x: Some(request.shadow_offset_x),
+        shadow_offset_y: Some(request.shadow_offset_y),
+        background_color: Some(request.background_color_string.clone()),
+        background_opacity: Some(request.background_opacity),
         rendered_bounds,
         checksum,
     }
 }
 
-fn text_status_detail(request: &TextRenderRequest) -> String {
+fn text_status_detail(request: &TextRenderRequest, fallback_detail: Option<&str>) -> String {
     if request.invalid_color {
         return format!(
             "Text rendered with fallback color {} because the configured color is invalid.",
             request.color_string
         );
     }
-    if uses_font_fallback(&request.requested_font_family) {
+    if let Some(detail) = fallback_detail {
+        return detail.to_string();
+    }
+    if request.font_file_uri.is_some() {
+        return "Text rendered with the selected local font file.".to_string();
+    }
+    if request.font_file_uri.is_none() && uses_font_fallback(&request.requested_font_family) {
         return format!(
             "Text rendered with bundled Inter because requested font \"{}\" is not bundled.",
             request.requested_font_family
         );
     }
     "Text rendered with bundled Inter.".to_string()
+}
+
+fn text_font_choice(request: &TextRenderRequest) -> Result<TextFontChoice, String> {
+    if let Some(font_file_uri) = &request.font_file_uri {
+        if let Some(path) = asset_uri_path(font_file_uri) {
+            match fs::read(&path)
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| {
+                    FontArc::try_from_vec(bytes).map_err(|error| format!("{error:?}"))
+                }) {
+                Ok(font) => {
+                    return Ok(TextFontChoice {
+                        font,
+                        used_font_family: path
+                            .file_stem()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or("Custom font")
+                            .to_string(),
+                        fallback_detail: None,
+                    });
+                }
+                Err(error) => {
+                    return Ok(TextFontChoice {
+                        font: inter_font()?,
+                        used_font_family: SOFTWARE_TEXT_FONT_FAMILY.to_string(),
+                        fallback_detail: Some(format!(
+                            "Text rendered with bundled Inter because font file could not be loaded: {error}"
+                        )),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(TextFontChoice {
+        font: inter_font()?,
+        used_font_family: SOFTWARE_TEXT_FONT_FAMILY.to_string(),
+        fallback_detail: None,
+    })
+}
+
+fn text_lines(text: &str) -> Vec<&str> {
+    let lines = text.lines().collect::<Vec<_>>();
+    if lines.is_empty() {
+        vec![""]
+    } else {
+        lines
+    }
 }
 
 fn uses_font_fallback(requested_font_family: &str) -> bool {
@@ -6398,6 +6636,43 @@ mod tests {
     }
 
     #[test]
+    fn software_compositor_renders_multiline_text_effects() {
+        let mut scene = test_text_scene("VAEX\nCORE", "Inter", "#f4f8ff", "center", 30.0);
+        scene.sources[0].config = serde_json::json!({
+            "text": "VAEX\nCORE",
+            "font_family": "Inter",
+            "font_file_uri": null,
+            "font_size": 30.0,
+            "color": "#f4f8ff",
+            "align": "center",
+            "line_height": 1.1,
+            "stroke_color": "#ff00ff",
+            "stroke_width": 2.0,
+            "shadow_color": "#000000",
+            "shadow_offset_x": 3.0,
+            "shadow_offset_y": 3.0,
+            "background_color": "#123456",
+            "background_opacity": 0.5
+        });
+
+        let result = render_test_scene_with_target(scene, 160, 80);
+        let input = &result.input_frames[0];
+        let text = input.text.as_ref().unwrap();
+
+        assert_eq!(input.status, CompositorNodeStatus::Ready);
+        assert_eq!(text.line_count, Some(2));
+        assert_eq!(text.stroke_width, Some(2.0));
+        assert_eq!(text.background_opacity, Some(0.5));
+        assert!(text.rendered_bounds.is_some());
+        assert_ne!(
+            input.checksum,
+            render_test_text_source("VAEX\nCORE", "Inter", "#f4f8ff", "center", 30.0).input_frames
+                [0]
+            .checksum
+        );
+    }
+
+    #[test]
     fn software_compositor_applies_color_correction_filter() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("gray.png");
@@ -7428,48 +7703,67 @@ mod tests {
         font_size: f64,
     ) -> SoftwareCompositorRenderResult {
         render_test_scene_with_target(
-            Scene {
-                id: "scene-text".to_string(),
-                name: "Text Scene".to_string(),
-                canvas: crate::SceneCanvas {
-                    width: 160,
-                    height: 80,
-                    background_color: "#050711".to_string(),
-                },
-                sources: vec![SceneSource {
-                    id: "source-text".to_string(),
-                    name: "Text".to_string(),
-                    kind: SceneSourceKind::Text,
-                    position: ScenePoint { x: 0.0, y: 0.0 },
-                    size: SceneSize {
-                        width: 160.0,
-                        height: 80.0,
-                    },
-                    crop: SceneCrop {
-                        top: 0.0,
-                        right: 0.0,
-                        bottom: 0.0,
-                        left: 0.0,
-                    },
-                    rotation_degrees: 0.0,
-                    opacity: 1.0,
-                    visible: true,
-                    locked: false,
-                    z_index: 10,
-                    bounds_mode: SceneSourceBoundsMode::Stretch,
-                    filters: Vec::new(),
-                    config: serde_json::json!({
-                        "text": text,
-                        "font_family": font_family,
-                        "font_size": font_size,
-                        "color": color,
-                        "align": align
-                    }),
-                }],
-            },
+            test_text_scene(text, font_family, color, align, font_size),
             160,
             80,
         )
+    }
+
+    fn test_text_scene(
+        text: &str,
+        font_family: &str,
+        color: &str,
+        align: &str,
+        font_size: f64,
+    ) -> Scene {
+        Scene {
+            id: "scene-text".to_string(),
+            name: "Text Scene".to_string(),
+            canvas: crate::SceneCanvas {
+                width: 160,
+                height: 80,
+                background_color: "#050711".to_string(),
+            },
+            sources: vec![SceneSource {
+                id: "source-text".to_string(),
+                name: "Text".to_string(),
+                kind: SceneSourceKind::Text,
+                position: ScenePoint { x: 0.0, y: 0.0 },
+                size: SceneSize {
+                    width: 160.0,
+                    height: 80.0,
+                },
+                crop: SceneCrop {
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                },
+                rotation_degrees: 0.0,
+                opacity: 1.0,
+                visible: true,
+                locked: false,
+                z_index: 10,
+                bounds_mode: SceneSourceBoundsMode::Stretch,
+                filters: Vec::new(),
+                config: serde_json::json!({
+                    "text": text,
+                    "font_family": font_family,
+                    "font_file_uri": null,
+                    "font_size": font_size,
+                    "color": color,
+                    "align": align,
+                    "line_height": 1.15,
+                    "stroke_color": "#050711",
+                    "stroke_width": 0.0,
+                    "shadow_color": "#000000",
+                    "shadow_offset_x": 0.0,
+                    "shadow_offset_y": 0.0,
+                    "background_color": "#000000",
+                    "background_opacity": 0.0
+                }),
+            }],
+        }
     }
 
     fn render_test_text_source_with_filters(

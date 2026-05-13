@@ -132,9 +132,18 @@ export interface BrowserOverlaySceneSourceConfig {
 export interface TextSceneSourceConfig {
   text: string;
   font_family: string;
+  font_file_uri: string | null;
   font_size: number;
   color: string;
   align: "left" | "center" | "right";
+  line_height: number;
+  stroke_color: string;
+  stroke_width: number;
+  shadow_color: string;
+  shadow_offset_x: number;
+  shadow_offset_y: number;
+  background_color: string;
+  background_opacity: number;
 }
 
 export interface GroupSceneSourceConfig {
@@ -584,6 +593,16 @@ export interface SoftwareCompositorTextMetadata {
   color: string;
   align: string;
   text_length: number;
+  line_count?: number | null;
+  line_height?: number | null;
+  font_file_uri?: string | null;
+  stroke_color?: string | null;
+  stroke_width?: number | null;
+  shadow_color?: string | null;
+  shadow_offset_x?: number | null;
+  shadow_offset_y?: number | null;
+  background_color?: string | null;
+  background_opacity?: number | null;
   rendered_bounds?: CompositorRect | null;
   checksum?: number | null;
 }
@@ -1850,9 +1869,18 @@ export function defaultSceneSourceConfig(
       return {
         text: "Starting Soon",
         font_family: "Inter",
+        font_file_uri: null,
         font_size: 72,
         color: "#f4f8ff",
         align: "center",
+        line_height: 1.15,
+        stroke_color: "#050711",
+        stroke_width: 0,
+        shadow_color: "#000000",
+        shadow_offset_x: 0,
+        shadow_offset_y: 0,
+        background_color: "#000000",
+        background_opacity: 0,
       };
     case "group":
       return {

@@ -320,6 +320,21 @@ const targets = [
         expression: 'Boolean(document.querySelector("[data-testid=\\"designer-text-runtime\\"]"))',
         message: "Designer text runtime panel did not render.",
       },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-text-content\\"]"))',
+        message: "Designer multiline text editor did not render.",
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-font-picker\\"]"))',
+        message: "Designer font picker control did not render.",
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelector("[data-testid=\\"designer-text-runtime\\"]")?.textContent?.includes("Effects")',
+        message: "Designer text runtime panel did not expose text effect metadata.",
+      },
     ],
   },
   {

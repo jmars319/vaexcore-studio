@@ -660,6 +660,9 @@ const mediaAssetDialogFilters = [
 const lutAssetDialogFilters = [
   { name: "LUT", extensions: ["cube"] },
 ];
+const fontAssetDialogFilters = [
+  { name: "Fonts", extensions: ["ttf", "otf"] },
+];
 
 function pickedDialogPath(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
@@ -687,7 +690,7 @@ async function pickSceneBundleImportPath(): Promise<string | null> {
 }
 
 async function pickLocalAssetPath(
-  kind: "image" | "media" | "lut",
+  kind: "image" | "media" | "lut" | "font",
 ): Promise<string | null> {
   const { open } = await import("@tauri-apps/plugin-dialog");
   return pickedDialogPath(
@@ -698,7 +701,9 @@ async function pickLocalAssetPath(
           ? imageAssetDialogFilters
           : kind === "lut"
             ? lutAssetDialogFilters
-            : mediaAssetDialogFilters,
+            : kind === "font"
+              ? fontAssetDialogFilters
+              : mediaAssetDialogFilters,
       multiple: false,
     }),
   );
@@ -2868,6 +2873,24 @@ function App() {
     }
   }
 
+  async function handlePickDesignerSourceFont(sceneId: string, sourceId: string) {
+    try {
+      const path = await pickLocalAssetPath("font");
+      if (!path) return;
+      handleUpdateDesignerSource(sceneId, sourceId, {
+        config: {
+          font_file_uri: path,
+        },
+      });
+      setSceneSaveStatus("Local font file selected. Save to update runtime.");
+      setError(null);
+    } catch (error) {
+      setSceneSaveStatus(
+        error instanceof Error ? error.message : "Font picker failed",
+      );
+    }
+  }
+
   async function handlePickDesignerTransitionAsset(transitionId: string) {
     try {
       const path = await pickLocalAssetPath("media");
@@ -3377,6 +3400,7 @@ function App() {
             onImportCollectionDefault={handleImportSceneCollectionBundleFromAppData}
             onPasteSource={handlePasteDesignerSource}
             onPickSourceAsset={handlePickDesignerSourceAsset}
+            onPickSourceFont={handlePickDesignerSourceFont}
             onPickTransitionAsset={handlePickDesignerTransitionAsset}
             onPreviewPollingChange={setPreviewPolling}
             onPreviewQualityChange={setPreviewQuality}
@@ -3770,6 +3794,7 @@ function DesignerPage(props: {
     sourceId: string,
     mediaType: "image" | "video",
   ) => void;
+  onPickSourceFont: (sceneId: string, sourceId: string) => void;
   onPickTransitionAsset: (transitionId: string) => void;
   onPreviewPollingChange: (enabled: boolean) => void;
   onPreviewQualityChange: (quality: PreviewQuality) => void;
@@ -6963,6 +6988,9 @@ function DesignerPage(props: {
                   mediaType,
                 )
               }
+              onPickFont={() =>
+                props.onPickSourceFont(props.scene.id, props.selectedSource!.id)
+              }
               scene={props.scene}
               source={props.selectedSource}
             />
@@ -7595,6 +7623,20 @@ function TextRuntimePanel(props: {
         <KeyValue
           label="Length"
           value={`${text?.text_length ?? configuredText.length} chars`}
+        />
+        <KeyValue
+          label="Lines"
+          value={`${text?.line_count ?? props.source.config.text.split("\n").length}`}
+        />
+        <KeyValue
+          label="Effects"
+          value={`stroke ${text?.stroke_width ?? props.source.config.stroke_width ?? 0}px, bg ${
+            Math.round((text?.background_opacity ?? props.source.config.background_opacity ?? 0) * 100)
+          }%`}
+        />
+        <KeyValue
+          label="Font File"
+          value={text?.font_file_uri ?? props.source.config.font_file_uri ?? "bundled"}
         />
         <KeyValue
           label="Bounds"
@@ -9008,6 +9050,7 @@ function SourceConfigEditor(props: {
   captureInventory: CaptureSourceInventory | null;
   onChange: (config: Record<string, unknown>) => void;
   onPickAsset: (mediaType: "image" | "video") => void;
+  onPickFont: () => void;
   scene: Scene;
   source: SceneSource;
 }) {
@@ -9534,16 +9577,27 @@ function SourceConfigEditor(props: {
     case "text":
       return (
         <div className="source-config-editor">
-          <TextInput
-            label="Text"
-            onChange={(text) => props.onChange({ text })}
-            value={source.config.text}
-          />
+          <label>
+            Text
+            <textarea
+              data-testid="designer-text-content"
+              onChange={(event) => props.onChange({ text: event.target.value })}
+              rows={4}
+              value={source.config.text}
+            />
+          </label>
           <div className="form-grid">
             <TextInput
               label="Font"
               onChange={(font_family) => props.onChange({ font_family })}
               value={source.config.font_family}
+            />
+            <TextInput
+              label="Font File URI"
+              onChange={(font_file_uri) =>
+                props.onChange({ font_file_uri: font_file_uri || null })
+              }
+              value={source.config.font_file_uri ?? ""}
             />
             <SceneNumberInput
               label="Font Size"
@@ -9551,7 +9605,24 @@ function SourceConfigEditor(props: {
               onChange={(font_size) => props.onChange({ font_size })}
               value={source.config.font_size}
             />
+            <SceneNumberInput
+              label="Line Height"
+              min={0.75}
+              max={3}
+              onChange={(line_height) => props.onChange({ line_height })}
+              step={0.05}
+              value={source.config.line_height ?? 1.15}
+            />
           </div>
+          <button
+            className="secondary-button compact"
+            data-testid="designer-font-picker"
+            onClick={props.onPickFont}
+            type="button"
+          >
+            <Type size={14} />
+            Choose Font
+          </button>
           <div className="form-grid">
             <TextInput
               label="Color"
@@ -9573,6 +9644,57 @@ function SourceConfigEditor(props: {
                 <option value="right">Right</option>
               </select>
             </label>
+          </div>
+          <div className="form-grid">
+            <TextInput
+              label="Stroke Color"
+              onChange={(stroke_color) => props.onChange({ stroke_color })}
+              value={source.config.stroke_color ?? "#050711"}
+            />
+            <SceneNumberInput
+              label="Stroke Width"
+              min={0}
+              max={24}
+              onChange={(stroke_width) => props.onChange({ stroke_width })}
+              step={1}
+              value={source.config.stroke_width ?? 0}
+            />
+            <TextInput
+              label="Shadow Color"
+              onChange={(shadow_color) => props.onChange({ shadow_color })}
+              value={source.config.shadow_color ?? "#000000"}
+            />
+            <SceneNumberInput
+              label="Shadow X"
+              min={-256}
+              max={256}
+              onChange={(shadow_offset_x) => props.onChange({ shadow_offset_x })}
+              step={1}
+              value={source.config.shadow_offset_x ?? 0}
+            />
+            <SceneNumberInput
+              label="Shadow Y"
+              min={-256}
+              max={256}
+              onChange={(shadow_offset_y) => props.onChange({ shadow_offset_y })}
+              step={1}
+              value={source.config.shadow_offset_y ?? 0}
+            />
+            <TextInput
+              label="Background"
+              onChange={(background_color) => props.onChange({ background_color })}
+              value={source.config.background_color ?? "#000000"}
+            />
+            <SceneNumberInput
+              label="Background Opacity"
+              min={0}
+              max={1}
+              onChange={(background_opacity) =>
+                props.onChange({ background_opacity })
+              }
+              step={0.05}
+              value={source.config.background_opacity ?? 0}
+            />
           </div>
         </div>
       );

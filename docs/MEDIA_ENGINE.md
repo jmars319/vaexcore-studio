@@ -61,9 +61,10 @@ software path, and stinger previews reuse the same timeline-aware optional video
 extraction to composite sampled local transition video over still from/to scene
 software frames and report trigger, decoder, cache, timeline, and fallback
 metadata.
-The compositor also rasterizes single-line `text` sources with the
-bundled Inter font and reports font fallback, color fallback, rendered bounds,
-and checksum metadata. Browser overlay sources can render preview frames through
+The compositor also rasterizes text sources with multiline layout, line-height
+control, optional local TTF/OTF font files, stroke, shadow, and background fill
+basics. It reports font fallback, color fallback, rendered bounds, effect
+metadata, and checksum metadata. Browser overlay sources can render preview frames through
 managed optional local Chrome, Chromium, or Edge DevTools sessions for HTTP,
 HTTPS, and file URLs. Browser sessions use isolated temporary profiles, apply
 configured viewport and custom CSS, support refresh interval and reload-token
