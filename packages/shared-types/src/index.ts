@@ -550,6 +550,9 @@ export interface SoftwareCompositorAssetMetadata {
   checksum?: number | null;
   modified_unix_ms?: number | null;
   cache_hit: boolean;
+  sampled_frame_time_ms?: number | null;
+  sample_index?: number | null;
+  decoder_name?: string | null;
 }
 
 export type SoftwareCompositorTextStatus =

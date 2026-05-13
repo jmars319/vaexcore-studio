@@ -1,7 +1,8 @@
 use std::{
     collections::{HashMap, HashSet},
-    fs,
+    env, fs,
     path::{Path, PathBuf},
+    process::Command,
     sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -261,6 +262,12 @@ pub struct SoftwareCompositorAssetMetadata {
     pub modified_unix_ms: Option<u64>,
     #[serde(default)]
     pub cache_hit: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampled_frame_time_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_index: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decoder_name: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -339,6 +346,23 @@ struct DecodedImageAsset {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct VideoAssetCacheKey {
+    path: String,
+    modified_unix_ms: u64,
+    sample_time_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+struct DecodedVideoAsset {
+    modified_unix_ms: u64,
+    sample_time_ms: u64,
+    sample_index: u64,
+    decoder_name: String,
+    cache_hit: bool,
+    image: CachedDecodedImage,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct LutAssetCacheKey {
     path: String,
     modified_unix_ms: u64,
@@ -380,10 +404,13 @@ enum TextAlign {
 
 static IMAGE_ASSET_CACHE: OnceLock<Mutex<HashMap<ImageAssetCacheKey, CachedDecodedImage>>> =
     OnceLock::new();
+static VIDEO_ASSET_CACHE: OnceLock<Mutex<HashMap<VideoAssetCacheKey, CachedDecodedImage>>> =
+    OnceLock::new();
 static LUT_ASSET_CACHE: OnceLock<Mutex<HashMap<LutAssetCacheKey, CachedCubeLut>>> = OnceLock::new();
 static INTER_FONT: OnceLock<Result<FontArc, String>> = OnceLock::new();
 const INTER_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/Inter.ttf");
 const SOFTWARE_TEXT_FONT_FAMILY: &str = "Inter";
+const VIDEO_SAMPLE_INTERVAL_MS: u64 = 500;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct CompositorValidation {
@@ -703,7 +730,8 @@ pub fn render_software_compositor_frame(
     frame_index: u64,
 ) -> SoftwareCompositorRenderResult {
     let background = parse_background_color(&plan.graph.output.background_color);
-    let input_frames = build_software_compositor_input_frames(&plan.graph);
+    let input_clock = software_frame_clock_for_plan(plan, frame_index);
+    let input_frames = build_software_compositor_input_frames_at_clock(&plan.graph, &input_clock);
     let input_frame_by_source = input_frames
         .iter()
         .map(|input| (input.source_id.as_str(), input))
@@ -726,12 +754,49 @@ pub fn render_software_compositor_frame(
 pub fn build_software_compositor_input_frames(
     graph: &CompositorGraph,
 ) -> Vec<SoftwareCompositorInputFrame> {
+    let clock = default_software_input_clock();
+    build_software_compositor_input_frames_at_clock(graph, &clock)
+}
+
+pub fn build_software_compositor_input_frames_at_clock(
+    graph: &CompositorGraph,
+    clock: &CompositorFrameClock,
+) -> Vec<SoftwareCompositorInputFrame> {
     graph
         .nodes
         .iter()
         .filter(|node| node.visible)
-        .map(software_input_frame_for_node)
+        .map(|node| software_input_frame_for_node(node, clock))
         .collect()
+}
+
+fn default_software_input_clock() -> CompositorFrameClock {
+    CompositorFrameClock {
+        frame_index: 0,
+        framerate: 30,
+        pts_nanos: 0,
+        duration_nanos: 1_000_000_000_u64 / 30,
+    }
+}
+
+fn software_frame_clock_for_plan(
+    plan: &CompositorRenderPlan,
+    frame_index: u64,
+) -> CompositorFrameClock {
+    let framerate = plan
+        .targets
+        .iter()
+        .find(|target| target.enabled)
+        .map(|target| target.framerate)
+        .unwrap_or(30)
+        .max(1);
+    let duration_nanos = 1_000_000_000_u64 / u64::from(framerate);
+    CompositorFrameClock {
+        frame_index,
+        framerate,
+        pts_nanos: frame_index.saturating_mul(duration_nanos),
+        duration_nanos,
+    }
 }
 
 fn evaluate_software_compositor_frame(
@@ -1110,9 +1175,12 @@ fn draw_node(
     }
 }
 
-fn software_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFrame {
+fn software_input_frame_for_node(
+    node: &CompositorNode,
+    clock: &CompositorFrameClock,
+) -> SoftwareCompositorInputFrame {
     let input_frame = if node.source_kind == SceneSourceKind::ImageMedia {
-        image_media_input_frame_for_node(node)
+        image_media_input_frame_for_node(node, clock)
     } else if node.source_kind == SceneSourceKind::Text {
         text_input_frame_for_node(node)
     } else {
@@ -1128,19 +1196,22 @@ fn software_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInp
     apply_software_filters(node, input_frame)
 }
 
-fn image_media_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFrame {
+fn image_media_input_frame_for_node(
+    node: &CompositorNode,
+    clock: &CompositorFrameClock,
+) -> SoftwareCompositorInputFrame {
     let asset_uri = config_value_string(&node.config, "asset_uri").unwrap_or_default();
     if asset_uri.trim().is_empty() {
         let metadata = asset_metadata(
             asset_uri,
             SoftwareCompositorAssetStatus::NoAsset,
-            "No local image asset has been selected.".to_string(),
+            "No local media asset has been selected.".to_string(),
             None,
         );
         return placeholder_input_frame_for_node(
             node,
             CompositorNodeStatus::Placeholder,
-            "No local image asset has been selected.".to_string(),
+            "No local media asset has been selected.".to_string(),
             Some(metadata),
             None,
         );
@@ -1149,19 +1220,19 @@ fn image_media_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositor
     let media_type =
         config_value_string(&node.config, "media_type").unwrap_or_else(|| "image".into());
     if media_type != "image" {
-        let metadata = asset_metadata(
-            asset_uri.clone(),
-            SoftwareCompositorAssetStatus::VideoPlaceholder,
-            "Video media decode/playback is deferred for this source.".to_string(),
-            None,
-        );
-        return placeholder_input_frame_for_node(
-            node,
-            CompositorNodeStatus::Placeholder,
-            "Video media decode/playback is deferred for this source.".to_string(),
-            Some(metadata),
-            None,
-        );
+        return match decode_video_asset(&asset_uri, clock) {
+            Ok(decoded) => decoded_video_input_frame(node, asset_uri, decoded),
+            Err(metadata) => {
+                let metadata = *metadata;
+                placeholder_input_frame_for_node(
+                    node,
+                    CompositorNodeStatus::Placeholder,
+                    metadata.status_detail.clone(),
+                    Some(metadata),
+                    None,
+                )
+            }
+        };
     }
 
     match decode_image_asset(&asset_uri) {
@@ -1197,6 +1268,52 @@ fn decoded_image_input_frame(
         checksum: Some(decoded.image.checksum),
         modified_unix_ms: Some(decoded.modified_unix_ms),
         cache_hit: decoded.cache_hit,
+        sampled_frame_time_ms: None,
+        sample_index: None,
+        decoder_name: None,
+    };
+
+    SoftwareCompositorInputFrame {
+        source_id: node.source_id.clone(),
+        source_kind: node.source_kind.clone(),
+        width: decoded.image.width,
+        height: decoded.image.height,
+        frame_format: CompositorFrameFormat::Rgba8,
+        status: CompositorNodeStatus::Ready,
+        status_detail: metadata.status_detail.clone(),
+        asset: Some(metadata),
+        text: None,
+        filters: Vec::new(),
+        checksum: decoded.image.checksum,
+        pixels: decoded.image.pixels,
+    }
+}
+
+fn decoded_video_input_frame(
+    node: &CompositorNode,
+    asset_uri: String,
+    decoded: DecodedVideoAsset,
+) -> SoftwareCompositorInputFrame {
+    let metadata = SoftwareCompositorAssetMetadata {
+        uri: asset_uri,
+        status: SoftwareCompositorAssetStatus::Decoded,
+        status_detail: format!(
+            "Decoded {} video preview frame {}x{} at {:.2}s using {}.",
+            decoded.image.format,
+            decoded.image.width,
+            decoded.image.height,
+            decoded.sample_time_ms as f64 / 1000.0,
+            decoded.decoder_name
+        ),
+        format: Some(format!("video:{}", decoded.image.format)),
+        width: Some(decoded.image.width),
+        height: Some(decoded.image.height),
+        checksum: Some(decoded.image.checksum),
+        modified_unix_ms: Some(decoded.modified_unix_ms),
+        cache_hit: decoded.cache_hit,
+        sampled_frame_time_ms: Some(decoded.sample_time_ms),
+        sample_index: Some(decoded.sample_index),
+        decoder_name: Some(decoded.decoder_name),
     };
 
     SoftwareCompositorInputFrame {
@@ -2420,6 +2537,159 @@ fn decode_image_asset(
     })
 }
 
+fn decode_video_asset(
+    asset_uri: &str,
+    clock: &CompositorFrameClock,
+) -> Result<DecodedVideoAsset, Box<SoftwareCompositorAssetMetadata>> {
+    decode_video_asset_with_decoder(asset_uri, clock, find_ffmpeg_binary())
+}
+
+fn decode_video_asset_with_decoder(
+    asset_uri: &str,
+    clock: &CompositorFrameClock,
+    ffmpeg_path: Option<PathBuf>,
+) -> Result<DecodedVideoAsset, Box<SoftwareCompositorAssetMetadata>> {
+    let Some(path) = asset_uri_path(asset_uri) else {
+        return Err(Box::new(asset_metadata(
+            asset_uri.to_string(),
+            SoftwareCompositorAssetStatus::NoAsset,
+            "No local video asset has been selected.".to_string(),
+            None,
+        )));
+    };
+    let normalized_path = normalized_asset_path(&path);
+    let Some(format) = supported_video_extension(&path) else {
+        return Err(Box::new(asset_metadata(
+            asset_uri.to_string(),
+            SoftwareCompositorAssetStatus::UnsupportedExtension,
+            "Unsupported video extension. Supported video assets are mp4, mov, webm, and mkv."
+                .to_string(),
+            None,
+        )));
+    };
+    let metadata = match fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(_) => {
+            return Err(Box::new(asset_metadata(
+                asset_uri.to_string(),
+                SoftwareCompositorAssetStatus::MissingFile,
+                format!("Video asset file does not exist: {normalized_path}"),
+                Some(format),
+            )));
+        }
+    };
+    if !metadata.is_file() {
+        return Err(Box::new(asset_metadata(
+            asset_uri.to_string(),
+            SoftwareCompositorAssetStatus::MissingFile,
+            format!("Video asset path is not a file: {normalized_path}"),
+            Some(format),
+        )));
+    }
+    let Some(ffmpeg_path) = ffmpeg_path else {
+        return Err(Box::new(asset_metadata(
+            asset_uri.to_string(),
+            SoftwareCompositorAssetStatus::VideoPlaceholder,
+            "FFmpeg is not available; video preview frame extraction is disabled.".to_string(),
+            Some(format),
+        )));
+    };
+
+    let modified_unix_ms = metadata
+        .modified()
+        .ok()
+        .and_then(system_time_unix_ms)
+        .unwrap_or(0);
+    let sample_time_ms = quantized_video_sample_time_ms(clock);
+    let sample_index = sample_time_ms / VIDEO_SAMPLE_INTERVAL_MS;
+    let key = VideoAssetCacheKey {
+        path: normalized_path.clone(),
+        modified_unix_ms,
+        sample_time_ms,
+    };
+    if let Some(image) = cached_video_asset(&key) {
+        return Ok(DecodedVideoAsset {
+            modified_unix_ms,
+            sample_time_ms,
+            sample_index,
+            decoder_name: "ffmpeg".to_string(),
+            cache_hit: true,
+            image,
+        });
+    }
+
+    let mut decoded = extract_video_frame_with_ffmpeg(&ffmpeg_path, &path, sample_time_ms)
+        .map_err(|error| {
+            Box::new(asset_metadata(
+                asset_uri.to_string(),
+                SoftwareCompositorAssetStatus::DecodeFailed,
+                format!("Video preview frame could not be decoded: {error}"),
+                Some(format.clone()),
+            ))
+        })?;
+    decoded.format = format;
+    store_cached_video_asset(key, decoded.clone());
+
+    Ok(DecodedVideoAsset {
+        modified_unix_ms,
+        sample_time_ms,
+        sample_index,
+        decoder_name: "ffmpeg".to_string(),
+        cache_hit: false,
+        image: decoded,
+    })
+}
+
+fn extract_video_frame_with_ffmpeg(
+    ffmpeg_path: &Path,
+    path: &Path,
+    sample_time_ms: u64,
+) -> Result<CachedDecodedImage, String> {
+    let sample_seconds = format!("{:.3}", sample_time_ms as f64 / 1000.0);
+    let output = Command::new(ffmpeg_path)
+        .arg("-v")
+        .arg("error")
+        .arg("-nostdin")
+        .arg("-ss")
+        .arg(sample_seconds)
+        .arg("-i")
+        .arg(path)
+        .arg("-map")
+        .arg("0:v:0")
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-f")
+        .arg("image2pipe")
+        .arg("-vcodec")
+        .arg("png")
+        .arg("pipe:1")
+        .output()
+        .map_err(|error| format!("could not start ffmpeg: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("ffmpeg exited with status {}", output.status)
+        } else {
+            stderr
+        });
+    }
+    if output.stdout.is_empty() {
+        return Err("ffmpeg returned an empty preview frame".to_string());
+    }
+
+    let image = image::load_from_memory(&output.stdout).map_err(|error| error.to_string())?;
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let pixels = rgba.into_raw();
+    Ok(CachedDecodedImage {
+        width,
+        height,
+        format: "video".to_string(),
+        checksum: checksum_pixels(&pixels),
+        pixels,
+    })
+}
+
 fn asset_uri_path(asset_uri: &str) -> Option<PathBuf> {
     let trimmed = asset_uri.trim();
     if trimmed.is_empty() {
@@ -2444,6 +2714,64 @@ fn supported_image_extension(path: &Path) -> Option<String> {
     }
 }
 
+fn supported_video_extension(path: &Path) -> Option<String> {
+    let extension = path.extension()?.to_string_lossy().to_ascii_lowercase();
+    match extension.as_str() {
+        "mp4" | "mov" | "webm" | "mkv" => Some(extension),
+        _ => None,
+    }
+}
+
+fn quantized_video_sample_time_ms(clock: &CompositorFrameClock) -> u64 {
+    let pts_ms = clock.pts_nanos / 1_000_000;
+    (pts_ms / VIDEO_SAMPLE_INTERVAL_MS) * VIDEO_SAMPLE_INTERVAL_MS
+}
+
+fn find_ffmpeg_binary() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(explicit_path) = env::var_os("VAEXCORE_FFMPEG_PATH") {
+        candidates.push(PathBuf::from(explicit_path));
+    }
+    if let Some(path) = env::var_os("PATH") {
+        for directory in env::split_paths(&path) {
+            for executable_name in ffmpeg_executable_names() {
+                candidates.push(directory.join(executable_name));
+            }
+        }
+    }
+    add_windows_ffmpeg_candidates(&mut candidates);
+    candidates.extend([
+        PathBuf::from("/opt/homebrew/bin/ffmpeg"),
+        PathBuf::from("/usr/local/bin/ffmpeg"),
+        PathBuf::from("/usr/bin/ffmpeg"),
+    ]);
+
+    candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
+fn ffmpeg_executable_names() -> &'static [&'static str] {
+    if cfg!(target_os = "windows") {
+        &["ffmpeg.exe", "ffmpeg"]
+    } else {
+        &["ffmpeg"]
+    }
+}
+
+fn add_windows_ffmpeg_candidates(candidates: &mut Vec<PathBuf>) {
+    if !cfg!(target_os = "windows") {
+        return;
+    }
+
+    candidates.extend([
+        PathBuf::from("C:\\ffmpeg\\bin\\ffmpeg.exe"),
+        PathBuf::from("C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe"),
+        PathBuf::from("C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe"),
+    ]);
+    if let Some(user_profile) = env::var_os("USERPROFILE") {
+        candidates.push(PathBuf::from(user_profile).join("scoop\\shims\\ffmpeg.exe"));
+    }
+}
+
 fn cached_image_asset(key: &ImageAssetCacheKey) -> Option<CachedDecodedImage> {
     IMAGE_ASSET_CACHE
         .get_or_init(|| Mutex::new(HashMap::new()))
@@ -2454,6 +2782,33 @@ fn cached_image_asset(key: &ImageAssetCacheKey) -> Option<CachedDecodedImage> {
 
 fn store_cached_image_asset(key: ImageAssetCacheKey, image: CachedDecodedImage) {
     let Ok(mut cache) = IMAGE_ASSET_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    else {
+        return;
+    };
+    cache.retain(|existing_key, _| {
+        existing_key.path != key.path || existing_key.modified_unix_ms == key.modified_unix_ms
+    });
+    cache.insert(key, image);
+    if cache.len() > 64 {
+        let Some(first_key) = cache.keys().next().cloned() else {
+            return;
+        };
+        cache.remove(&first_key);
+    }
+}
+
+fn cached_video_asset(key: &VideoAssetCacheKey) -> Option<CachedDecodedImage> {
+    VIDEO_ASSET_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(key).cloned())
+}
+
+fn store_cached_video_asset(key: VideoAssetCacheKey, image: CachedDecodedImage) {
+    let Ok(mut cache) = VIDEO_ASSET_CACHE
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
     else {
@@ -2487,6 +2842,9 @@ fn asset_metadata(
         checksum: None,
         modified_unix_ms: None,
         cache_hit: false,
+        sampled_frame_time_ms: None,
+        sample_index: None,
+        decoder_name: None,
     }
 }
 
@@ -3427,7 +3785,169 @@ mod tests {
         let video = render_test_image_source("clip.webm", Some("video"));
         assert_eq!(
             video.input_frames[0].asset.as_ref().unwrap().status,
+            SoftwareCompositorAssetStatus::MissingFile
+        );
+
+        let unavailable_path = dir.path().join("unavailable.webm");
+        fs::write(&unavailable_path, b"not a video").unwrap();
+        let unavailable = decode_video_asset_with_decoder(
+            &unavailable_path.display().to_string(),
+            &default_software_input_clock(),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            unavailable.status,
             SoftwareCompositorAssetStatus::VideoPlaceholder
+        );
+    }
+
+    #[test]
+    fn software_compositor_decodes_video_preview_frames_when_ffmpeg_is_available() {
+        let Some(ffmpeg_path) = find_ffmpeg_binary() else {
+            eprintln!("skipping video preview decode test because ffmpeg is unavailable");
+            return;
+        };
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("clip.mp4");
+        if !write_test_video(&ffmpeg_path, &path, "red") {
+            eprintln!("skipping video preview decode test because ffmpeg could not create fixture");
+            return;
+        }
+
+        let result = render_test_image_source(&path.display().to_string(), Some("video"));
+        let input = &result.input_frames[0];
+        let asset = input.asset.as_ref().unwrap();
+
+        assert_eq!(input.status, CompositorNodeStatus::Ready);
+        assert_eq!(asset.status, SoftwareCompositorAssetStatus::Decoded);
+        assert_eq!(asset.format.as_deref(), Some("video:mp4"));
+        assert_eq!(asset.decoder_name.as_deref(), Some("ffmpeg"));
+        assert_eq!(asset.sampled_frame_time_ms, Some(0));
+        assert!(asset.checksum.is_some_and(|checksum| checksum > 0));
+        assert_ne!(
+            software_test_pixel(&result.pixel_frames[0], 4, 4),
+            [5, 7, 17, 255]
+        );
+    }
+
+    #[test]
+    fn software_compositor_reports_video_asset_errors_without_mutating_pixels() {
+        let dir = tempdir().unwrap();
+        let missing_path = dir.path().join("missing.mp4");
+        let missing = render_test_image_source(&missing_path.display().to_string(), Some("video"));
+        assert_eq!(
+            missing.input_frames[0].asset.as_ref().unwrap().status,
+            SoftwareCompositorAssetStatus::MissingFile
+        );
+        assert_eq!(
+            missing.input_frames[0].status,
+            CompositorNodeStatus::Placeholder
+        );
+
+        let unsupported_path = dir.path().join("clip.avi");
+        fs::write(&unsupported_path, b"not a video").unwrap();
+        let unsupported =
+            render_test_image_source(&unsupported_path.display().to_string(), Some("video"));
+        assert_eq!(
+            unsupported.input_frames[0].asset.as_ref().unwrap().status,
+            SoftwareCompositorAssetStatus::UnsupportedExtension
+        );
+
+        if find_ffmpeg_binary().is_some() {
+            let broken_path = dir.path().join("broken.mp4");
+            fs::write(&broken_path, b"not a video").unwrap();
+            let broken =
+                render_test_image_source(&broken_path.display().to_string(), Some("video"));
+            assert_eq!(
+                broken.input_frames[0].asset.as_ref().unwrap().status,
+                SoftwareCompositorAssetStatus::DecodeFailed
+            );
+        }
+    }
+
+    #[test]
+    fn software_compositor_caches_video_frames_by_sample_time_and_modified_time() {
+        let Some(ffmpeg_path) = find_ffmpeg_binary() else {
+            eprintln!("skipping video cache test because ffmpeg is unavailable");
+            return;
+        };
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("clip.mp4");
+        if !write_test_video(&ffmpeg_path, &path, "blue") {
+            eprintln!("skipping video cache test because ffmpeg could not create fixture");
+            return;
+        }
+        let scene = test_image_scene(&path.display().to_string(), Some("video"));
+
+        let first = render_test_scene_with_target_at_frame(scene.clone(), 8, 8, 16);
+        let second = render_test_scene_with_target_at_frame(scene.clone(), 8, 8, 17);
+        assert!(!first.input_frames[0].asset.as_ref().unwrap().cache_hit);
+        assert!(second.input_frames[0].asset.as_ref().unwrap().cache_hit);
+        assert_eq!(
+            second.input_frames[0]
+                .asset
+                .as_ref()
+                .unwrap()
+                .sampled_frame_time_ms,
+            Some(500)
+        );
+
+        thread::sleep(Duration::from_millis(20));
+        if !write_test_video(&ffmpeg_path, &path, "green") {
+            eprintln!("skipping video cache invalidation assertion because fixture rewrite failed");
+            return;
+        }
+        let rewritten = render_test_scene_with_target_at_frame(scene, 8, 8, 17);
+        assert!(!rewritten.input_frames[0].asset.as_ref().unwrap().cache_hit);
+    }
+
+    #[test]
+    fn software_compositor_applies_filters_and_transforms_to_decoded_video_frames() {
+        let Some(ffmpeg_path) = find_ffmpeg_binary() else {
+            eprintln!("skipping video transform test because ffmpeg is unavailable");
+            return;
+        };
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("clip.mp4");
+        if !write_test_video(&ffmpeg_path, &path, "yellow") {
+            eprintln!("skipping video transform test because ffmpeg could not create fixture");
+            return;
+        }
+        let mut scene = test_image_scene(&path.display().to_string(), Some("video"));
+        scene.sources[0].position = ScenePoint { x: 2.0, y: 2.0 };
+        scene.sources[0].size = SceneSize {
+            width: 4.0,
+            height: 4.0,
+        };
+        scene.sources[0].opacity = 0.5;
+        scene.sources[0].bounds_mode = SceneSourceBoundsMode::Fit;
+        scene.sources[0].filters = vec![test_filter(
+            "filter-brightness",
+            SceneSourceFilterKind::ColorCorrection,
+            10,
+            true,
+            serde_json::json!({
+                "brightness": -0.4,
+                "contrast": 1.0,
+                "saturation": 1.0,
+                "gamma": 1.0
+            }),
+        )];
+
+        let result = render_test_scene(scene);
+
+        assert_eq!(
+            result.input_frames[0].filters[0].status,
+            SoftwareCompositorFilterStatus::Applied
+        );
+        assert_eq!(
+            result.frame.targets[0].nodes[0].status,
+            CompositorNodeStatus::Ready
+        );
+        assert_ne!(
+            software_test_pixel(&result.pixel_frames[0], 3, 3),
+            [5, 7, 17, 255]
         );
     }
 
@@ -4442,6 +4962,26 @@ mod tests {
         fs::write(path, contents).unwrap();
     }
 
+    fn write_test_video(ffmpeg_path: &Path, path: &Path, color: &str) -> bool {
+        let status = Command::new(ffmpeg_path)
+            .arg("-v")
+            .arg("error")
+            .arg("-y")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg(format!("color=c={color}:s=8x8:d=1:r=30"))
+            .arg("-frames:v")
+            .arg("30")
+            .arg("-c:v")
+            .arg("mpeg4")
+            .arg("-pix_fmt")
+            .arg("yuv420p")
+            .arg(path)
+            .status();
+        matches!(status, Ok(status) if status.success())
+    }
+
     fn render_test_image_source(
         asset_uri: &str,
         media_type: Option<&str>,
@@ -4632,6 +5172,15 @@ mod tests {
         width: u32,
         height: u32,
     ) -> SoftwareCompositorRenderResult {
+        render_test_scene_with_target_at_frame(scene, width, height, 0)
+    }
+
+    fn render_test_scene_with_target_at_frame(
+        scene: Scene,
+        width: u32,
+        height: u32,
+        frame_index: u64,
+    ) -> SoftwareCompositorRenderResult {
         let graph = build_compositor_graph(&scene);
         let plan = build_compositor_render_plan(
             &graph,
@@ -4644,7 +5193,7 @@ mod tests {
                 30,
             )],
         );
-        render_software_compositor_frame(&plan, 0)
+        render_software_compositor_frame(&plan, frame_index)
     }
 
     fn alpha_pixel_count(input: &SoftwareCompositorInputFrame) -> usize {

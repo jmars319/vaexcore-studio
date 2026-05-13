@@ -106,6 +106,38 @@ test("scene source defaults cover supported source kinds", async () => {
   }
 });
 
+test("scene validation accepts current video media source configs", async () => {
+  const {
+    cloneSceneCollection,
+    createDefaultSceneCollection,
+    createDefaultSceneSource,
+    validateSceneCollection,
+  } = await sharedTypes;
+  const collection = cloneSceneCollection(createDefaultSceneCollection("2026-05-08T12:00:00.000Z"));
+  const scene = collection.scenes[0];
+  scene.sources.push(
+    createDefaultSceneSource("image_media", {
+      id: "source-video-media",
+      name: "Local Video",
+      position: { x: 80, y: 60 },
+      size: { width: 640, height: 360 },
+      z_index: 20,
+      config: {
+        asset_uri: "/tmp/vaexcore-preview.mp4",
+        media_type: "video",
+        loop: true,
+        availability: {
+          state: "available",
+          detail: "Video preview source selected.",
+          checked_at: "2026-05-08T12:00:00.000Z",
+        },
+      },
+    }),
+  );
+
+  assert.equal(validateSceneCollection(collection).ok, true);
+});
+
 test("transition preview frames are deterministic for supported transition kinds", async () => {
   const {
     buildSceneTransitionPreviewFrame,

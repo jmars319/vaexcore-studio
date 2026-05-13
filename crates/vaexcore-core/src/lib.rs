@@ -27,10 +27,11 @@ pub use capture::{
 };
 pub use compositor::{
     build_compositor_graph, build_compositor_render_plan, build_software_compositor_input_frames,
-    compositor_render_target, evaluate_compositor_frame, render_software_compositor_frame,
-    validate_compositor_graph, validate_compositor_render_plan, CompositorBlendMode,
-    CompositorEvaluatedNode, CompositorFrameClock, CompositorFrameFormat, CompositorGraph,
-    CompositorNode, CompositorNodeRole, CompositorNodeStatus, CompositorOutput, CompositorRect,
+    build_software_compositor_input_frames_at_clock, compositor_render_target,
+    evaluate_compositor_frame, render_software_compositor_frame, validate_compositor_graph,
+    validate_compositor_render_plan, CompositorBlendMode, CompositorEvaluatedNode,
+    CompositorFrameClock, CompositorFrameFormat, CompositorGraph, CompositorNode,
+    CompositorNodeRole, CompositorNodeStatus, CompositorOutput, CompositorRect,
     CompositorRenderPlan, CompositorRenderTarget, CompositorRenderTargetKind,
     CompositorRenderedFrame, CompositorRenderedTarget, CompositorRendererKind, CompositorScaleMode,
     CompositorTransform, CompositorValidation, SoftwareCompositorAssetMetadata,
