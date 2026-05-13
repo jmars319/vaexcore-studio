@@ -34,7 +34,7 @@ use tokio::{
 };
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use vaexcore_core::{
-    build_audio_graph_runtime_snapshot, build_capture_provider_runtime_snapshot,
+    build_capture_provider_runtime_snapshot, build_live_audio_graph_runtime_snapshot,
     build_scene_runtime_bindings_snapshot, create_compositor_render_response,
     create_preview_frame_response, create_program_preview_frame_response,
     create_scene_activation_response, create_scene_runtime_state_update_response,
@@ -955,10 +955,9 @@ async fn get_scene_runtime_audio_graph(
     let frame_index = state
         .audio_graph_frame_index
         .fetch_add(1, Ordering::Relaxed);
-    Ok(Json(ApiResponse::ok(build_audio_graph_runtime_snapshot(
-        scene,
-        frame_index,
-    ))))
+    Ok(Json(ApiResponse::ok(
+        build_live_audio_graph_runtime_snapshot(scene, frame_index),
+    )))
 }
 
 async fn get_clients(

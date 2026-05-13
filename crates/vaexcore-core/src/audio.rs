@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, env, path::PathBuf, process::Command, time::Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -23,6 +23,14 @@ pub enum AudioMixSourceStatus {
     Placeholder,
     PermissionRequired,
     Unavailable,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioGraphInputMode {
+    Live,
+    Simulated,
+    Silent,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -83,6 +91,13 @@ pub struct AudioGraphRuntimeSource {
     pub monitor_enabled: bool,
     pub meter_enabled: bool,
     pub sync_offset_ms: i32,
+    pub input_mode: AudioGraphInputMode,
+    pub provider_name: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub sample_count: u32,
+    pub capture_duration_ms: u64,
+    pub latency_ms: f64,
     pub pre_filter_level_db: f64,
     pub pre_filter_peak_db: f64,
     pub pre_filter_linear_level: f64,
@@ -92,6 +107,8 @@ pub struct AudioGraphRuntimeSource {
     pub level_db: f64,
     pub peak_db: f64,
     pub linear_level: f64,
+    pub decay_level_db: f64,
+    pub peak_hold_db: f64,
     pub status: AudioMixSourceStatus,
     pub status_detail: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -135,6 +152,8 @@ pub struct AudioGraphRuntimeBus {
     pub kind: AudioMixBusKind,
     pub gain_db: f64,
     pub muted: bool,
+    pub source_count: u32,
+    pub active_source_count: u32,
     pub level_db: f64,
     pub peak_db: f64,
     pub linear_level: f64,
@@ -276,11 +295,26 @@ pub fn build_audio_graph_runtime_snapshot(
     scene: &Scene,
     frame_index: u64,
 ) -> AudioGraphRuntimeSnapshot {
+    build_audio_graph_runtime_snapshot_with_probe(scene, frame_index, &simulated_audio_input)
+}
+
+pub fn build_live_audio_graph_runtime_snapshot(
+    scene: &Scene,
+    frame_index: u64,
+) -> AudioGraphRuntimeSnapshot {
+    build_audio_graph_runtime_snapshot_with_probe(scene, frame_index, &audio_input_for_source)
+}
+
+fn build_audio_graph_runtime_snapshot_with_probe(
+    scene: &Scene,
+    frame_index: u64,
+    input_probe: &dyn Fn(&AudioMixSource, u64) -> AudioRuntimeInput,
+) -> AudioGraphRuntimeSnapshot {
     let plan = build_audio_mixer_plan(scene);
     let sources = plan
         .sources
         .iter()
-        .map(|source| audio_graph_runtime_source(source, frame_index))
+        .map(|source| audio_graph_runtime_source(source, frame_index, input_probe))
         .collect::<Vec<_>>();
     let buses = plan
         .buses
@@ -345,8 +379,49 @@ pub fn validate_audio_graph_runtime_snapshot(
                 source.scene_source_id
             ));
         }
+        if source.provider_name.trim().is_empty() {
+            errors.push(format!(
+                "audio graph source \"{}\" provider name is required",
+                source.scene_source_id
+            ));
+        }
+        if source.sample_rate == 0 {
+            errors.push(format!(
+                "audio graph source \"{}\" sample rate is required",
+                source.scene_source_id
+            ));
+        }
+        if source.channels == 0 {
+            errors.push(format!(
+                "audio graph source \"{}\" channels are required",
+                source.scene_source_id
+            ));
+        }
+        if !source.latency_ms.is_finite() || source.latency_ms < 0.0 {
+            errors.push(format!(
+                "audio graph source \"{}\" latency must be zero or greater",
+                source.scene_source_id
+            ));
+        }
+        match source.status {
+            AudioMixSourceStatus::Ready => {}
+            AudioMixSourceStatus::Placeholder => warnings.push(format!(
+                "{} audio runtime is waiting for input: {}",
+                source.name, source.status_detail
+            )),
+            AudioMixSourceStatus::PermissionRequired => warnings.push(format!(
+                "{} audio runtime requires permission: {}",
+                source.name, source.status_detail
+            )),
+            AudioMixSourceStatus::Unavailable => warnings.push(format!(
+                "{} audio runtime is unavailable: {}",
+                source.name, source.status_detail
+            )),
+        }
         validate_level(source.level_db, &source.name, &mut errors);
         validate_level(source.peak_db, &source.name, &mut errors);
+        validate_level(source.decay_level_db, &source.name, &mut errors);
+        validate_level(source.peak_hold_db, &source.name, &mut errors);
         validate_level(source.pre_filter_level_db, &source.name, &mut errors);
         validate_level(source.pre_filter_peak_db, &source.name, &mut errors);
         validate_level(source.post_filter_level_db, &source.name, &mut errors);
@@ -394,6 +469,12 @@ pub fn validate_audio_graph_runtime_snapshot(
     }
 
     for bus in &snapshot.buses {
+        if bus.active_source_count > bus.source_count {
+            errors.push(format!(
+                "{} active source count cannot exceed source count",
+                bus.name
+            ));
+        }
         validate_level(bus.level_db, &bus.name, &mut errors);
         validate_level(bus.peak_db, &bus.name, &mut errors);
         validate_linear_level(bus.linear_level, &bus.name, "linear bus level", &mut errors);
@@ -430,13 +511,18 @@ fn audio_mix_source(source: &SceneSource) -> AudioMixSource {
 fn audio_graph_runtime_source(
     source: &AudioMixSource,
     frame_index: u64,
+    input_probe: &dyn Fn(&AudioMixSource, u64) -> AudioRuntimeInput,
 ) -> AudioGraphRuntimeSource {
-    let (pre_filter_level_db, pre_filter_peak_db, pre_filter_linear_level) =
-        simulated_audio_level(source, frame_index);
+    let input = input_probe(source, frame_index);
+    let pre_filter_level_db = input.level_db;
+    let pre_filter_peak_db = input.peak_db;
+    let pre_filter_linear_level = db_to_linear(pre_filter_level_db);
     let filtered = apply_audio_filters(source, pre_filter_level_db, pre_filter_peak_db);
     let post_filter_level_db = filtered.level_db;
     let post_filter_peak_db = filtered.peak_db;
     let post_filter_linear_level = db_to_linear(post_filter_level_db);
+    let decay_level_db = meter_decay_level(post_filter_level_db, post_filter_peak_db, frame_index);
+    let peak_hold_db = meter_peak_hold_level(post_filter_peak_db, decay_level_db);
     AudioGraphRuntimeSource {
         scene_source_id: source.scene_source_id.clone(),
         name: source.name.clone(),
@@ -447,6 +533,13 @@ fn audio_graph_runtime_source(
         monitor_enabled: source.monitor_enabled,
         meter_enabled: source.meter_enabled,
         sync_offset_ms: source.sync_offset_ms,
+        input_mode: input.input_mode,
+        provider_name: input.provider_name,
+        sample_rate: input.sample_rate,
+        channels: input.channels,
+        sample_count: input.sample_count,
+        capture_duration_ms: input.capture_duration_ms,
+        latency_ms: input.latency_ms,
         pre_filter_level_db,
         pre_filter_peak_db,
         pre_filter_linear_level,
@@ -456,8 +549,10 @@ fn audio_graph_runtime_source(
         level_db: post_filter_level_db,
         peak_db: post_filter_peak_db,
         linear_level: post_filter_linear_level,
-        status: source.status.clone(),
-        status_detail: source.status_detail.clone(),
+        decay_level_db,
+        peak_hold_db,
+        status: input.status,
+        status_detail: input.status_detail,
         filters: filtered.filters,
     }
 }
@@ -466,6 +561,16 @@ fn audio_graph_runtime_bus(
     bus: &AudioMixBus,
     sources: &[AudioGraphRuntimeSource],
 ) -> AudioGraphRuntimeBus {
+    let source_count = sources.len() as u32;
+    let active_source_count = sources
+        .iter()
+        .filter(|source| {
+            source.input_mode != AudioGraphInputMode::Silent
+                && source.linear_level > 0.0
+                && !source.muted
+                && source.meter_enabled
+        })
+        .count() as u32;
     let linear_level = if bus.muted || sources.is_empty() {
         0.0
     } else {
@@ -484,10 +589,27 @@ fn audio_graph_runtime_bus(
         kind: bus.kind.clone(),
         gain_db: bus.gain_db,
         muted: bus.muted,
+        source_count,
+        active_source_count,
         level_db: level_db.clamp(-90.0, 6.0),
         peak_db: peak_db.clamp(-90.0, 6.0),
         linear_level,
     }
+}
+
+#[derive(Clone, Debug)]
+struct AudioRuntimeInput {
+    input_mode: AudioGraphInputMode,
+    provider_name: String,
+    sample_rate: u32,
+    channels: u16,
+    sample_count: u32,
+    capture_duration_ms: u64,
+    latency_ms: f64,
+    level_db: f64,
+    peak_db: f64,
+    status: AudioMixSourceStatus,
+    status_detail: String,
 }
 
 struct AudioFilterRuntimeResult {
@@ -773,9 +895,50 @@ fn clamp_audio_level(value: f64) -> f64 {
     value.clamp(-90.0, 6.0)
 }
 
-fn simulated_audio_level(source: &AudioMixSource, frame_index: u64) -> (f64, f64, f64) {
+fn audio_input_for_source(source: &AudioMixSource, frame_index: u64) -> AudioRuntimeInput {
     if source.muted || !source.meter_enabled {
-        return (-90.0, -90.0, 0.0);
+        return silent_audio_input(
+            source,
+            if source.muted {
+                "Source is muted."
+            } else {
+                "Metering is disabled for this source."
+            },
+        );
+    }
+
+    if source.status == AudioMixSourceStatus::Ready && source.capture_source_id.is_some() {
+        return match live_audio_input_for_source(source) {
+            Ok(input) => apply_source_gain_to_input(source, input),
+            Err(error) => AudioRuntimeInput {
+                input_mode: AudioGraphInputMode::Silent,
+                provider_name: error.provider_name,
+                sample_rate: 48_000,
+                channels: 1,
+                sample_count: 0,
+                capture_duration_ms: 0,
+                latency_ms: 0.0,
+                level_db: -90.0,
+                peak_db: -90.0,
+                status: error.status,
+                status_detail: error.detail,
+            },
+        };
+    }
+
+    simulated_audio_input(source, frame_index)
+}
+
+fn simulated_audio_input(source: &AudioMixSource, frame_index: u64) -> AudioRuntimeInput {
+    if source.muted || !source.meter_enabled {
+        return silent_audio_input(
+            source,
+            if source.muted {
+                "Source is muted."
+            } else {
+                "Metering is disabled for this source."
+            },
+        );
     }
 
     let seed = stable_audio_seed(&source.scene_source_id);
@@ -789,7 +952,254 @@ fn simulated_audio_level(source: &AudioMixSource, frame_index: u64) -> (f64, f64
     };
     let level_db = (-48.0 + wave * 32.0 + source.gain_db + status_offset).clamp(-90.0, 6.0);
     let peak_db = (level_db + 5.0 + (f64::from((seed % 7) as u8) * 0.35)).clamp(-90.0, 6.0);
-    (level_db, peak_db, db_to_linear(level_db))
+    AudioRuntimeInput {
+        input_mode: AudioGraphInputMode::Simulated,
+        provider_name: "deterministic-simulator".to_string(),
+        sample_rate: 48_000,
+        channels: 2,
+        sample_count: 960,
+        capture_duration_ms: 0,
+        latency_ms: 0.0,
+        level_db,
+        peak_db,
+        status: source.status.clone(),
+        status_detail: source.status_detail.clone(),
+    }
+}
+
+fn silent_audio_input(source: &AudioMixSource, detail: &str) -> AudioRuntimeInput {
+    AudioRuntimeInput {
+        input_mode: AudioGraphInputMode::Silent,
+        provider_name: "silence".to_string(),
+        sample_rate: 48_000,
+        channels: 2,
+        sample_count: 0,
+        capture_duration_ms: 0,
+        latency_ms: 0.0,
+        level_db: -90.0,
+        peak_db: -90.0,
+        status: source.status.clone(),
+        status_detail: detail.to_string(),
+    }
+}
+
+fn apply_source_gain_to_input(
+    source: &AudioMixSource,
+    mut input: AudioRuntimeInput,
+) -> AudioRuntimeInput {
+    input.level_db = clamp_audio_level(input.level_db + source.gain_db);
+    input.peak_db = clamp_audio_level(input.peak_db + source.gain_db);
+    input
+}
+
+struct AudioRuntimeInputError {
+    status: AudioMixSourceStatus,
+    provider_name: String,
+    detail: String,
+}
+
+#[cfg(target_os = "macos")]
+fn live_audio_input_for_source(
+    source: &AudioMixSource,
+) -> Result<AudioRuntimeInput, AudioRuntimeInputError> {
+    let Some(capture_id) = source.capture_source_id.as_deref() else {
+        return Err(AudioRuntimeInputError {
+            status: AudioMixSourceStatus::Placeholder,
+            provider_name: "macos-avfoundation-ffmpeg".to_string(),
+            detail: "No audio capture source has been assigned.".to_string(),
+        });
+    };
+    let Some(ffmpeg_path) = find_ffmpeg_binary() else {
+        return Err(AudioRuntimeInputError {
+            status: AudioMixSourceStatus::Unavailable,
+            provider_name: "macos-avfoundation-ffmpeg".to_string(),
+            detail: "FFmpeg is required for live audio meter preview V1 and was not found."
+                .to_string(),
+        });
+    };
+    let Some(audio_index) = macos_audio_index_from_source_id(capture_id) else {
+        return Err(AudioRuntimeInputError {
+            status: AudioMixSourceStatus::Unavailable,
+            provider_name: "macos-avfoundation-ffmpeg".to_string(),
+            detail: format!("Unsupported macOS audio source id \"{capture_id}\"."),
+        });
+    };
+
+    let input_name = format!(":{audio_index}");
+    let started_at = Instant::now();
+    let output = Command::new(ffmpeg_path)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-f",
+            "avfoundation",
+            "-i",
+            &input_name,
+            "-t",
+            "0.12",
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            "48000",
+            "-f",
+            "f32le",
+            "pipe:1",
+        ])
+        .output()
+        .map_err(|error| AudioRuntimeInputError {
+            status: AudioMixSourceStatus::Unavailable,
+            provider_name: "macos-avfoundation-ffmpeg".to_string(),
+            detail: format!("FFmpeg audio meter preview could not be started: {error}"),
+        })?;
+    let capture_duration_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+
+    if !output.status.success() {
+        let detail = ffmpeg_audio_error_detail(&output.stderr);
+        return Err(AudioRuntimeInputError {
+            status: ffmpeg_audio_error_status(&detail),
+            provider_name: "macos-avfoundation-ffmpeg".to_string(),
+            detail,
+        });
+    }
+    let (level_db, peak_db, sample_count) =
+        decode_f32le_audio_level(&output.stdout).map_err(|detail| AudioRuntimeInputError {
+            status: AudioMixSourceStatus::Unavailable,
+            provider_name: "macos-avfoundation-ffmpeg".to_string(),
+            detail,
+        })?;
+
+    Ok(AudioRuntimeInput {
+        input_mode: AudioGraphInputMode::Live,
+        provider_name: "macos-avfoundation-ffmpeg".to_string(),
+        sample_rate: 48_000,
+        channels: 1,
+        sample_count,
+        capture_duration_ms,
+        latency_ms: capture_duration_ms as f64,
+        level_db,
+        peak_db,
+        status: AudioMixSourceStatus::Ready,
+        status_detail: format!("Captured live macOS audio level from {capture_id}."),
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn live_audio_input_for_source(
+    source: &AudioMixSource,
+) -> Result<AudioRuntimeInput, AudioRuntimeInputError> {
+    Err(AudioRuntimeInputError {
+        status: AudioMixSourceStatus::Unavailable,
+        provider_name: "unsupported-platform".to_string(),
+        detail: format!(
+            "Live audio meter preview is not implemented on this platform for {}.",
+            source
+                .capture_source_id
+                .as_deref()
+                .unwrap_or("the selected audio source")
+        ),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_audio_index_from_source_id(capture_id: &str) -> Option<u32> {
+    if capture_id == "microphone:default" || capture_id == "system_audio:default" {
+        return Some(0);
+    }
+    capture_id
+        .strip_prefix("microphone:")
+        .or_else(|| capture_id.strip_prefix("system_audio:"))
+        .or_else(|| capture_id.strip_prefix("system:"))
+        .and_then(|value| value.parse::<u32>().ok())
+}
+
+fn decode_f32le_audio_level(bytes: &[u8]) -> Result<(f64, f64, u32), String> {
+    let mut sum_square = 0.0_f64;
+    let mut peak = 0.0_f64;
+    let mut count = 0_u32;
+
+    for chunk in bytes.chunks_exact(4) {
+        let sample = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as f64;
+        if !sample.is_finite() {
+            continue;
+        }
+        let absolute = sample.abs().clamp(0.0, 1.0);
+        sum_square += absolute * absolute;
+        peak = peak.max(absolute);
+        count = count.saturating_add(1);
+    }
+
+    if count == 0 {
+        return Err("FFmpeg returned no audio samples for live meter preview.".to_string());
+    }
+
+    let rms = (sum_square / f64::from(count)).sqrt().clamp(0.0, 1.0);
+    Ok((linear_to_db(rms), linear_to_db(peak), count))
+}
+
+#[cfg(target_os = "macos")]
+fn ffmpeg_audio_error_detail(stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    if stderr.is_empty() {
+        "FFmpeg audio meter preview failed. Check Microphone permission and source availability."
+            .to_string()
+    } else {
+        format!("FFmpeg audio meter preview failed: {stderr}")
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn ffmpeg_audio_error_status(detail: &str) -> AudioMixSourceStatus {
+    let lower = detail.to_ascii_lowercase();
+    if lower.contains("not authorized")
+        || lower.contains("permission")
+        || lower.contains("privacy")
+        || lower.contains("denied")
+    {
+        AudioMixSourceStatus::PermissionRequired
+    } else {
+        AudioMixSourceStatus::Unavailable
+    }
+}
+
+fn meter_decay_level(level_db: f64, peak_db: f64, frame_index: u64) -> f64 {
+    let decay_db = 1.5 + f64::from((frame_index % 4) as u8) * 0.5;
+    level_db.max(peak_db - decay_db).clamp(-90.0, 6.0)
+}
+
+fn meter_peak_hold_level(peak_db: f64, decay_level_db: f64) -> f64 {
+    peak_db.max(decay_level_db).clamp(-90.0, 6.0)
+}
+
+fn find_ffmpeg_binary() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(explicit_path) = env::var_os("VAEXCORE_FFMPEG_PATH") {
+        candidates.push(PathBuf::from(explicit_path));
+    }
+    if let Some(paths) = env::var_os("PATH") {
+        for path in env::split_paths(&paths) {
+            for executable_name in ffmpeg_executable_names() {
+                candidates.push(path.join(executable_name));
+            }
+        }
+    }
+    candidates.extend([
+        PathBuf::from("/opt/homebrew/bin/ffmpeg"),
+        PathBuf::from("/usr/local/bin/ffmpeg"),
+        PathBuf::from("/usr/bin/ffmpeg"),
+    ]);
+
+    candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
+fn ffmpeg_executable_names() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["ffmpeg.exe", "ffmpeg"]
+    } else {
+        &["ffmpeg"]
+    }
 }
 
 fn db_to_linear(value: f64) -> f64 {
@@ -971,6 +1381,47 @@ mod tests {
             .buses
             .iter()
             .any(|bus| bus.kind == AudioMixBusKind::Master));
+        assert_eq!(first.sources[0].input_mode, AudioGraphInputMode::Simulated);
+        assert_eq!(first.sources[0].provider_name, "deterministic-simulator");
+        assert_eq!(first.sources[0].sample_rate, 48_000);
+        assert!(first.sources[0].peak_hold_db >= first.sources[0].decay_level_db);
+        assert_eq!(first.buses[0].source_count, 1);
+    }
+
+    #[test]
+    fn audio_graph_runtime_uses_live_probe_levels_when_available() {
+        let scene = test_audio_scene(Vec::new());
+
+        let snapshot =
+            build_audio_graph_runtime_snapshot_with_probe(&scene, 12, &mock_live_audio_input);
+        let source = &snapshot.sources[0];
+
+        assert_eq!(source.input_mode, AudioGraphInputMode::Live);
+        assert_eq!(source.provider_name, "mock-live-audio");
+        assert_eq!(source.sample_count, 480);
+        assert_eq!(source.status, AudioMixSourceStatus::Ready);
+        assert_approx_eq(source.pre_filter_level_db, -18.0);
+        assert_approx_eq(source.level_db, -18.0);
+        assert_eq!(snapshot.buses[0].active_source_count, 1);
+        assert_approx_eq(snapshot.buses[0].level_db, source.level_db);
+    }
+
+    #[test]
+    fn audio_graph_runtime_reports_silent_live_failure_from_probe() {
+        let scene = test_audio_scene(Vec::new());
+
+        let snapshot = build_audio_graph_runtime_snapshot_with_probe(
+            &scene,
+            12,
+            &mock_unavailable_audio_input,
+        );
+        let source = &snapshot.sources[0];
+
+        assert_eq!(source.input_mode, AudioGraphInputMode::Silent);
+        assert_eq!(source.status, AudioMixSourceStatus::Unavailable);
+        assert_eq!(source.level_db, -90.0);
+        assert_eq!(snapshot.buses[0].active_source_count, 0);
+        assert!(source.status_detail.contains("unavailable"));
     }
 
     #[test]
@@ -1215,6 +1666,38 @@ mod tests {
             enabled,
             order,
             config,
+        }
+    }
+
+    fn mock_live_audio_input(source: &AudioMixSource, _: u64) -> AudioRuntimeInput {
+        AudioRuntimeInput {
+            input_mode: AudioGraphInputMode::Live,
+            provider_name: "mock-live-audio".to_string(),
+            sample_rate: 48_000,
+            channels: 1,
+            sample_count: 480,
+            capture_duration_ms: 10,
+            latency_ms: 10.0,
+            level_db: -18.0 + source.gain_db,
+            peak_db: -12.0 + source.gain_db,
+            status: AudioMixSourceStatus::Ready,
+            status_detail: "Mock live audio probe captured samples.".to_string(),
+        }
+    }
+
+    fn mock_unavailable_audio_input(_: &AudioMixSource, _: u64) -> AudioRuntimeInput {
+        AudioRuntimeInput {
+            input_mode: AudioGraphInputMode::Silent,
+            provider_name: "mock-live-audio".to_string(),
+            sample_rate: 48_000,
+            channels: 1,
+            sample_count: 0,
+            capture_duration_ms: 0,
+            latency_ms: 0.0,
+            level_db: -90.0,
+            peak_db: -90.0,
+            status: AudioMixSourceStatus::Unavailable,
+            status_detail: "Mock live audio unavailable.".to_string(),
         }
     }
 

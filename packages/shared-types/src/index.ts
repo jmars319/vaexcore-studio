@@ -1450,6 +1450,8 @@ export type AudioMixSourceStatus =
   | "permission_required"
   | "unavailable";
 
+export type AudioGraphInputMode = "live" | "simulated" | "silent";
+
 export interface AudioMixBus {
   id: string;
   name: string;
@@ -1502,6 +1504,13 @@ export interface AudioGraphRuntimeSource {
   monitor_enabled: boolean;
   meter_enabled: boolean;
   sync_offset_ms: number;
+  input_mode: AudioGraphInputMode;
+  provider_name: string;
+  sample_rate: number;
+  channels: number;
+  sample_count: number;
+  capture_duration_ms: number;
+  latency_ms: number;
   pre_filter_level_db: number;
   pre_filter_peak_db: number;
   pre_filter_linear_level: number;
@@ -1511,6 +1520,8 @@ export interface AudioGraphRuntimeSource {
   level_db: number;
   peak_db: number;
   linear_level: number;
+  decay_level_db: number;
+  peak_hold_db: number;
   status: AudioMixSourceStatus;
   status_detail: string;
   filters: AudioFilterRuntimeMetadata[];
@@ -1542,6 +1553,8 @@ export interface AudioGraphRuntimeBus {
   kind: AudioMixBusKind;
   gain_db: number;
   muted: boolean;
+  source_count: number;
+  active_source_count: number;
   level_db: number;
   peak_db: number;
   linear_level: number;
@@ -2872,8 +2885,28 @@ export function validateAudioGraphRuntimeSnapshot(
     if (!source.name.trim()) {
       errors.push(`Audio graph source "${source.scene_source_id}" name is required.`);
     }
+    if (!source.provider_name.trim()) {
+      errors.push(`Audio graph source "${source.scene_source_id}" provider is required.`);
+    }
+    validateNullablePositiveNumber(source.sample_rate, `${source.name}.sample_rate`, errors);
+    validateNullablePositiveNumber(source.channels, `${source.name}.channels`, errors);
+    if (!Number.isInteger(source.sample_count) || source.sample_count < 0) {
+      errors.push(`${source.name} sample count must be zero or greater.`);
+    }
+    if (!Number.isFinite(source.latency_ms) || source.latency_ms < 0) {
+      errors.push(`${source.name} latency must be zero or greater.`);
+    }
+    if (source.status === "placeholder") {
+      warnings.push(`${source.name} audio runtime is waiting for input: ${source.status_detail}`);
+    } else if (source.status === "permission_required") {
+      warnings.push(`${source.name} audio runtime requires permission: ${source.status_detail}`);
+    } else if (source.status === "unavailable") {
+      warnings.push(`${source.name} audio runtime is unavailable: ${source.status_detail}`);
+    }
     validateAudioLevel(source.level_db, source.name, errors);
     validateAudioLevel(source.peak_db, source.name, errors);
+    validateAudioLevel(source.decay_level_db, source.name, errors);
+    validateAudioLevel(source.peak_hold_db, source.name, errors);
     validateAudioLevel(source.pre_filter_level_db, source.name, errors);
     validateAudioLevel(source.pre_filter_peak_db, source.name, errors);
     validateAudioLevel(source.post_filter_level_db, source.name, errors);
@@ -2917,6 +2950,16 @@ export function validateAudioGraphRuntimeSnapshot(
   });
 
   snapshot.buses.forEach((bus) => {
+    if (!Number.isInteger(bus.source_count) || bus.source_count < 0) {
+      errors.push(`${bus.name} source count must be zero or greater.`);
+    }
+    if (
+      !Number.isInteger(bus.active_source_count) ||
+      bus.active_source_count < 0 ||
+      bus.active_source_count > bus.source_count
+    ) {
+      errors.push(`${bus.name} active source count must be between zero and source count.`);
+    }
     validateAudioLevel(bus.level_db, bus.name, errors);
     validateAudioLevel(bus.peak_db, bus.name, errors);
     validateLinearAudioLevel(bus.linear_level, bus.name, "linear bus level", errors);
@@ -2955,6 +2998,8 @@ function audioGraphRuntimeSource(
   const simulated = simulatedAudioLevel(source, frameIndex);
   const filtered = applyAudioFilters(source, simulated.levelDb, simulated.peakDb);
   const postFilterLinearLevel = dbToLinear(filtered.levelDb);
+  const decayLevelDb = meterDecayLevel(filtered.levelDb, filtered.peakDb, frameIndex);
+  const peakHoldDb = Math.max(filtered.peakDb, decayLevelDb);
   return {
     scene_source_id: source.scene_source_id,
     name: source.name,
@@ -2965,6 +3010,13 @@ function audioGraphRuntimeSource(
     monitor_enabled: source.monitor_enabled,
     meter_enabled: source.meter_enabled,
     sync_offset_ms: source.sync_offset_ms,
+    input_mode: source.muted || !source.meter_enabled ? "silent" : "simulated",
+    provider_name: source.muted || !source.meter_enabled ? "silence" : "deterministic-simulator",
+    sample_rate: 48_000,
+    channels: 2,
+    sample_count: source.muted || !source.meter_enabled ? 0 : 960,
+    capture_duration_ms: 0,
+    latency_ms: 0,
     pre_filter_level_db: simulated.levelDb,
     pre_filter_peak_db: simulated.peakDb,
     pre_filter_linear_level: simulated.linearLevel,
@@ -2974,6 +3026,8 @@ function audioGraphRuntimeSource(
     level_db: filtered.levelDb,
     peak_db: filtered.peakDb,
     linear_level: postFilterLinearLevel,
+    decay_level_db: decayLevelDb,
+    peak_hold_db: peakHoldDb,
     status: source.status,
     status_detail: source.status_detail,
     filters: filtered.filters,
@@ -2990,12 +3044,21 @@ function audioGraphRuntimeBus(
       : Math.min(1, Math.max(...sources.map((source) => source.linear_level)));
   const levelDb = clampAudioLevel(linearToDb(linearLevel) + bus.gain_db);
   const peakDb = clampAudioLevel(levelDb + 4.5);
+  const activeSourceCount = sources.filter(
+    (source) =>
+      source.input_mode !== "silent" &&
+      source.linear_level > 0 &&
+      !source.muted &&
+      source.meter_enabled,
+  ).length;
   return {
     id: bus.id,
     name: bus.name,
     kind: bus.kind,
     gain_db: bus.gain_db,
     muted: bus.muted,
+    source_count: sources.length,
+    active_source_count: activeSourceCount,
     level_db: levelDb,
     peak_db: peakDb,
     linear_level: linearLevel,
@@ -3278,6 +3341,11 @@ function simulatedAudioLevel(
   const levelDb = clampAudioLevel(-48 + wave * 32 + source.gain_db + statusOffset);
   const peakDb = clampAudioLevel(levelDb + 5 + (seed % 7) * 0.35);
   return { levelDb, peakDb, linearLevel: dbToLinear(levelDb) };
+}
+
+function meterDecayLevel(levelDb: number, peakDb: number, frameIndex: number): number {
+  const decayDb = 1.5 + (Math.trunc(frameIndex) % 4) * 0.5;
+  return clampAudioLevel(Math.max(levelDb, peakDb - decayDb));
 }
 
 function compressAudioLevel(levelDb: number, thresholdDb: number, ratio: number): number {

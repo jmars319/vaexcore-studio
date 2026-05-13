@@ -6945,6 +6945,10 @@ function DesignerPage(props: {
               node={selectedRuntimeNode}
               source={props.selectedSource}
             />
+            <AudioInputRuntimePanel
+              audioGraphSource={selectedAudioGraphSource}
+              source={props.selectedSource}
+            />
             <SourceConfigEditor
               captureInventory={props.captureInventory}
               onChange={(config) =>
@@ -7458,6 +7462,70 @@ function ImageAssetRuntimePanel(props: {
           <span>{detail}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+function AudioInputRuntimePanel(props: {
+  audioGraphSource: AudioGraphRuntimeSource | null;
+  source: SceneSource;
+}) {
+  if (props.source.kind !== "audio_meter") return null;
+
+  const source = props.audioGraphSource;
+  const status = source?.status ?? sceneSourceAvailability(props.source)?.state ?? "placeholder";
+  const detail =
+    source?.status_detail ??
+    sceneSourceAvailability(props.source)?.detail ??
+    "Waiting for the next audio graph snapshot to evaluate this source.";
+  const inputMode = source?.input_mode ?? "pending";
+
+  return (
+    <div className="audio-input-runtime-panel" data-testid="designer-audio-input-runtime">
+      <div className="runtime-binding-header">
+        <div>
+          <strong>Audio Input Runtime</strong>
+          <span>{detail}</span>
+        </div>
+        <Pill tone={runtimeBindingTone(status)}>
+          {inputMode === "live" ? "live" : inputMode === "simulated" ? "simulated" : status}
+        </Pill>
+      </div>
+      <div className="designer-preview-meta">
+        <KeyValue label="Provider" value={source?.provider_name ?? "pending"} />
+        <KeyValue
+          label="Samples"
+          value={
+            source
+              ? `${source.sample_count} @ ${source.sample_rate} Hz / ${source.channels} ch`
+              : "pending"
+          }
+        />
+        <KeyValue
+          label="Capture"
+          value={source ? `${source.capture_duration_ms} ms` : "pending"}
+        />
+        <KeyValue
+          label="Latency"
+          value={source ? `${source.latency_ms.toFixed(1)} ms` : "pending"}
+        />
+        <KeyValue label="Level" value={formatAudioLevel(source?.level_db)} />
+        <KeyValue label="Decay" value={formatAudioLevel(source?.decay_level_db)} />
+        <KeyValue label="Peak Hold" value={formatAudioLevel(source?.peak_hold_db)} />
+        <KeyValue
+          label="Flags"
+          value={`${source?.muted ? "muted" : "unmuted"} / ${
+            source?.monitor_enabled ? "monitor" : "no monitor"
+          } / ${source?.sync_offset_ms ?? 0} ms sync`}
+        />
+      </div>
+      <div className="designer-audio-meter runtime-meter">
+        <span
+          style={{
+            width: `${Math.round((source?.linear_level ?? 0) * 100)}%`,
+          }}
+        />
+      </div>
     </div>
   );
 }

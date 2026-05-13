@@ -40,9 +40,10 @@ Scene sources also carry ordered filter chains for effects such as color
 correction, chroma key, crop/pad, blur, LUTs, noise gates, and compressors.
 The software preview compositor applies visual filters for color correction,
 chroma key, crop/pad alpha crop, blur, sharpen, still-image mask/blend, and
-`.cube` LUT transforms to source input pixels. The simulated audio graph applies
-audio gain, noise gate, and compressor filters to audio meter runtime levels;
-real captured audio mixing remains deferred.
+`.cube` LUT transforms to source input pixels. The audio graph applies audio
+gain, noise gate, and compressor filters to audio meter runtime levels from
+deterministic simulation or live Designer probes where available; real output
+audio mixing remains deferred.
 
 The software preview compositor can decode local still-image `image_media`
 sources when `media_type = "image"`. It supports PNG, JPEG, WebP, and the first
@@ -98,9 +99,15 @@ capture remain later work.
 
 `AudioMixerPlan` maps visible audio meter sources to the master, monitor,
 recording, and stream buses. It carries gain, mute, monitoring, meter, and sync
-offset fields so the UI and future mixer engine agree on routing before real
-audio mixing is implemented. `AudioGraphRuntimeSnapshot` reports deterministic
-pre-filter and post-filter meter levels plus ordered audio filter diagnostics for
+offset fields so the UI and future mixer engine agree on routing before output
+audio mixing is implemented. The runtime audio graph can now prefer one-shot
+macOS FFmpeg/AVFoundation microphone or system-audio level probes for assigned
+audio meter sources, then feeds those levels through the same gain, mute, sync,
+bus, and audio-filter path. If FFmpeg, permissions, platform support, or source
+availability are missing, the graph reports explicit silent/fallback diagnostics
+rather than starting playback or output. `AudioGraphRuntimeSnapshot` reports
+input mode, provider, sample count, capture duration, latency, pre/post-filter
+levels, meter decay, peak hold, bus source counts, and ordered diagnostics for
 `audio_gain`, `noise_gate`, and `compressor`.
 
 `PerformanceTelemetryPlan` maps enabled compositor render targets to frame

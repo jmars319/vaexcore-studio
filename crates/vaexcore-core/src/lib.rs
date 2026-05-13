@@ -14,10 +14,11 @@ pub mod status;
 
 pub use audio::{
     build_audio_graph_runtime_snapshot, build_audio_mixer_plan,
-    validate_audio_graph_runtime_snapshot, validate_audio_mixer_plan, AudioFilterRuntimeMetadata,
-    AudioFilterRuntimeStatus, AudioGraphRuntimeBus, AudioGraphRuntimeSnapshot,
-    AudioGraphRuntimeSource, AudioGraphRuntimeValidation, AudioMixBus, AudioMixBusKind,
-    AudioMixSource, AudioMixSourceStatus, AudioMixerPlan, AudioMixerValidation,
+    build_live_audio_graph_runtime_snapshot, validate_audio_graph_runtime_snapshot,
+    validate_audio_mixer_plan, AudioFilterRuntimeMetadata, AudioFilterRuntimeStatus,
+    AudioGraphInputMode, AudioGraphRuntimeBus, AudioGraphRuntimeSnapshot, AudioGraphRuntimeSource,
+    AudioGraphRuntimeValidation, AudioMixBus, AudioMixBusKind, AudioMixSource,
+    AudioMixSourceStatus, AudioMixerPlan, AudioMixerValidation,
 };
 pub use capture::{
     build_capture_frame_plan, build_capture_provider_runtime_snapshot, default_capture_sources,

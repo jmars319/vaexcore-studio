@@ -263,7 +263,7 @@ Returns the active scene capture provider runtime snapshot. V1 uses deterministi
 
 ### `GET /scene-runtime/audio-graph`
 
-Returns the active scene audio graph runtime snapshot with simulated pre-filter and post-filter meter levels, ordered `audio_gain` / `noise_gate` / `compressor` diagnostics, gain, mute, monitor, sync offset, bus state, and validation metadata. This endpoint does not start live audio capture.
+Returns the active scene audio graph runtime snapshot with pre-filter and post-filter meter levels, ordered `audio_gain` / `noise_gate` / `compressor` diagnostics, gain, mute, monitor, sync offset, bus state, and validation metadata. The runtime prefers one-shot macOS FFmpeg/AVFoundation level probes for assigned microphone/system-audio sources when FFmpeg and permissions are available, otherwise it reports explicit silent/fallback diagnostics. This endpoint does not start monitoring playback, recording, streaming, or encoder output.
 
 ### `GET /media/plan`
 

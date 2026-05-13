@@ -965,6 +965,14 @@ test("audio graph runtime reports ordered audio filter diagnostics", async () =>
   assert.notEqual(runtimeSource.level_db, runtimeSource.pre_filter_level_db);
   assert.equal(runtimeSource.level_db, runtimeSource.post_filter_level_db);
   assert.equal(runtimeSource.linear_level, runtimeSource.post_filter_linear_level);
+  assert.equal(runtimeSource.input_mode, "simulated");
+  assert.equal(runtimeSource.provider_name, "deterministic-simulator");
+  assert.equal(runtimeSource.sample_rate, 48000);
+  assert.equal(runtimeSource.channels, 2);
+  assert.ok(runtimeSource.sample_count > 0);
+  assert.ok(runtimeSource.peak_hold_db >= runtimeSource.decay_level_db);
+  assert.equal(snapshot.buses[0].source_count, 1);
+  assert.equal(snapshot.buses[0].active_source_count, 1);
 });
 
 test("audio graph runtime reports malformed filters without mutating levels", async () => {
@@ -993,6 +1001,7 @@ test("audio graph runtime reports malformed filters without mutating levels", as
   assert.equal(runtimeSource.filters[0].status, "error");
   assert.match(runtimeSource.filters[0].status_detail, /between/);
   assert.equal(runtimeSource.level_db, runtimeSource.pre_filter_level_db);
+  assert.equal(runtimeSource.input_mode, "simulated");
 });
 
 test("capture inventory binding updates scene source availability", async () => {

@@ -396,6 +396,11 @@ const targets = [
       },
       {
         type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-audio-input-runtime\\"]"))',
+        message: "Designer audio input runtime panel did not render.",
+      },
+      {
+        type: "assert",
         expression: 'document.querySelector("[data-testid=\\"designer-audio-filter-runtime\\"]")?.textContent?.includes("Audio Gain")',
         message: "Designer audio filter runtime panel did not show the added audio filter.",
       },
@@ -403,6 +408,11 @@ const targets = [
         type: "assert",
         expression: 'document.querySelector("[data-testid=\\"designer-audio-filter-runtime\\"]")?.textContent?.includes("Post")',
         message: "Designer audio filter runtime panel did not show post-filter level metadata.",
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelector("[data-testid=\\"designer-audio-input-runtime\\"]")?.textContent?.includes("Provider")',
+        message: "Designer audio input runtime panel did not show source metadata.",
       },
     ],
   },

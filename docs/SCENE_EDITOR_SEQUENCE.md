@@ -80,8 +80,9 @@ foundation to OBS-class scene editing and output.
     compositor graph propagation, first-pass Designer filter chain editing, and
     software preview execution for color correction, chroma key, crop/pad alpha
     crop, blur, sharpen, still-image mask/blend, and `.cube` LUT transforms.
-    Simulated audio graph execution is done for audio gain, noise gate, and
-    compressor filters; output pipeline filter parity remains deferred.
+    Audio graph execution is done for audio gain, noise gate, and compressor
+    filters over deterministic simulation and live Designer level probes where
+    available; output pipeline filter parity remains deferred.
 23. Scene transitions and transition preview: started for OBS-class runtime V1
     with persisted transition contracts, validation, Designer controls, from/to
     scene selection, scrub/playback controls, and backend software pixel preview
@@ -178,11 +179,16 @@ smoke coverage. It remains a software placeholder preview until real capture
 providers are connected.
 
 Phase H audio foundation, covering steps 71-80, now has an audio graph runtime
-snapshot, simulated pre/post-filter meter levels, gain/mute/monitor/sync
-metadata, audio gain/noise gate/compressor filter diagnostics, runtime
-validation, API/SDK/Desktop client access, and Designer meter displays in the
-preview and Inspector. The meters are deterministic simulation, not live device
-audio capture.
+snapshot, pre/post-filter meter levels, gain/mute/monitor/sync metadata, audio
+gain/noise gate/compressor filter diagnostics, runtime validation,
+API/SDK/Desktop client access, and Designer meter displays in the preview and
+Inspector. Full Scene Designer Pass 6 now lets the API prefer one-shot macOS
+FFmpeg/AVFoundation microphone or system-audio level probes for assigned audio
+meter sources, with input mode, provider, sample count, capture duration,
+latency, decay, peak hold, and bus source-count diagnostics. Missing FFmpeg,
+permissions, unsupported platforms, or unavailable sources stay explicit
+silent/fallback states. Output audio mixing, monitoring playback, recording, and
+streaming audio remain later work.
 
 Phase I recording/streaming prep, covering steps 81-90, now has render target
 profiles, recording target contracts, streaming target contracts, dry-run
