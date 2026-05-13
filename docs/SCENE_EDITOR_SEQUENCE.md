@@ -73,8 +73,11 @@ foundation to OBS-class scene editing and output.
 23. Scene transitions and transition preview: done for offline editor V1 with
     persisted transition contracts, validation, Designer controls, from/to scene
     selection, scrub/playback controls, and deterministic placeholder preview
-    frames for `cut`, `fade`, `swipe`, and `stinger`. Live pixel transition
-    playback and renderer application are not started.
+    frames for `cut`, `fade`, and `swipe`. Stinger transitions can request
+    backend software preview frames with optional FFmpeg video-frame extraction,
+    trigger-time scene switching, cache diagnostics, and explicit placeholder
+    states when no asset or decoder is available. Live program/output transition
+    execution, stinger audio, and encoder parity are not started.
 24. Scene collection import/export/backup: done for offline editor V1 with
     versioned bundle contracts, local API export/import routes, SDK helpers,
     desktop bridge commands, explicit user-selected JSON import/export, app-data

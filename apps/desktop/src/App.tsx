@@ -119,6 +119,7 @@ import type {
   StudioStatus,
   StreamDestination,
   StreamDestinationInput,
+  TransitionPreviewFrameResponse,
 } from "@vaexcore/shared-types";
 import {
   bindSceneCollectionCaptureInventory,
@@ -128,6 +129,7 @@ import {
   createDefaultSceneCollection,
   createDefaultSceneSource,
   createPreviewFrameRequest,
+  createTransitionPreviewFrameRequest,
   platformLabels,
   sceneSourceKindLabels,
   validateCompositorGraph,
@@ -1145,6 +1147,28 @@ function browserRuntimeStatusTone(
 }
 
 function browserRuntimeStatusLabel(status: string | null | undefined): string {
+  return (status ?? "pending").replaceAll("_", " ");
+}
+
+function stingerRuntimeStatusTone(
+  status: string | null | undefined,
+): "green" | "red" | "amber" | "muted" {
+  switch (status) {
+    case "rendered":
+      return "green";
+    case "missing_file":
+    case "decode_failed":
+      return "red";
+    case "no_asset":
+    case "unsupported_extension":
+    case "ffmpeg_unavailable":
+      return "amber";
+    default:
+      return "muted";
+  }
+}
+
+function stingerRuntimeStatusLabel(status: string | null | undefined): string {
   return (status ?? "pending").replaceAll("_", " ");
 }
 
@@ -3185,6 +3209,7 @@ function App() {
             captureInventory={captureInventory}
             collection={designerSceneCollection}
             clipboardSources={designerSourceClipboard}
+            config={config}
             captureBindingRefreshing={captureBindingRefreshing}
             dirty={sceneDirty}
             previewError={previewError}
@@ -3557,6 +3582,7 @@ function DesignerPage(props: {
   captureInventory: CaptureSourceInventory | null;
   collection: SceneCollection;
   clipboardSources: SceneSource[];
+  config: RuntimeApiConfig | null;
   dirty: boolean;
   previewError: string | null;
   previewFrame: PreviewFrameResponse | null;
@@ -3702,6 +3728,11 @@ function DesignerPage(props: {
   const [transitionPreviewPlaying, setTransitionPreviewPlaying] =
     useState(false);
   const [transitionPreviewProgress, setTransitionPreviewProgress] = useState(0);
+  const [transitionRuntimeFrame, setTransitionRuntimeFrame] =
+    useState<TransitionPreviewFrameResponse | null>(null);
+  const [transitionRuntimeError, setTransitionRuntimeError] = useState<string | null>(
+    null,
+  );
   const [shortcutBindings, setShortcutBindings] =
     useState<DesignerShortcutMap>(() => loadDesignerShortcutMap());
   const [listeningShortcutAction, setListeningShortcutAction] =
@@ -3723,6 +3754,7 @@ function DesignerPage(props: {
     640,
     360,
   );
+  const activeTransitionConfigKey = JSON.stringify(activeTransition?.config ?? {});
   const selectedSourceIds = props.selectedSourceIds.filter((sourceId) =>
     props.scene.sources.some((source) => source.id === sourceId),
   );
@@ -4004,6 +4036,68 @@ function DesignerPage(props: {
     setTransitionPreviewPlaying(false);
     setTransitionPreviewProgress(0);
   }, [activeTransition?.id]);
+
+  useEffect(() => {
+    if (activeTransition?.kind !== "stinger") {
+      setTransitionRuntimeFrame(null);
+      setTransitionRuntimeError(null);
+      return;
+    }
+    if (!props.config) {
+      setTransitionRuntimeFrame(null);
+      setTransitionRuntimeError("Runtime API is not ready.");
+      return;
+    }
+
+    let cancelled = false;
+    const request = createTransitionPreviewFrameRequest(
+      props.collection,
+      transitionPreviewPlan.from_scene_id,
+      transitionPreviewPlan.to_scene_id,
+      {
+        request_id: `transition-preview-${activeTransition.id}-${transitionPreviewFrame.frame_index}`,
+        transition_id: activeTransition.id,
+        frame_index: transitionPreviewFrame.frame_index,
+        width: transitionPreviewFrame.width,
+        height: transitionPreviewFrame.height,
+        framerate: transitionPreviewPlan.framerate,
+        frame_format: "rgba8",
+        scale_mode: "fit",
+        encoding: "data_url",
+        include_debug_overlay: false,
+        requested_at: new Date().toISOString(),
+      },
+    );
+
+    setTransitionRuntimeError(null);
+    StudioApi.transitionPreviewFrame(props.config, request)
+      .then((response) => {
+        if (cancelled) return;
+        setTransitionRuntimeFrame(response);
+        setTransitionRuntimeError(null);
+      })
+      .catch((error: Error) => {
+        if (cancelled) return;
+        setTransitionRuntimeFrame(null);
+        setTransitionRuntimeError(error.message || "Stinger runtime preview unavailable.");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeTransition?.id,
+    activeTransition?.kind,
+    activeTransitionConfigKey,
+    props.collection,
+    props.config,
+    transitionPreviewFrame.frame_index,
+    transitionPreviewFrame.height,
+    transitionPreviewFrame.width,
+    transitionPreviewPlan.framerate,
+    transitionPreviewPlan.from_scene_id,
+    transitionPreviewPlan.to_scene_id,
+  ]);
 
   useEffect(() => {
     const sceneIds = new Set(props.collection.scenes.map((scene) => scene.id));
@@ -4624,6 +4718,7 @@ function DesignerPage(props: {
               <div className="source-add-controls">
                 <select
                   aria-label="New transition kind"
+                  data-testid="designer-new-transition-kind"
                   onChange={(event) =>
                     setNewTransitionKind(event.target.value as SceneTransition["kind"])
                   }
@@ -4637,6 +4732,7 @@ function DesignerPage(props: {
                 </select>
                 <button
                   className="secondary-button compact"
+                  data-testid="designer-create-transition"
                   onClick={() => props.onCreateTransition(newTransitionKind)}
                   type="button"
                 >
@@ -4825,7 +4921,18 @@ function DesignerPage(props: {
                   </select>
                 </label>
               </div>
-              <TransitionPreviewFrameView frame={transitionPreviewFrame} />
+              <TransitionPreviewFrameView
+                frame={transitionPreviewFrame}
+                runtimeError={transitionRuntimeError}
+                runtimeFrame={
+                  activeTransition.kind === "stinger" ? transitionRuntimeFrame : null
+                }
+              />
+              <StingerTransitionRuntimePanel
+                error={transitionRuntimeError}
+                frame={transitionRuntimeFrame}
+                transition={activeTransition}
+              />
               <div className="transition-preview-player">
                 <button
                   className="secondary-button compact"
@@ -7350,31 +7457,134 @@ function DesignerShortcutPanel(props: {
 
 function TransitionPreviewFrameView(props: {
   frame: SceneTransitionPreviewFrame;
+  runtimeError?: string | null;
+  runtimeFrame?: TransitionPreviewFrameResponse | null;
 }) {
+  const runtimeImage =
+    props.runtimeFrame?.image_data?.startsWith("data:")
+      ? props.runtimeFrame.image_data
+      : null;
   return (
     <div
       className={`transition-preview-stage ${props.frame.transition_kind}`}
       data-testid="transition-preview-stage"
     >
-      {props.frame.layers.map((layer) => {
-        const translateX = `${(layer.offset_x / props.frame.width) * 100}%`;
-        const translateY = `${(layer.offset_y / props.frame.height) * 100}%`;
-        return (
-          <div
-            className={`transition-preview-layer ${layer.role}`}
-            key={layer.role}
-            style={{
-              opacity: layer.visible ? layer.opacity : 0,
-              transform: `translate(${translateX}, ${translateY})`,
-            }}
-          >
-            <strong>{layer.label}</strong>
-            <small>
-              {layer.role} - {Math.round(layer.opacity * 100)}%
-            </small>
-          </div>
-        );
-      })}
+      {runtimeImage ? (
+        <>
+          <img
+            alt=""
+            className="transition-preview-runtime-image"
+            data-testid="transition-preview-runtime-image"
+            src={runtimeImage}
+          />
+          <span className="transition-preview-runtime-badge">
+            Runtime {props.runtimeFrame?.stinger?.status ?? "frame"}
+          </span>
+        </>
+      ) : (
+        props.frame.layers.map((layer) => {
+          const translateX = `${(layer.offset_x / props.frame.width) * 100}%`;
+          const translateY = `${(layer.offset_y / props.frame.height) * 100}%`;
+          return (
+            <div
+              className={`transition-preview-layer ${layer.role}`}
+              key={layer.role}
+              style={{
+                opacity: layer.visible ? layer.opacity : 0,
+                transform: `translate(${translateX}, ${translateY})`,
+              }}
+            >
+              <strong>{layer.label}</strong>
+              <small>
+                {layer.role} - {Math.round(layer.opacity * 100)}%
+              </small>
+            </div>
+          );
+        })
+      )}
+      {props.runtimeError && (
+        <span className="transition-preview-runtime-error">
+          {props.runtimeError}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function StingerTransitionRuntimePanel(props: {
+  error: string | null;
+  frame: TransitionPreviewFrameResponse | null;
+  transition: SceneTransition;
+}) {
+  if (props.transition.kind !== "stinger") return null;
+
+  const stinger = props.frame?.stinger ?? null;
+  const validationMessage =
+    props.frame?.validation.errors[0] ?? props.frame?.validation.warnings[0] ?? null;
+  const status =
+    stinger?.status ??
+    (props.error || props.frame?.validation.errors.length ? "decode_failed" : "pending");
+  const detail =
+    props.error ??
+    stinger?.status_detail ??
+    validationMessage ??
+    "Waiting for the next runtime preview frame to evaluate the stinger asset.";
+  const assetUri =
+    stinger?.uri || String(props.transition.config.asset_uri ?? "") || "none";
+
+  return (
+    <div className="stinger-runtime-panel" data-testid="designer-stinger-runtime">
+      <div className="runtime-binding-header">
+        <div>
+          <strong>Stinger Runtime</strong>
+          <span>{detail}</span>
+        </div>
+        <Pill tone={stingerRuntimeStatusTone(status)}>
+          {stingerRuntimeStatusLabel(status)}
+        </Pill>
+      </div>
+      <div className="designer-preview-meta">
+        <KeyValue label="Asset" value={assetUri} />
+        <KeyValue
+          label="Trigger"
+          value={
+            stinger
+              ? `${stinger.trigger_time_ms} ms / ${stinger.triggered ? "to scene" : "from scene"}`
+              : `${String(props.transition.config.trigger_time_ms ?? 500)} ms`
+          }
+        />
+        <KeyValue
+          label="Sample"
+          value={
+            stinger?.sampled_frame_time_ms != null
+              ? `${(stinger.sampled_frame_time_ms / 1000).toFixed(2)}s (#${
+                  stinger.sample_index ?? 0
+                })`
+              : "not decoded"
+          }
+        />
+        <KeyValue
+          label="Dimensions"
+          value={
+            stinger?.width && stinger.height
+              ? `${stinger.width}x${stinger.height}`
+              : "not decoded"
+          }
+        />
+        <KeyValue label="Decoder" value={stinger?.decoder_name ?? "none"} />
+        <KeyValue label="Cache" value={stinger?.cache_hit ? "hit" : "miss"} />
+        <KeyValue
+          label="Checksum"
+          value={
+            stinger?.checksum != null
+              ? `asset:${stinger.checksum.toString(16)}`
+              : (props.frame?.checksum ?? "none")
+          }
+        />
+      </div>
+      {stinger?.fallback_reason && (
+        <div className="runtime-binding-warning">{stinger.fallback_reason}</div>
+      )}
     </div>
   );
 }

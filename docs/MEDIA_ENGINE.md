@@ -48,11 +48,14 @@ and FFmpeg is available. Video V1 supports MP4, MOV, WebM, and MKV files,
 samples the preview clock at a conservative deterministic interval, and caches
 decoded frames by normalized path, file modified time, and sampled time. Missing
 FFmpeg, missing files, unsupported extensions, and extraction failures remain
-explicit placeholder states. The compositor also rasterizes single-line `text`
-sources with the bundled Inter font and reports font fallback, color fallback,
-rendered bounds, and checksum metadata. Browser overlay sources can render
-preview snapshots through optional local Chrome, Chromium, or Edge DevTools
-capture for HTTP, HTTPS, and file URLs. Browser snapshots use isolated temporary
+explicit placeholder states. Stinger transition previews reuse that optional
+video extraction path to composite sampled local transition video over still
+from/to scene software frames and report trigger, decoder, cache, and fallback
+metadata. The compositor also rasterizes single-line `text` sources with the
+bundled Inter font and reports font fallback, color fallback, rendered bounds,
+and checksum metadata. Browser overlay sources can render preview snapshots
+through optional local Chrome, Chromium, or Edge DevTools capture for HTTP,
+HTTPS, and file URLs. Browser snapshots use isolated temporary
 profiles, apply configured viewport and custom CSS, cache by URL, viewport, CSS
 hash, and sampled time, and fall back to explicit placeholder states when no
 compatible browser is available or capture fails. Filter diagnostics report

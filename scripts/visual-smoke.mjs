@@ -465,6 +465,37 @@ const targets = [
     ],
   },
   {
+    name: "designer-stinger-runtime",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "select",
+        selector: '[data-testid="designer-new-transition-kind"]',
+        value: "stinger",
+      },
+      {
+        type: "click",
+        selector: '[data-testid="designer-create-transition"]',
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-stinger-runtime\\"]"))',
+        message: "Designer stinger runtime panel did not render.",
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelector("[data-testid=\\"designer-stinger-runtime\\"]")?.textContent?.includes("Stinger Runtime")',
+        message: "Designer stinger runtime panel did not show its title.",
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"transition-preview-stage\\"]"))',
+        message: "Designer stinger transition preview stage did not render.",
+      },
+    ],
+  },
+  {
     name: "broadcast-setup",
     path: "/?section=controls",
   },
