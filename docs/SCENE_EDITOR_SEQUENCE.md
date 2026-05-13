@@ -61,9 +61,10 @@ foundation to OBS-class scene editing and output.
     full renderer policy parity are not started.
 22. Source filters and effects: started with serializable per-source filter
     chains, supported filter kinds, duplicate/order/config validation, and
-    compositor graph propagation plus first-pass Designer filter chain editing.
-    Real video/audio filter rendering and detailed per-filter controls are not
-    started.
+    compositor graph propagation, first-pass Designer filter chain editing, and
+    software preview execution for color correction, chroma key, crop/pad alpha
+    crop, blur, and sharpen. Mask/blend, LUT, audio filter execution, and output
+    pipeline filter parity remain deferred.
 23. Scene transitions and transition preview: done for offline editor V1 with
     persisted transition contracts, validation, Designer controls, from/to scene
     selection, scrub/playback controls, and deterministic placeholder preview
@@ -159,10 +160,10 @@ Offline Editor V1 is now complete for local authoring scope: scene/source
 editing, grouping, numeric transforms, local asset URI selection, explicit
 bundle import/export, app-data fallback bundles, validation, runtime refresh,
 deterministic placeholder transition preview, real local still-image preview
-pixels, and backend-rendered single-line text pixels. The remaining Scene
-Designer work starts the real capture, video, browser, audio, and output path;
-offline editor completion does not imply OBS-level capture, encoder, plugin, or
-live-output parity.
+pixels, backend-rendered single-line text pixels, and software visual filter
+preview pixels. The remaining Scene Designer work starts the real capture,
+video, browser, audio, and output path; offline editor completion does not imply
+OBS-level capture, encoder, plugin, or live-output parity.
 
 ## Validation Contract
 

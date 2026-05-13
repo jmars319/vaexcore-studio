@@ -167,6 +167,35 @@ const targets = [
     ],
   },
   {
+    name: "designer-filter-runtime",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "click",
+        selector: '[data-testid="designer-source-select"][data-source-id="source-title-text"]',
+      },
+      {
+        type: "click",
+        selector: '[data-testid="designer-add-source-filter"]',
+      },
+      {
+        type: "wait",
+        ms: 1200,
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-filter-runtime\\"]"))',
+        message: "Designer filter runtime panel did not render.",
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelector("[data-testid=\\"designer-filter-runtime\\"]")?.textContent?.includes("Color Correction")',
+        message: "Designer filter runtime panel did not show the added visual filter.",
+      },
+    ],
+  },
+  {
     name: "designer-grouping",
     path: "/?section=designer",
     minBytes: 50_000,

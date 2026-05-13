@@ -33,17 +33,19 @@ The shared contracts also define:
 These contracts let the UI, local API, sidecar, and future external tools agree on source selection and pipeline readiness before any real capture backend is started.
 Scene sources also carry ordered filter chains for effects such as color
 correction, chroma key, crop/pad, blur, LUTs, noise gates, and compressors.
-The dry-run compositor preserves those chains in its graph, but no real filter
-execution is started yet.
+The software preview compositor applies visual filters for color correction,
+chroma key, crop/pad alpha crop, blur, and sharpen to source input pixels.
+Mask/blend, LUT, and audio filter families remain explicit deferred diagnostics.
 
 The software preview compositor can decode local still-image `image_media`
 sources when `media_type = "image"`. It supports PNG, JPEG, WebP, and the first
 frame of GIF files, caches decoded pixels by normalized path plus file modified
 time, and reports asset readiness metadata to Designer. It also rasterizes
 single-line `text` sources with the bundled Inter font and reports font fallback,
-color fallback, rendered bounds, and checksum metadata. Video media, stinger
-video playback, live capture, browser capture, recording, and streaming output
-remain outside this path.
+color fallback, rendered bounds, and checksum metadata. Filter diagnostics report
+applied, skipped, deferred, or failed runtime state plus filtered checksums.
+Video media, stinger video playback, live capture, browser capture, recording,
+and streaming output remain outside this path.
 
 `CaptureFramePlan` maps visible capture-backed scene sources to the video or
 audio frame stream the compositor will eventually consume. Each binding records

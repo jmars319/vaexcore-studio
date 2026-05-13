@@ -30,7 +30,8 @@ Compositor graph nodes include optional `parent_source_id` and `group_depth`
 fields so group/nesting transforms can be resolved consistently by preview and
 program renderers.
 Scene sources may include a serializable `filters` chain; the compositor graph
-preserves that chain for future video/audio filter execution.
+preserves that chain and software preview diagnostics report applied, skipped,
+deferred, or failed filter runtime state.
 Scene sources also include `bounds_mode` (`stretch`, `fit`, `fill`, `center`,
 or `original_size`), which maps into compositor node `scale_mode` evaluation.
 Scene transition helpers expose frame-count, easing sample plans, and
@@ -238,7 +239,7 @@ Accepts a `SceneRuntimeStateUpdateRequest`, applies active-scene, active-transit
 
 ### `POST /scene-runtime/preview-frame`
 
-Accepts a `PreviewFrameRequest` and returns a `PreviewFrameResponse` with software-rendered preview pixels, frame metadata, checksum, and optional encoded image data. Local `image_media` sources with `media_type = "image"` decode PNG, JPEG, WebP, and first-frame GIF assets into the software compositor, and single-line `text` sources rasterize with the bundled Inter font. Capture, video media, browser, and output pipelines remain placeholder-backed. Image and text diagnostics report source readiness, fallback behavior, dimensions or bounds, format/font metadata, checksum, and cache state where applicable.
+Accepts a `PreviewFrameRequest` and returns a `PreviewFrameResponse` with software-rendered preview pixels, frame metadata, checksum, and optional encoded image data. Local `image_media` sources with `media_type = "image"` decode PNG, JPEG, WebP, and first-frame GIF assets into the software compositor, and single-line `text` sources rasterize with the bundled Inter font. Enabled visual source filters apply to software input pixels for color correction, chroma key, crop/pad alpha crop, blur, and sharpen; deferred filter families report diagnostics without mutating pixels. Capture, video media, browser, and output pipelines remain placeholder-backed. Image, text, and filter diagnostics report source readiness, fallback behavior, dimensions or bounds, format/font metadata, checksum, cache state, and filter runtime state where applicable.
 
 ### `POST /scene-runtime/validate-graph`
 

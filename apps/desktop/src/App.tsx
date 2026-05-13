@@ -1117,6 +1117,51 @@ function textRuntimeStatusLabel(status: string | null | undefined): string {
   return (status ?? "pending").replaceAll("_", " ");
 }
 
+function filterRuntimeStatusTone(
+  status: string | null | undefined,
+): "green" | "red" | "amber" | "muted" {
+  switch (status) {
+    case "applied":
+      return "green";
+    case "error":
+      return "red";
+    case "deferred":
+      return "amber";
+    case "skipped":
+    case "pending":
+      return "muted";
+    default:
+      return "muted";
+  }
+}
+
+function filterRuntimeStatusLabel(status: string | null | undefined): string {
+  return (status ?? "pending").replaceAll("_", " ");
+}
+
+function filterRuntimeSummary(
+  filters: Array<{ status?: string | null }>,
+): { label: string; tone: "green" | "red" | "amber" | "muted" } {
+  if (filters.length === 0) {
+    return { label: "no filters", tone: "muted" };
+  }
+  const counts = filters.reduce(
+    (summary, filter) => {
+      const status = filter.status ?? "pending";
+      summary[status] = (summary[status] ?? 0) + 1;
+      return summary;
+    },
+    {} as Record<string, number>,
+  );
+  if (counts.error) return { label: `${counts.error} error`, tone: "red" };
+  if (counts.deferred) return { label: `${counts.deferred} deferred`, tone: "amber" };
+  if (counts.pending) return { label: `${counts.pending} pending`, tone: "muted" };
+  if (counts.applied === filters.length) {
+    return { label: `${filters.length} applied`, tone: "green" };
+  }
+  return { label: `${counts.applied ?? 0}/${filters.length} applied`, tone: "muted" };
+}
+
 function runtimeNodeForSource(
   frame: PreviewFrameResponse | null,
   sourceId: string,
@@ -6499,6 +6544,10 @@ function DesignerPage(props: {
               }
               source={props.selectedSource}
             />
+            <FilterRuntimePanel
+              node={selectedRuntimeNode}
+              source={props.selectedSource}
+            />
             {sceneSourceAvailability(props.selectedSource) && (
               <KeyValue
                 label="Availability"
@@ -6896,6 +6945,66 @@ function TextRuntimePanel(props: {
           <span>{detail}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+function FilterRuntimePanel(props: {
+  node: CompositorEvaluatedNode | null;
+  source: SceneSource;
+}) {
+  const configuredFilters = sortedSceneSourceFilters(props.source.filters ?? []);
+  if (configuredFilters.length === 0) return null;
+
+  const runtimeById = new Map(
+    (props.node?.filters ?? []).map((filter) => [filter.id, filter]),
+  );
+  const rows = configuredFilters.map((filter) => {
+    const runtime = runtimeById.get(filter.id);
+    return {
+      id: filter.id,
+      name: filter.name,
+      kind: filter.kind,
+      order: filter.order,
+      status: runtime?.status ?? "pending",
+      detail:
+        runtime?.status_detail ??
+        "Waiting for the next runtime preview frame to evaluate this filter.",
+      checksum: runtime?.checksum ?? null,
+    };
+  });
+  const summary = filterRuntimeSummary(rows);
+
+  return (
+    <div className="filter-runtime-panel" data-testid="designer-filter-runtime">
+      <div className="runtime-binding-header">
+        <div>
+          <strong>Filter Runtime</strong>
+          <span>
+            {configuredFilters.length} configured /{" "}
+            {props.node?.filters.length ?? 0} runtime result(s)
+          </span>
+        </div>
+        <Pill tone={summary.tone}>{summary.label}</Pill>
+      </div>
+      <div className="filter-runtime-list">
+        {rows.map((filter) => (
+          <div className="filter-runtime-row" key={filter.id}>
+            <div>
+              <strong>{filter.name}</strong>
+              <span>{sceneFilterKindLabels[filter.kind]}</span>
+            </div>
+            <div>
+              <Pill tone={filterRuntimeStatusTone(filter.status)}>
+                {filterRuntimeStatusLabel(filter.status)}
+              </Pill>
+              <code>#{filter.order}</code>
+            </div>
+            <span>{filter.detail}</span>
+            <code>{filter.checksum ? filter.checksum.toString(16) : "checksum pending"}</code>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -7425,7 +7534,7 @@ function SourceFilterEditor(props: {
   }
 
   return (
-    <div className="source-filter-editor">
+    <div className="source-filter-editor" data-testid="designer-source-filters">
       <div className="source-filter-editor-header">
         <div>
           <strong>Filters</strong>
@@ -7447,6 +7556,7 @@ function SourceFilterEditor(props: {
           </select>
           <button
             className="secondary-button compact"
+            data-testid="designer-add-source-filter"
             onClick={addFilter}
             type="button"
           >

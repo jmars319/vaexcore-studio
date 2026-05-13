@@ -1173,7 +1173,8 @@ nav {
 
 .runtime-binding-panel,
 .image-asset-runtime-panel,
-.text-runtime-panel {
+.text-runtime-panel,
+.filter-runtime-panel {
   display: grid;
   gap: 10px;
   padding: 12px;
@@ -1210,6 +1211,39 @@ nav {
 .image-asset-runtime-panel .designer-preview-meta,
 .text-runtime-panel .designer-preview-meta {
   margin-top: 0;
+}
+
+.filter-runtime-list {
+  display: grid;
+  gap: 8px;
+}
+
+.filter-runtime-row {
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 7px;
+  background: rgba(7, 8, 16, 0.36);
+}
+
+.filter-runtime-row > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.filter-runtime-row strong,
+.filter-runtime-row span {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.filter-runtime-row span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .source-filter-editor {
