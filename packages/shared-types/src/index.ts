@@ -1239,6 +1239,7 @@ export interface AudioMixSource {
   sync_offset_ms: number;
   status: AudioMixSourceStatus;
   status_detail: string;
+  filters: SceneSourceFilter[];
 }
 
 export interface AudioMixerPlan {
@@ -1268,11 +1269,38 @@ export interface AudioGraphRuntimeSource {
   monitor_enabled: boolean;
   meter_enabled: boolean;
   sync_offset_ms: number;
+  pre_filter_level_db: number;
+  pre_filter_peak_db: number;
+  pre_filter_linear_level: number;
+  post_filter_level_db: number;
+  post_filter_peak_db: number;
+  post_filter_linear_level: number;
   level_db: number;
   peak_db: number;
   linear_level: number;
   status: AudioMixSourceStatus;
   status_detail: string;
+  filters: AudioFilterRuntimeMetadata[];
+}
+
+export type AudioFilterRuntimeStatus = "applied" | "skipped" | "error";
+
+export interface AudioFilterRuntimeMetadata {
+  id: string;
+  name: string;
+  kind: SceneSourceFilterKind;
+  enabled: boolean;
+  order: number;
+  status: AudioFilterRuntimeStatus;
+  status_detail: string;
+  input_level_db: number;
+  output_level_db: number;
+  input_peak_db: number;
+  output_peak_db: number;
+  level_change_db: number;
+  gain_reduction_db?: number | null;
+  attenuation_db?: number | null;
+  control_summary?: string | null;
 }
 
 export interface AudioGraphRuntimeBus {
@@ -2425,6 +2453,125 @@ export function validateAudioMixerPlan(plan: AudioMixerPlan): AudioMixerValidati
   };
 }
 
+export function buildAudioGraphRuntimeSnapshot(
+  scene: Scene,
+  frameIndex = 0,
+  generatedAt = new Date().toISOString(),
+): AudioGraphRuntimeSnapshot {
+  const plan = buildAudioMixerPlan(scene);
+  const sources = plan.sources.map((source) =>
+    audioGraphRuntimeSource(source, frameIndex),
+  );
+  const buses = plan.buses.map((bus) => audioGraphRuntimeBus(bus, sources));
+  const snapshot: AudioGraphRuntimeSnapshot = {
+    version: 1,
+    scene_id: plan.scene_id,
+    scene_name: plan.scene_name,
+    sample_rate: plan.sample_rate,
+    channels: plan.channels,
+    sources,
+    buses,
+    generated_at: generatedAt,
+    validation: {
+      ready: true,
+      warnings: [...plan.validation.warnings],
+      errors: [...plan.validation.errors],
+    },
+  };
+  snapshot.validation = validateAudioGraphRuntimeSnapshot(snapshot);
+  return snapshot;
+}
+
+export function validateAudioGraphRuntimeSnapshot(
+  snapshot: AudioGraphRuntimeSnapshot,
+): AudioGraphRuntimeValidation {
+  const warnings = [...snapshot.validation.warnings];
+  const errors = [...snapshot.validation.errors];
+  const sourceIds = new Set<string>();
+
+  if (!Number.isInteger(snapshot.version) || snapshot.version < 1) {
+    errors.push("Audio graph runtime version must be a positive integer.");
+  }
+  if (!snapshot.scene_id.trim()) {
+    errors.push("Audio graph runtime scene id is required.");
+  }
+  if (!snapshot.scene_name.trim()) {
+    errors.push("Audio graph runtime scene name is required.");
+  }
+  validateNullablePositiveNumber(snapshot.sample_rate, "runtime.audio.sample_rate", errors);
+  validateNullablePositiveNumber(snapshot.channels, "runtime.audio.channels", errors);
+  if (snapshot.sources.length === 0) {
+    warnings.push("Audio graph runtime has no audio meter sources.");
+  }
+
+  snapshot.sources.forEach((source) => {
+    if (sourceIds.has(source.scene_source_id)) {
+      errors.push(`Duplicate audio graph source "${source.scene_source_id}".`);
+    }
+    sourceIds.add(source.scene_source_id);
+    if (!source.scene_source_id.trim()) {
+      errors.push("Audio graph source id is required.");
+    }
+    if (!source.name.trim()) {
+      errors.push(`Audio graph source "${source.scene_source_id}" name is required.`);
+    }
+    validateAudioLevel(source.level_db, source.name, errors);
+    validateAudioLevel(source.peak_db, source.name, errors);
+    validateAudioLevel(source.pre_filter_level_db, source.name, errors);
+    validateAudioLevel(source.pre_filter_peak_db, source.name, errors);
+    validateAudioLevel(source.post_filter_level_db, source.name, errors);
+    validateAudioLevel(source.post_filter_peak_db, source.name, errors);
+    validateLinearAudioLevel(source.linear_level, source.name, "linear level", errors);
+    validateLinearAudioLevel(
+      source.pre_filter_linear_level,
+      source.name,
+      "pre-filter linear level",
+      errors,
+    );
+    validateLinearAudioLevel(
+      source.post_filter_linear_level,
+      source.name,
+      "post-filter linear level",
+      errors,
+    );
+    source.filters.forEach((filter) => {
+      validateAudioLevel(filter.input_level_db, filter.name, errors);
+      validateAudioLevel(filter.output_level_db, filter.name, errors);
+      validateAudioLevel(filter.input_peak_db, filter.name, errors);
+      validateAudioLevel(filter.output_peak_db, filter.name, errors);
+      if (!Number.isFinite(filter.level_change_db)) {
+        errors.push(`${filter.name} level change must be finite.`);
+      }
+      if (
+        filter.gain_reduction_db !== undefined &&
+        filter.gain_reduction_db !== null &&
+        (!Number.isFinite(filter.gain_reduction_db) || filter.gain_reduction_db < 0)
+      ) {
+        errors.push(`${filter.name} gain reduction must be zero or greater.`);
+      }
+      if (
+        filter.attenuation_db !== undefined &&
+        filter.attenuation_db !== null &&
+        (!Number.isFinite(filter.attenuation_db) || filter.attenuation_db < 0)
+      ) {
+        errors.push(`${filter.name} attenuation must be zero or greater.`);
+      }
+    });
+  });
+
+  snapshot.buses.forEach((bus) => {
+    validateAudioLevel(bus.level_db, bus.name, errors);
+    validateAudioLevel(bus.peak_db, bus.name, errors);
+    validateLinearAudioLevel(bus.linear_level, bus.name, "linear bus level", errors);
+  });
+
+  return {
+    ready: errors.length === 0,
+    warnings,
+    errors,
+  };
+}
+
 function audioMixSource(source: Extract<SceneSource, { kind: "audio_meter" }>): AudioMixSource {
   const captureSourceId = source.config.device_id;
   const { status, detail } = captureBindingStatus(source, captureSourceId);
@@ -2440,7 +2587,364 @@ function audioMixSource(source: Extract<SceneSource, { kind: "audio_meter" }>): 
     sync_offset_ms: Math.round(source.config.sync_offset_ms ?? 0),
     status,
     status_detail: detail,
+    filters: cloneJson(source.filters ?? []),
   };
+}
+
+function audioGraphRuntimeSource(
+  source: AudioMixSource,
+  frameIndex: number,
+): AudioGraphRuntimeSource {
+  const simulated = simulatedAudioLevel(source, frameIndex);
+  const filtered = applyAudioFilters(source, simulated.levelDb, simulated.peakDb);
+  const postFilterLinearLevel = dbToLinear(filtered.levelDb);
+  return {
+    scene_source_id: source.scene_source_id,
+    name: source.name,
+    capture_source_id: source.capture_source_id,
+    capture_kind: source.capture_kind,
+    gain_db: source.gain_db,
+    muted: source.muted,
+    monitor_enabled: source.monitor_enabled,
+    meter_enabled: source.meter_enabled,
+    sync_offset_ms: source.sync_offset_ms,
+    pre_filter_level_db: simulated.levelDb,
+    pre_filter_peak_db: simulated.peakDb,
+    pre_filter_linear_level: simulated.linearLevel,
+    post_filter_level_db: filtered.levelDb,
+    post_filter_peak_db: filtered.peakDb,
+    post_filter_linear_level: postFilterLinearLevel,
+    level_db: filtered.levelDb,
+    peak_db: filtered.peakDb,
+    linear_level: postFilterLinearLevel,
+    status: source.status,
+    status_detail: source.status_detail,
+    filters: filtered.filters,
+  };
+}
+
+function audioGraphRuntimeBus(
+  bus: AudioMixBus,
+  sources: AudioGraphRuntimeSource[],
+): AudioGraphRuntimeBus {
+  const linearLevel =
+    bus.muted || sources.length === 0
+      ? 0
+      : Math.min(1, Math.max(...sources.map((source) => source.linear_level)));
+  const levelDb = clampAudioLevel(linearToDb(linearLevel) + bus.gain_db);
+  const peakDb = clampAudioLevel(levelDb + 4.5);
+  return {
+    id: bus.id,
+    name: bus.name,
+    kind: bus.kind,
+    gain_db: bus.gain_db,
+    muted: bus.muted,
+    level_db: levelDb,
+    peak_db: peakDb,
+    linear_level: linearLevel,
+  };
+}
+
+function applyAudioFilters(
+  source: AudioMixSource,
+  levelDb: number,
+  peakDb: number,
+): {
+  levelDb: number;
+  peakDb: number;
+  filters: AudioFilterRuntimeMetadata[];
+} {
+  let currentLevelDb = levelDb;
+  let currentPeakDb = peakDb;
+  const filters: AudioFilterRuntimeMetadata[] = [];
+
+  sortedSceneSourceFilters(source.filters).forEach((filter) => {
+    const inputLevelDb = currentLevelDb;
+    const inputPeakDb = currentPeakDb;
+    if (!filter.enabled) {
+      filters.push(
+        audioFilterMetadata(
+          filter,
+          "skipped",
+          "Filter is disabled.",
+          inputLevelDb,
+          inputPeakDb,
+          inputLevelDb,
+          inputPeakDb,
+        ),
+      );
+      return;
+    }
+
+    const result = applyAudioFilter(inputLevelDb, inputPeakDb, filter);
+    if (result.status === "applied") {
+      currentLevelDb = result.levelDb;
+      currentPeakDb = result.peakDb;
+      filters.push(
+        audioFilterMetadata(
+          filter,
+          "applied",
+          result.detail,
+          inputLevelDb,
+          inputPeakDb,
+          currentLevelDb,
+          currentPeakDb,
+          {
+            gainReductionDb: result.gainReductionDb,
+            attenuationDb: result.attenuationDb,
+            controlSummary: result.controlSummary,
+          },
+        ),
+      );
+      return;
+    }
+
+    filters.push(
+      audioFilterMetadata(
+        filter,
+        result.status,
+        result.detail,
+        inputLevelDb,
+        inputPeakDb,
+        inputLevelDb,
+        inputPeakDb,
+      ),
+    );
+  });
+
+  return { levelDb: currentLevelDb, peakDb: currentPeakDb, filters };
+}
+
+function sortedSceneSourceFilters(filters: SceneSourceFilter[]): SceneSourceFilter[] {
+  return [...filters].sort(
+    (left, right) => left.order - right.order || left.id.localeCompare(right.id),
+  );
+}
+
+function applyAudioFilter(
+  levelDb: number,
+  peakDb: number,
+  filter: SceneSourceFilter,
+):
+  | {
+      status: "applied";
+      levelDb: number;
+      peakDb: number;
+      detail: string;
+      gainReductionDb?: number;
+      attenuationDb?: number;
+      controlSummary?: string;
+    }
+  | { status: "skipped" | "error"; detail: string } {
+  switch (filter.kind) {
+    case "audio_gain":
+      return applyAudioGainFilter(levelDb, peakDb, filter);
+    case "noise_gate":
+      return applyNoiseGateFilter(levelDb, peakDb, filter);
+    case "compressor":
+      return applyCompressorFilter(levelDb, peakDb, filter);
+    default:
+      return {
+        status: "skipped",
+        detail: "Non-audio filter is not applied in the audio graph runtime.",
+      };
+  }
+}
+
+function applyAudioGainFilter(
+  levelDb: number,
+  peakDb: number,
+  filter: SceneSourceFilter,
+) {
+  const gainDb = audioFilterNumber(filter, "gain_db", -60, 24);
+  if (typeof gainDb === "string") return { status: "error" as const, detail: gainDb };
+  const outputLevelDb = clampAudioLevel(levelDb + gainDb);
+  return {
+    status: "applied" as const,
+    levelDb: outputLevelDb,
+    peakDb: clampAudioLevel(peakDb + gainDb),
+    detail: `Applied ${gainDb.toFixed(1)} dB audio gain.`,
+    attenuationDb: gainDb < 0 ? Math.max(0, levelDb - outputLevelDb) : undefined,
+    controlSummary: `${formatSignedDb(gainDb)} dB`,
+  };
+}
+
+function applyNoiseGateFilter(
+  levelDb: number,
+  peakDb: number,
+  filter: SceneSourceFilter,
+) {
+  const closeThresholdDb = audioFilterNumber(filter, "close_threshold_db", -100, 0);
+  if (typeof closeThresholdDb === "string") {
+    return { status: "error" as const, detail: closeThresholdDb };
+  }
+  const openThresholdDb = audioFilterNumber(filter, "open_threshold_db", -100, 0);
+  if (typeof openThresholdDb === "string") {
+    return { status: "error" as const, detail: openThresholdDb };
+  }
+  if (closeThresholdDb >= openThresholdDb) {
+    return {
+      status: "error" as const,
+      detail: "Noise gate open threshold must be greater than close threshold.",
+    };
+  }
+  const attackMs = audioFilterNumber(filter, "attack_ms", 0, 5_000);
+  if (typeof attackMs === "string") return { status: "error" as const, detail: attackMs };
+  const releaseMs = audioFilterNumber(filter, "release_ms", 0, 5_000);
+  if (typeof releaseMs === "string") return { status: "error" as const, detail: releaseMs };
+
+  let outputLevelDb = levelDb;
+  let outputPeakDb = peakDb;
+  let detail = `Gate open above ${openThresholdDb.toFixed(1)} dB.`;
+  if (levelDb <= closeThresholdDb) {
+    outputLevelDb = -90;
+    outputPeakDb = -90;
+    detail = `Gate closed below ${closeThresholdDb.toFixed(1)} dB.`;
+  } else if (levelDb < openThresholdDb) {
+    const openness = Math.min(
+      1,
+      Math.max(0, (levelDb - closeThresholdDb) / (openThresholdDb - closeThresholdDb)),
+    );
+    outputLevelDb = linearToDb(dbToLinear(levelDb) * openness);
+    outputPeakDb = linearToDb(dbToLinear(peakDb) * openness);
+    detail = "Gate applied deterministic threshold-band attenuation.";
+  }
+
+  return {
+    status: "applied" as const,
+    levelDb: outputLevelDb,
+    peakDb: outputPeakDb,
+    detail,
+    attenuationDb: Math.max(0, levelDb - outputLevelDb),
+    controlSummary: `close ${closeThresholdDb.toFixed(1)} dB / open ${openThresholdDb.toFixed(1)} dB / attack ${attackMs.toFixed(0)} ms / release ${releaseMs.toFixed(0)} ms`,
+  };
+}
+
+function applyCompressorFilter(
+  levelDb: number,
+  peakDb: number,
+  filter: SceneSourceFilter,
+) {
+  const thresholdDb = audioFilterNumber(filter, "threshold_db", -100, 0);
+  if (typeof thresholdDb === "string") return { status: "error" as const, detail: thresholdDb };
+  const ratio = audioFilterNumber(filter, "ratio", 1, 20);
+  if (typeof ratio === "string") return { status: "error" as const, detail: ratio };
+  const attackMs = audioFilterNumber(filter, "attack_ms", 0, 5_000);
+  if (typeof attackMs === "string") return { status: "error" as const, detail: attackMs };
+  const releaseMs = audioFilterNumber(filter, "release_ms", 0, 5_000);
+  if (typeof releaseMs === "string") return { status: "error" as const, detail: releaseMs };
+  const makeupGainDb = audioFilterNumber(filter, "makeup_gain_db", -24, 24);
+  if (typeof makeupGainDb === "string") {
+    return { status: "error" as const, detail: makeupGainDb };
+  }
+  const compressedLevelDb = compressAudioLevel(levelDb, thresholdDb, ratio);
+  const compressedPeakDb = compressAudioLevel(peakDb, thresholdDb, ratio);
+  const outputLevelDb = clampAudioLevel(compressedLevelDb + makeupGainDb);
+  return {
+    status: "applied" as const,
+    levelDb: outputLevelDb,
+    peakDb: clampAudioLevel(compressedPeakDb + makeupGainDb),
+    detail: `Compressed above ${thresholdDb.toFixed(1)} dB at ${ratio.toFixed(1)}:1 with ${formatSignedDb(makeupGainDb)} dB makeup.`,
+    gainReductionDb: Math.max(0, levelDb - compressedLevelDb),
+    attenuationDb: outputLevelDb < levelDb ? levelDb - outputLevelDb : undefined,
+    controlSummary: `threshold ${thresholdDb.toFixed(1)} dB / ratio ${ratio.toFixed(1)}:1 / attack ${attackMs.toFixed(0)} ms / release ${releaseMs.toFixed(0)} ms / makeup ${formatSignedDb(makeupGainDb)} dB`,
+  };
+}
+
+function audioFilterMetadata(
+  filter: SceneSourceFilter,
+  status: AudioFilterRuntimeStatus,
+  statusDetail: string,
+  inputLevelDb: number,
+  inputPeakDb: number,
+  outputLevelDb: number,
+  outputPeakDb: number,
+  options: {
+    gainReductionDb?: number;
+    attenuationDb?: number;
+    controlSummary?: string;
+  } = {},
+): AudioFilterRuntimeMetadata {
+  return {
+    id: filter.id,
+    name: filter.name,
+    kind: filter.kind,
+    enabled: filter.enabled,
+    order: filter.order,
+    status,
+    status_detail: statusDetail,
+    input_level_db: inputLevelDb,
+    output_level_db: outputLevelDb,
+    input_peak_db: inputPeakDb,
+    output_peak_db: outputPeakDb,
+    level_change_db: outputLevelDb - inputLevelDb,
+    gain_reduction_db: options.gainReductionDb ?? null,
+    attenuation_db: options.attenuationDb ?? null,
+    control_summary: options.controlSummary ?? null,
+  };
+}
+
+function audioFilterNumber(
+  filter: SceneSourceFilter,
+  key: string,
+  min: number,
+  max: number,
+): number | string {
+  const value = filter.config?.[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return `Filter config ${key} must be a number.`;
+  }
+  if (value < min || value > max) {
+    return `Filter config ${key} must be between ${min} and ${max}.`;
+  }
+  return value;
+}
+
+function simulatedAudioLevel(
+  source: AudioMixSource,
+  frameIndex: number,
+): { levelDb: number; peakDb: number; linearLevel: number } {
+  if (source.muted || !source.meter_enabled) {
+    return { levelDb: -90, peakDb: -90, linearLevel: 0 };
+  }
+  const seed = stableAudioSeed(source.scene_source_id);
+  const phase = (((Math.trunc(frameIndex) * 17 + seed) % 100) / 100);
+  const wave = Math.sin(phase * Math.PI * 2) * 0.5 + 0.5;
+  const statusOffset =
+    source.status === "ready"
+      ? 0
+      : source.status === "placeholder"
+        ? -8
+        : source.status === "permission_required"
+          ? -12
+          : -18;
+  const levelDb = clampAudioLevel(-48 + wave * 32 + source.gain_db + statusOffset);
+  const peakDb = clampAudioLevel(levelDb + 5 + (seed % 7) * 0.35);
+  return { levelDb, peakDb, linearLevel: dbToLinear(levelDb) };
+}
+
+function compressAudioLevel(levelDb: number, thresholdDb: number, ratio: number): number {
+  return levelDb <= thresholdDb ? levelDb : thresholdDb + (levelDb - thresholdDb) / ratio;
+}
+
+function stableAudioSeed(value: string): number {
+  return [...value].reduce((hash, char) => hash * 37 + char.charCodeAt(0), 17) >>> 0;
+}
+
+function dbToLinear(value: number): number {
+  return value <= -90 ? 0 : Math.min(1, Math.max(0, 10 ** (value / 20)));
+}
+
+function linearToDb(value: number): number {
+  return value <= 0 ? -90 : clampAudioLevel(20 * Math.log10(value));
+}
+
+function clampAudioLevel(value: number): number {
+  return Math.min(6, Math.max(-90, value));
+}
+
+function formatSignedDb(value: number): string {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(1)}`;
 }
 
 function defaultAudioBuses(): AudioMixBus[] {
@@ -2467,6 +2971,23 @@ function audioBus(id: string, name: string, kind: AudioMixBusKind): AudioMixBus 
 function validateGain(value: number, label: string, errors: string[]) {
   if (!Number.isFinite(value) || value < -60 || value > 24) {
     errors.push(`${label} gain must be between -60 dB and 24 dB.`);
+  }
+}
+
+function validateAudioLevel(value: number, label: string, errors: string[]) {
+  if (!Number.isFinite(value) || value < -90 || value > 6) {
+    errors.push(`${label} level must be between -90 dB and 6 dB.`);
+  }
+}
+
+function validateLinearAudioLevel(
+  value: number,
+  label: string,
+  field: string,
+  errors: string[],
+) {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    errors.push(`${label} ${field} must be between zero and one.`);
   }
 }
 

@@ -14,9 +14,10 @@ pub mod status;
 
 pub use audio::{
     build_audio_graph_runtime_snapshot, build_audio_mixer_plan,
-    validate_audio_graph_runtime_snapshot, validate_audio_mixer_plan, AudioGraphRuntimeBus,
-    AudioGraphRuntimeSnapshot, AudioGraphRuntimeSource, AudioGraphRuntimeValidation, AudioMixBus,
-    AudioMixBusKind, AudioMixSource, AudioMixSourceStatus, AudioMixerPlan, AudioMixerValidation,
+    validate_audio_graph_runtime_snapshot, validate_audio_mixer_plan, AudioFilterRuntimeMetadata,
+    AudioFilterRuntimeStatus, AudioGraphRuntimeBus, AudioGraphRuntimeSnapshot,
+    AudioGraphRuntimeSource, AudioGraphRuntimeValidation, AudioMixBus, AudioMixBusKind,
+    AudioMixSource, AudioMixSourceStatus, AudioMixerPlan, AudioMixerValidation,
 };
 pub use capture::{
     build_capture_frame_plan, default_capture_sources, validate_capture_frame_plan,

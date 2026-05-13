@@ -2,7 +2,10 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{CaptureSourceKind, Scene, SceneSource, SceneSourceKind};
+use crate::{
+    CaptureSourceKind, Scene, SceneSource, SceneSourceFilter, SceneSourceFilterKind,
+    SceneSourceKind,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -46,6 +49,8 @@ pub struct AudioMixSource {
     pub sync_offset_ms: i32,
     pub status: AudioMixSourceStatus,
     pub status_detail: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<SceneSourceFilter>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -78,11 +83,49 @@ pub struct AudioGraphRuntimeSource {
     pub monitor_enabled: bool,
     pub meter_enabled: bool,
     pub sync_offset_ms: i32,
+    pub pre_filter_level_db: f64,
+    pub pre_filter_peak_db: f64,
+    pub pre_filter_linear_level: f64,
+    pub post_filter_level_db: f64,
+    pub post_filter_peak_db: f64,
+    pub post_filter_linear_level: f64,
     pub level_db: f64,
     pub peak_db: f64,
     pub linear_level: f64,
     pub status: AudioMixSourceStatus,
     pub status_detail: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<AudioFilterRuntimeMetadata>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioFilterRuntimeStatus {
+    Applied,
+    Skipped,
+    Error,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct AudioFilterRuntimeMetadata {
+    pub id: String,
+    pub name: String,
+    pub kind: SceneSourceFilterKind,
+    pub enabled: bool,
+    pub order: i32,
+    pub status: AudioFilterRuntimeStatus,
+    pub status_detail: String,
+    pub input_level_db: f64,
+    pub output_level_db: f64,
+    pub input_peak_db: f64,
+    pub output_peak_db: f64,
+    pub level_change_db: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gain_reduction_db: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attenuation_db: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_summary: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -304,26 +347,56 @@ pub fn validate_audio_graph_runtime_snapshot(
         }
         validate_level(source.level_db, &source.name, &mut errors);
         validate_level(source.peak_db, &source.name, &mut errors);
-        if !source.linear_level.is_finite()
-            || source.linear_level < 0.0
-            || source.linear_level > 1.0
-        {
-            errors.push(format!(
-                "{} linear level must be between zero and one",
-                source.name
-            ));
+        validate_level(source.pre_filter_level_db, &source.name, &mut errors);
+        validate_level(source.pre_filter_peak_db, &source.name, &mut errors);
+        validate_level(source.post_filter_level_db, &source.name, &mut errors);
+        validate_level(source.post_filter_peak_db, &source.name, &mut errors);
+        validate_linear_level(
+            source.linear_level,
+            &source.name,
+            "linear level",
+            &mut errors,
+        );
+        validate_linear_level(
+            source.pre_filter_linear_level,
+            &source.name,
+            "pre-filter linear level",
+            &mut errors,
+        );
+        validate_linear_level(
+            source.post_filter_linear_level,
+            &source.name,
+            "post-filter linear level",
+            &mut errors,
+        );
+        for filter in &source.filters {
+            validate_level(filter.input_level_db, &filter.name, &mut errors);
+            validate_level(filter.output_level_db, &filter.name, &mut errors);
+            validate_level(filter.input_peak_db, &filter.name, &mut errors);
+            validate_level(filter.output_peak_db, &filter.name, &mut errors);
+            if !filter.level_change_db.is_finite() {
+                errors.push(format!("{} level change must be finite", filter.name));
+            }
+            if matches!(filter.gain_reduction_db, Some(value) if !value.is_finite() || value < 0.0)
+            {
+                errors.push(format!(
+                    "{} gain reduction must be zero or greater",
+                    filter.name
+                ));
+            }
+            if matches!(filter.attenuation_db, Some(value) if !value.is_finite() || value < 0.0) {
+                errors.push(format!(
+                    "{} attenuation must be zero or greater",
+                    filter.name
+                ));
+            }
         }
     }
 
     for bus in &snapshot.buses {
         validate_level(bus.level_db, &bus.name, &mut errors);
         validate_level(bus.peak_db, &bus.name, &mut errors);
-        if !bus.linear_level.is_finite() || bus.linear_level < 0.0 || bus.linear_level > 1.0 {
-            errors.push(format!(
-                "{} linear bus level must be between zero and one",
-                bus.name
-            ));
-        }
+        validate_linear_level(bus.linear_level, &bus.name, "linear bus level", &mut errors);
     }
 
     AudioGraphRuntimeValidation {
@@ -350,6 +423,7 @@ fn audio_mix_source(source: &SceneSource) -> AudioMixSource {
             .unwrap_or(0),
         status,
         status_detail,
+        filters: source.filters.clone(),
     }
 }
 
@@ -357,7 +431,12 @@ fn audio_graph_runtime_source(
     source: &AudioMixSource,
     frame_index: u64,
 ) -> AudioGraphRuntimeSource {
-    let (level_db, peak_db, linear_level) = simulated_audio_level(source, frame_index);
+    let (pre_filter_level_db, pre_filter_peak_db, pre_filter_linear_level) =
+        simulated_audio_level(source, frame_index);
+    let filtered = apply_audio_filters(source, pre_filter_level_db, pre_filter_peak_db);
+    let post_filter_level_db = filtered.level_db;
+    let post_filter_peak_db = filtered.peak_db;
+    let post_filter_linear_level = db_to_linear(post_filter_level_db);
     AudioGraphRuntimeSource {
         scene_source_id: source.scene_source_id.clone(),
         name: source.name.clone(),
@@ -368,11 +447,18 @@ fn audio_graph_runtime_source(
         monitor_enabled: source.monitor_enabled,
         meter_enabled: source.meter_enabled,
         sync_offset_ms: source.sync_offset_ms,
-        level_db,
-        peak_db,
-        linear_level,
+        pre_filter_level_db,
+        pre_filter_peak_db,
+        pre_filter_linear_level,
+        post_filter_level_db,
+        post_filter_peak_db,
+        post_filter_linear_level,
+        level_db: post_filter_level_db,
+        peak_db: post_filter_peak_db,
+        linear_level: post_filter_linear_level,
         status: source.status.clone(),
         status_detail: source.status_detail.clone(),
+        filters: filtered.filters,
     }
 }
 
@@ -402,6 +488,289 @@ fn audio_graph_runtime_bus(
         peak_db: peak_db.clamp(-90.0, 6.0),
         linear_level,
     }
+}
+
+struct AudioFilterRuntimeResult {
+    level_db: f64,
+    peak_db: f64,
+    filters: Vec<AudioFilterRuntimeMetadata>,
+}
+
+struct AudioFilterApplyResult {
+    level_db: f64,
+    peak_db: f64,
+    status_detail: String,
+    gain_reduction_db: Option<f64>,
+    attenuation_db: Option<f64>,
+    control_summary: Option<String>,
+}
+
+struct AudioFilterMetadataLevels {
+    input_level_db: f64,
+    input_peak_db: f64,
+    output_level_db: f64,
+    output_peak_db: f64,
+}
+
+fn apply_audio_filters(
+    source: &AudioMixSource,
+    level_db: f64,
+    peak_db: f64,
+) -> AudioFilterRuntimeResult {
+    let mut current_level_db = level_db;
+    let mut current_peak_db = peak_db;
+    let mut metadata = Vec::with_capacity(source.filters.len());
+
+    for filter in sorted_audio_source_filters(&source.filters) {
+        let input_level_db = current_level_db;
+        let input_peak_db = current_peak_db;
+        if !filter.enabled {
+            metadata.push(audio_filter_metadata(
+                filter,
+                AudioFilterRuntimeStatus::Skipped,
+                "Filter is disabled.".to_string(),
+                AudioFilterMetadataLevels {
+                    input_level_db,
+                    input_peak_db,
+                    output_level_db: input_level_db,
+                    output_peak_db: input_peak_db,
+                },
+                None,
+                None,
+                None,
+            ));
+            continue;
+        }
+
+        match apply_audio_filter(input_level_db, input_peak_db, filter) {
+            Ok(result) => {
+                current_level_db = result.level_db;
+                current_peak_db = result.peak_db;
+                metadata.push(audio_filter_metadata(
+                    filter,
+                    AudioFilterRuntimeStatus::Applied,
+                    result.status_detail,
+                    AudioFilterMetadataLevels {
+                        input_level_db,
+                        input_peak_db,
+                        output_level_db: current_level_db,
+                        output_peak_db: current_peak_db,
+                    },
+                    result.gain_reduction_db,
+                    result.attenuation_db,
+                    result.control_summary,
+                ));
+            }
+            Err((status, detail)) => {
+                metadata.push(audio_filter_metadata(
+                    filter,
+                    status,
+                    detail,
+                    AudioFilterMetadataLevels {
+                        input_level_db,
+                        input_peak_db,
+                        output_level_db: input_level_db,
+                        output_peak_db: input_peak_db,
+                    },
+                    None,
+                    None,
+                    None,
+                ));
+            }
+        }
+    }
+
+    AudioFilterRuntimeResult {
+        level_db: current_level_db,
+        peak_db: current_peak_db,
+        filters: metadata,
+    }
+}
+
+fn sorted_audio_source_filters(filters: &[SceneSourceFilter]) -> Vec<&SceneSourceFilter> {
+    let mut sorted = filters.iter().collect::<Vec<_>>();
+    sorted.sort_by(|left, right| {
+        left.order
+            .cmp(&right.order)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    sorted
+}
+
+fn apply_audio_filter(
+    level_db: f64,
+    peak_db: f64,
+    filter: &SceneSourceFilter,
+) -> Result<AudioFilterApplyResult, (AudioFilterRuntimeStatus, String)> {
+    match filter.kind {
+        SceneSourceFilterKind::AudioGain => apply_audio_gain_filter(level_db, peak_db, filter),
+        SceneSourceFilterKind::NoiseGate => apply_noise_gate_filter(level_db, peak_db, filter),
+        SceneSourceFilterKind::Compressor => apply_compressor_filter(level_db, peak_db, filter),
+        _ => Err((
+            AudioFilterRuntimeStatus::Skipped,
+            "Non-audio filter is not applied in the audio graph runtime.".to_string(),
+        )),
+    }
+}
+
+fn apply_audio_gain_filter(
+    level_db: f64,
+    peak_db: f64,
+    filter: &SceneSourceFilter,
+) -> Result<AudioFilterApplyResult, (AudioFilterRuntimeStatus, String)> {
+    let gain_db = audio_filter_number(filter, "gain_db", -60.0, 24.0)?;
+    let output_level_db = clamp_audio_level(level_db + gain_db);
+    let output_peak_db = clamp_audio_level(peak_db + gain_db);
+    Ok(AudioFilterApplyResult {
+        level_db: output_level_db,
+        peak_db: output_peak_db,
+        status_detail: format!("Applied {gain_db:.1} dB audio gain."),
+        gain_reduction_db: None,
+        attenuation_db: (gain_db < 0.0).then_some((level_db - output_level_db).max(0.0)),
+        control_summary: Some(format!("{gain_db:+.1} dB")),
+    })
+}
+
+fn apply_noise_gate_filter(
+    level_db: f64,
+    peak_db: f64,
+    filter: &SceneSourceFilter,
+) -> Result<AudioFilterApplyResult, (AudioFilterRuntimeStatus, String)> {
+    let close_threshold_db = audio_filter_number(filter, "close_threshold_db", -100.0, 0.0)?;
+    let open_threshold_db = audio_filter_number(filter, "open_threshold_db", -100.0, 0.0)?;
+    if close_threshold_db >= open_threshold_db {
+        return Err((
+            AudioFilterRuntimeStatus::Error,
+            "Noise gate open threshold must be greater than close threshold.".to_string(),
+        ));
+    }
+    let attack_ms = audio_filter_number(filter, "attack_ms", 0.0, 5_000.0)?;
+    let release_ms = audio_filter_number(filter, "release_ms", 0.0, 5_000.0)?;
+
+    let (output_level_db, output_peak_db, detail) = if level_db <= close_threshold_db {
+        (
+            -90.0,
+            -90.0,
+            format!("Gate closed below {close_threshold_db:.1} dB."),
+        )
+    } else if level_db >= open_threshold_db {
+        (
+            level_db,
+            peak_db,
+            format!("Gate open above {open_threshold_db:.1} dB."),
+        )
+    } else {
+        let openness = ((level_db - close_threshold_db) / (open_threshold_db - close_threshold_db))
+            .clamp(0.0, 1.0);
+        let output_level_db = linear_to_db(db_to_linear(level_db) * openness);
+        let output_peak_db = linear_to_db(db_to_linear(peak_db) * openness);
+        (
+            output_level_db,
+            output_peak_db,
+            "Gate applied deterministic threshold-band attenuation.".to_string(),
+        )
+    };
+    let attenuation_db = (level_db - output_level_db).max(0.0);
+    Ok(AudioFilterApplyResult {
+        level_db: output_level_db,
+        peak_db: output_peak_db,
+        status_detail: detail,
+        gain_reduction_db: None,
+        attenuation_db: Some(attenuation_db),
+        control_summary: Some(format!(
+            "close {close_threshold_db:.1} dB / open {open_threshold_db:.1} dB / attack {attack_ms:.0} ms / release {release_ms:.0} ms"
+        )),
+    })
+}
+
+fn apply_compressor_filter(
+    level_db: f64,
+    peak_db: f64,
+    filter: &SceneSourceFilter,
+) -> Result<AudioFilterApplyResult, (AudioFilterRuntimeStatus, String)> {
+    let threshold_db = audio_filter_number(filter, "threshold_db", -100.0, 0.0)?;
+    let ratio = audio_filter_number(filter, "ratio", 1.0, 20.0)?;
+    let attack_ms = audio_filter_number(filter, "attack_ms", 0.0, 5_000.0)?;
+    let release_ms = audio_filter_number(filter, "release_ms", 0.0, 5_000.0)?;
+    let makeup_gain_db = audio_filter_number(filter, "makeup_gain_db", -24.0, 24.0)?;
+    let compressed_level_db = compress_audio_level(level_db, threshold_db, ratio);
+    let compressed_peak_db = compress_audio_level(peak_db, threshold_db, ratio);
+    let gain_reduction_db = (level_db - compressed_level_db).max(0.0);
+    let output_level_db = clamp_audio_level(compressed_level_db + makeup_gain_db);
+    let output_peak_db = clamp_audio_level(compressed_peak_db + makeup_gain_db);
+    Ok(AudioFilterApplyResult {
+        level_db: output_level_db,
+        peak_db: output_peak_db,
+        status_detail: format!(
+            "Compressed above {threshold_db:.1} dB at {ratio:.1}:1 with {makeup_gain_db:+.1} dB makeup."
+        ),
+        gain_reduction_db: Some(gain_reduction_db),
+        attenuation_db: (output_level_db < level_db).then_some(level_db - output_level_db),
+        control_summary: Some(format!(
+            "threshold {threshold_db:.1} dB / ratio {ratio:.1}:1 / attack {attack_ms:.0} ms / release {release_ms:.0} ms / makeup {makeup_gain_db:+.1} dB"
+        )),
+    })
+}
+
+fn audio_filter_number(
+    filter: &SceneSourceFilter,
+    key: &str,
+    min: f64,
+    max: f64,
+) -> Result<f64, (AudioFilterRuntimeStatus, String)> {
+    let Some(value) = filter.config.get(key).and_then(serde_json::Value::as_f64) else {
+        return Err((
+            AudioFilterRuntimeStatus::Error,
+            format!("Filter config {key} must be a number."),
+        ));
+    };
+    if !value.is_finite() || value < min || value > max {
+        return Err((
+            AudioFilterRuntimeStatus::Error,
+            format!("Filter config {key} must be between {min} and {max}."),
+        ));
+    }
+    Ok(value)
+}
+
+fn compress_audio_level(level_db: f64, threshold_db: f64, ratio: f64) -> f64 {
+    if level_db <= threshold_db {
+        level_db
+    } else {
+        threshold_db + ((level_db - threshold_db) / ratio)
+    }
+}
+
+fn audio_filter_metadata(
+    filter: &SceneSourceFilter,
+    status: AudioFilterRuntimeStatus,
+    status_detail: String,
+    levels: AudioFilterMetadataLevels,
+    gain_reduction_db: Option<f64>,
+    attenuation_db: Option<f64>,
+    control_summary: Option<String>,
+) -> AudioFilterRuntimeMetadata {
+    AudioFilterRuntimeMetadata {
+        id: filter.id.clone(),
+        name: filter.name.clone(),
+        kind: filter.kind.clone(),
+        enabled: filter.enabled,
+        order: filter.order,
+        status,
+        status_detail,
+        input_level_db: levels.input_level_db,
+        output_level_db: levels.output_level_db,
+        input_peak_db: levels.input_peak_db,
+        output_peak_db: levels.output_peak_db,
+        level_change_db: levels.output_level_db - levels.input_level_db,
+        gain_reduction_db,
+        attenuation_db,
+        control_summary,
+    }
+}
+
+fn clamp_audio_level(value: f64) -> f64 {
+    value.clamp(-90.0, 6.0)
 }
 
 fn simulated_audio_level(source: &AudioMixSource, frame_index: u64) -> (f64, f64, f64) {
@@ -534,9 +903,16 @@ fn validate_level(value: f64, label: &str, errors: &mut Vec<String>) {
     }
 }
 
+fn validate_linear_level(value: f64, label: &str, field: &str, errors: &mut Vec<String>) {
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+        errors.push(format!("{label} {field} must be between zero and one"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn audio_mixer_plan_describes_default_meter() {
@@ -595,5 +971,257 @@ mod tests {
             .buses
             .iter()
             .any(|bus| bus.kind == AudioMixBusKind::Master));
+    }
+
+    #[test]
+    fn audio_graph_runtime_applies_audio_gain_filter() {
+        let scene = test_audio_scene(vec![test_filter(
+            "filter-gain",
+            SceneSourceFilterKind::AudioGain,
+            true,
+            0,
+            json!({ "gain_db": 6.0 }),
+        )]);
+
+        let snapshot = build_audio_graph_runtime_snapshot(&scene, 3);
+        let source = &snapshot.sources[0];
+
+        assert_eq!(source.filters[0].status, AudioFilterRuntimeStatus::Applied);
+        assert_approx_eq(
+            source.post_filter_level_db - source.pre_filter_level_db,
+            6.0,
+        );
+        assert_eq!(source.level_db, source.post_filter_level_db);
+        assert_approx_eq(snapshot.buses[0].level_db, source.level_db);
+    }
+
+    #[test]
+    fn audio_graph_runtime_applies_noise_gate_states() {
+        let base_scene = test_audio_scene(Vec::new());
+        let base = build_audio_graph_runtime_snapshot(&base_scene, 4);
+        let input_level = base.sources[0].pre_filter_level_db;
+
+        let closed = build_audio_graph_runtime_snapshot(
+            &test_audio_scene(vec![test_filter(
+                "filter-gate-closed",
+                SceneSourceFilterKind::NoiseGate,
+                true,
+                0,
+                json!({
+                    "close_threshold_db": input_level + 1.0,
+                    "open_threshold_db": input_level + 4.0,
+                    "attack_ms": 10.0,
+                    "release_ms": 120.0
+                }),
+            )]),
+            4,
+        );
+        assert_eq!(closed.sources[0].level_db, -90.0);
+        assert!(closed.sources[0].filters[0]
+            .status_detail
+            .contains("closed"));
+
+        let open = build_audio_graph_runtime_snapshot(
+            &test_audio_scene(vec![test_filter(
+                "filter-gate-open",
+                SceneSourceFilterKind::NoiseGate,
+                true,
+                0,
+                json!({
+                    "close_threshold_db": input_level - 8.0,
+                    "open_threshold_db": input_level - 4.0,
+                    "attack_ms": 10.0,
+                    "release_ms": 120.0
+                }),
+            )]),
+            4,
+        );
+        assert_approx_eq(open.sources[0].level_db, input_level);
+        assert!(open.sources[0].filters[0].status_detail.contains("open"));
+
+        let band = build_audio_graph_runtime_snapshot(
+            &test_audio_scene(vec![test_filter(
+                "filter-gate-band",
+                SceneSourceFilterKind::NoiseGate,
+                true,
+                0,
+                json!({
+                    "close_threshold_db": input_level - 3.0,
+                    "open_threshold_db": input_level + 3.0,
+                    "attack_ms": 10.0,
+                    "release_ms": 120.0
+                }),
+            )]),
+            4,
+        );
+        assert!(band.sources[0].level_db < input_level);
+        assert!(band.sources[0].level_db > -90.0);
+        assert!(band.sources[0].filters[0]
+            .status_detail
+            .contains("threshold-band"));
+    }
+
+    #[test]
+    fn audio_graph_runtime_applies_compressor_filter() {
+        let base_scene = test_audio_scene(Vec::new());
+        let base = build_audio_graph_runtime_snapshot(&base_scene, 6);
+        let input_level = base.sources[0].pre_filter_level_db;
+        let scene = test_audio_scene(vec![test_filter(
+            "filter-compressor",
+            SceneSourceFilterKind::Compressor,
+            true,
+            0,
+            json!({
+                "threshold_db": input_level - 6.0,
+                "ratio": 3.0,
+                "attack_ms": 8.0,
+                "release_ms": 120.0,
+                "makeup_gain_db": 0.0
+            }),
+        )]);
+
+        let snapshot = build_audio_graph_runtime_snapshot(&scene, 6);
+        let filter = &snapshot.sources[0].filters[0];
+
+        assert_eq!(filter.status, AudioFilterRuntimeStatus::Applied);
+        assert!(snapshot.sources[0].level_db < input_level);
+        assert!(filter.gain_reduction_db.unwrap_or_default() > 0.0);
+        assert!(filter
+            .control_summary
+            .as_deref()
+            .unwrap_or_default()
+            .contains("ratio 3.0:1"));
+    }
+
+    #[test]
+    fn audio_graph_runtime_skips_disabled_filters() {
+        let scene = test_audio_scene(vec![test_filter(
+            "filter-disabled",
+            SceneSourceFilterKind::AudioGain,
+            false,
+            0,
+            json!({ "gain_db": 12.0 }),
+        )]);
+
+        let snapshot = build_audio_graph_runtime_snapshot(&scene, 2);
+        let source = &snapshot.sources[0];
+
+        assert_eq!(source.filters[0].status, AudioFilterRuntimeStatus::Skipped);
+        assert_approx_eq(source.level_db, source.pre_filter_level_db);
+    }
+
+    #[test]
+    fn audio_graph_runtime_reports_malformed_audio_filters_without_mutating_level() {
+        let scene = test_audio_scene(vec![test_filter(
+            "filter-bad-gain",
+            SceneSourceFilterKind::AudioGain,
+            true,
+            0,
+            json!({ "gain_db": 99.0 }),
+        )]);
+
+        let snapshot = build_audio_graph_runtime_snapshot(&scene, 2);
+        let source = &snapshot.sources[0];
+
+        assert_eq!(source.filters[0].status, AudioFilterRuntimeStatus::Error);
+        assert!(source.filters[0].status_detail.contains("between"));
+        assert_approx_eq(source.level_db, source.pre_filter_level_db);
+    }
+
+    #[test]
+    fn audio_graph_runtime_applies_filters_in_deterministic_order() {
+        let base_scene = test_audio_scene(Vec::new());
+        let base = build_audio_graph_runtime_snapshot(&base_scene, 9);
+        let input_level = base.sources[0].pre_filter_level_db;
+        let compressor_config = json!({
+            "threshold_db": input_level + 5.0,
+            "ratio": 2.0,
+            "attack_ms": 8.0,
+            "release_ms": 120.0,
+            "makeup_gain_db": 0.0
+        });
+        let reversed_input = test_audio_scene(vec![
+            test_filter(
+                "filter-compressor",
+                SceneSourceFilterKind::Compressor,
+                true,
+                20,
+                compressor_config,
+            ),
+            test_filter(
+                "filter-gain",
+                SceneSourceFilterKind::AudioGain,
+                true,
+                10,
+                json!({ "gain_db": 12.0 }),
+            ),
+        ]);
+
+        let snapshot = build_audio_graph_runtime_snapshot(&reversed_input, 9);
+        let source = &snapshot.sources[0];
+
+        assert_eq!(source.filters[0].id, "filter-gain");
+        assert_eq!(source.filters[1].id, "filter-compressor");
+        assert!(source.level_db < input_level + 12.0);
+        assert!(source.filters[1].gain_reduction_db.unwrap_or_default() > 0.0);
+    }
+
+    #[test]
+    fn audio_graph_runtime_skips_non_audio_filters_on_audio_sources() {
+        let scene = test_audio_scene(vec![test_filter(
+            "filter-color",
+            SceneSourceFilterKind::ColorCorrection,
+            true,
+            0,
+            json!({ "brightness": 0.5, "contrast": 1.0, "saturation": 1.0, "gamma": 1.0 }),
+        )]);
+
+        let snapshot = build_audio_graph_runtime_snapshot(&scene, 2);
+        let source = &snapshot.sources[0];
+
+        assert_eq!(source.filters[0].status, AudioFilterRuntimeStatus::Skipped);
+        assert!(source.filters[0].status_detail.contains("Non-audio filter"));
+        assert_approx_eq(source.level_db, source.pre_filter_level_db);
+    }
+
+    fn test_audio_scene(filters: Vec<SceneSourceFilter>) -> crate::Scene {
+        let mut collection = crate::SceneCollection::default_collection(crate::now_utc());
+        let scene = collection.scenes.get_mut(0).unwrap();
+        let source = scene
+            .sources
+            .iter_mut()
+            .find(|source| source.kind == SceneSourceKind::AudioMeter)
+            .unwrap();
+        source.config["device_id"] = json!("microphone:default");
+        source.config["availability"] = json!({
+            "state": "available",
+            "detail": "Default microphone is available."
+        });
+        source.filters = filters;
+        scene.clone()
+    }
+
+    fn test_filter(
+        id: &str,
+        kind: SceneSourceFilterKind,
+        enabled: bool,
+        order: i32,
+        config: serde_json::Value,
+    ) -> SceneSourceFilter {
+        SceneSourceFilter {
+            id: id.to_string(),
+            name: id.to_string(),
+            kind,
+            enabled,
+            order,
+            config,
+        }
+    }
+
+    fn assert_approx_eq(left: f64, right: f64) {
+        assert!(
+            (left - right).abs() < 0.000_001,
+            "expected {left} to approximately equal {right}"
+        );
     }
 }

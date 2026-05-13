@@ -709,6 +709,112 @@ test("audio mixer plan maps audio meter sources to buses", async () => {
   assert.equal(source.meter_enabled, true);
 });
 
+test("audio graph runtime reports ordered audio filter diagnostics", async () => {
+  const {
+    buildAudioGraphRuntimeSnapshot,
+    createDefaultSceneCollection,
+    validateAudioGraphRuntimeSnapshot,
+    validateSceneCollection,
+  } = await sharedTypes;
+  const collection = createDefaultSceneCollection("2026-05-08T12:00:00.000Z");
+  const scene = collection.scenes[0];
+  const source = scene.sources.find((sceneSource) => sceneSource.kind === "audio_meter");
+  assert.ok(source);
+  source.config.device_id = "microphone:default";
+  source.config.availability = {
+    state: "available",
+    detail: "Default microphone is available.",
+  };
+  source.filters = [
+    {
+      id: "filter-compressor",
+      name: "Compressor",
+      kind: "compressor",
+      enabled: true,
+      order: 20,
+      config: {
+        threshold_db: -24,
+        ratio: 3,
+        attack_ms: 8,
+        release_ms: 120,
+        makeup_gain_db: 0,
+      },
+    },
+    {
+      id: "filter-gain",
+      name: "Audio Gain",
+      kind: "audio_gain",
+      enabled: true,
+      order: 10,
+      config: { gain_db: 6 },
+    },
+    {
+      id: "filter-gate",
+      name: "Noise Gate",
+      kind: "noise_gate",
+      enabled: false,
+      order: 30,
+      config: {
+        close_threshold_db: -45,
+        open_threshold_db: -35,
+        attack_ms: 10,
+        release_ms: 120,
+      },
+    },
+  ];
+
+  const sceneValidation = validateSceneCollection(collection);
+  assert.equal(sceneValidation.ok, true);
+
+  const snapshot = buildAudioGraphRuntimeSnapshot(
+    scene,
+    3,
+    "2026-05-08T12:00:00.000Z",
+  );
+  const validation = validateAudioGraphRuntimeSnapshot(snapshot);
+  const runtimeSource = snapshot.sources[0];
+
+  assert.equal(validation.ready, true);
+  assert.equal(runtimeSource.filters.length, 3);
+  assert.deepEqual(
+    runtimeSource.filters.map((filter) => filter.id),
+    ["filter-gain", "filter-compressor", "filter-gate"],
+  );
+  assert.equal(runtimeSource.filters[0].status, "applied");
+  assert.equal(runtimeSource.filters[2].status, "skipped");
+  assert.notEqual(runtimeSource.level_db, runtimeSource.pre_filter_level_db);
+  assert.equal(runtimeSource.level_db, runtimeSource.post_filter_level_db);
+  assert.equal(runtimeSource.linear_level, runtimeSource.post_filter_linear_level);
+});
+
+test("audio graph runtime reports malformed filters without mutating levels", async () => {
+  const { buildAudioGraphRuntimeSnapshot, createDefaultSceneCollection } = await sharedTypes;
+  const scene = createDefaultSceneCollection("2026-05-08T12:00:00.000Z").scenes[0];
+  const source = scene.sources.find((sceneSource) => sceneSource.kind === "audio_meter");
+  assert.ok(source);
+  source.filters = [
+    {
+      id: "filter-hot-gain",
+      name: "Hot Gain",
+      kind: "audio_gain",
+      enabled: true,
+      order: 0,
+      config: { gain_db: 99 },
+    },
+  ];
+
+  const snapshot = buildAudioGraphRuntimeSnapshot(
+    scene,
+    2,
+    "2026-05-08T12:00:00.000Z",
+  );
+  const runtimeSource = snapshot.sources[0];
+
+  assert.equal(runtimeSource.filters[0].status, "error");
+  assert.match(runtimeSource.filters[0].status_detail, /between/);
+  assert.equal(runtimeSource.level_db, runtimeSource.pre_filter_level_db);
+});
+
 test("capture inventory binding updates scene source availability", async () => {
   const {
     bindSceneCollectionCaptureInventory,
