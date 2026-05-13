@@ -506,6 +506,7 @@ export interface CompositorEvaluatedNode {
   status_detail: string;
   asset?: SoftwareCompositorAssetMetadata | null;
   text?: SoftwareCompositorTextMetadata | null;
+  browser?: SoftwareCompositorBrowserMetadata | null;
   filters: SoftwareCompositorFilterMetadata[];
   rect: CompositorRect;
   crop: SceneCrop;
@@ -574,6 +575,32 @@ export interface SoftwareCompositorTextMetadata {
   checksum?: number | null;
 }
 
+export type SoftwareCompositorBrowserStatus =
+  | "rendered"
+  | "no_url"
+  | "browser_unavailable"
+  | "unsupported_url"
+  | "navigation_failed"
+  | "capture_failed";
+
+export interface SoftwareCompositorBrowserMetadata {
+  status: SoftwareCompositorBrowserStatus;
+  status_detail: string;
+  url?: string | null;
+  viewport_width: number;
+  viewport_height: number;
+  custom_css_present: boolean;
+  custom_css_applied: boolean;
+  custom_css_detail?: string | null;
+  browser_name?: string | null;
+  browser_path?: string | null;
+  sampled_frame_time_ms?: number | null;
+  sample_index?: number | null;
+  checksum?: number | null;
+  capture_duration_ms?: number | null;
+  cache_hit: boolean;
+}
+
 export type SoftwareCompositorFilterStatus =
   | "applied"
   | "skipped"
@@ -600,6 +627,7 @@ export interface SoftwareCompositorInputFrame {
   status_detail: string;
   asset?: SoftwareCompositorAssetMetadata | null;
   text?: SoftwareCompositorTextMetadata | null;
+  browser?: SoftwareCompositorBrowserMetadata | null;
   filters: SoftwareCompositorFilterMetadata[];
   checksum: number;
   pixels: number[];

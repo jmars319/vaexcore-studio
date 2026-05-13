@@ -138,6 +138,38 @@ test("scene validation accepts current video media source configs", async () => 
   assert.equal(validateSceneCollection(collection).ok, true);
 });
 
+test("scene validation accepts current browser overlay source configs", async () => {
+  const {
+    cloneSceneCollection,
+    createDefaultSceneCollection,
+    createDefaultSceneSource,
+    validateSceneCollection,
+  } = await sharedTypes;
+  const collection = cloneSceneCollection(createDefaultSceneCollection("2026-05-08T12:00:00.000Z"));
+  const scene = collection.scenes[0];
+  scene.sources.push(
+    createDefaultSceneSource("browser_overlay", {
+      id: "source-browser-runtime",
+      name: "Browser Runtime",
+      position: { x: 120, y: 80 },
+      size: { width: 640, height: 360 },
+      z_index: 24,
+      config: {
+        url: "https://example.com/overlay",
+        viewport: { width: 1280, height: 720 },
+        custom_css: "body { background: transparent; }",
+        availability: {
+          state: "available",
+          detail: "Browser overlay URL configured.",
+          checked_at: "2026-05-08T12:00:00.000Z",
+        },
+      },
+    }),
+  );
+
+  assert.equal(validateSceneCollection(collection).ok, true);
+});
+
 test("transition preview frames are deterministic for supported transition kinds", async () => {
   const {
     buildSceneTransitionPreviewFrame,

@@ -35,7 +35,8 @@ pub use compositor::{
     CompositorRenderPlan, CompositorRenderTarget, CompositorRenderTargetKind,
     CompositorRenderedFrame, CompositorRenderedTarget, CompositorRendererKind, CompositorScaleMode,
     CompositorTransform, CompositorValidation, SoftwareCompositorAssetMetadata,
-    SoftwareCompositorAssetStatus, SoftwareCompositorFilterMetadata,
+    SoftwareCompositorAssetStatus, SoftwareCompositorBrowserMetadata,
+    SoftwareCompositorBrowserStatus, SoftwareCompositorFilterMetadata,
     SoftwareCompositorFilterStatus, SoftwareCompositorFrame, SoftwareCompositorInputFrame,
     SoftwareCompositorRenderResult, SoftwareCompositorTextMetadata, SoftwareCompositorTextStatus,
 };

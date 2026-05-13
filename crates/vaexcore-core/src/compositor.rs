@@ -1,15 +1,20 @@
 use std::{
     collections::{HashMap, HashSet},
     env, fs,
+    io::{Read, Write},
+    net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Child, Command},
     sync::{Mutex, OnceLock},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use ab_glyph::{point, Font, FontArc, Glyph, PxScale, ScaleFont};
+use base64::{engine::general_purpose, Engine as _};
 use image::ImageReader;
 use serde::{Deserialize, Serialize};
+use tungstenite::{stream::MaybeTlsStream, Message, WebSocket};
+use uuid::Uuid;
 
 use crate::{
     Scene, SceneCrop, ScenePoint, SceneSize, SceneSource, SceneSourceBoundsMode, SceneSourceFilter,
@@ -174,6 +179,8 @@ pub struct CompositorEvaluatedNode {
     pub asset: Option<SoftwareCompositorAssetMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<SoftwareCompositorTextMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<SoftwareCompositorBrowserMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filters: Vec<SoftwareCompositorFilterMetadata>,
     pub rect: CompositorRect,
@@ -228,6 +235,8 @@ pub struct SoftwareCompositorInputFrame {
     pub asset: Option<SoftwareCompositorAssetMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<SoftwareCompositorTextMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<SoftwareCompositorBrowserMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filters: Vec<SoftwareCompositorFilterMetadata>,
     pub checksum: u64,
@@ -297,6 +306,47 @@ pub struct SoftwareCompositorTextMetadata {
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
+pub enum SoftwareCompositorBrowserStatus {
+    Rendered,
+    NoUrl,
+    BrowserUnavailable,
+    UnsupportedUrl,
+    NavigationFailed,
+    CaptureFailed,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SoftwareCompositorBrowserMetadata {
+    pub status: SoftwareCompositorBrowserStatus,
+    pub status_detail: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    pub viewport_width: u32,
+    pub viewport_height: u32,
+    #[serde(default)]
+    pub custom_css_present: bool,
+    #[serde(default)]
+    pub custom_css_applied: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_css_detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampled_frame_time_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_index: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checksum: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_duration_ms: Option<u64>,
+    #[serde(default)]
+    pub cache_hit: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum SoftwareCompositorFilterStatus {
     Applied,
     Skipped,
@@ -336,6 +386,63 @@ struct CachedDecodedImage {
     format: String,
     checksum: u64,
     pixels: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct BrowserSnapshotCacheKey {
+    url: String,
+    viewport_width: u32,
+    viewport_height: u32,
+    custom_css_hash: u64,
+    sample_time_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+struct CachedBrowserSnapshot {
+    width: u32,
+    height: u32,
+    checksum: u64,
+    pixels: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct BrowserSnapshot {
+    width: u32,
+    height: u32,
+    checksum: u64,
+    pixels: Vec<u8>,
+    browser_name: String,
+    browser_path: String,
+    sample_time_ms: u64,
+    sample_index: u64,
+    capture_duration_ms: u64,
+    custom_css_applied: bool,
+    custom_css_detail: Option<String>,
+    cache_hit: bool,
+}
+
+#[derive(Clone, Debug)]
+struct BrowserBinary {
+    name: String,
+    path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+struct BrowserSnapshotRequest {
+    url: String,
+    viewport_width: u32,
+    viewport_height: u32,
+    custom_css: String,
+    sample_time_ms: u64,
+    sample_index: u64,
+}
+
+#[derive(Clone, Debug)]
+struct BrowserCaptureError {
+    status: SoftwareCompositorBrowserStatus,
+    detail: String,
+    custom_css_applied: bool,
+    custom_css_detail: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -404,12 +511,16 @@ enum TextAlign {
 
 static IMAGE_ASSET_CACHE: OnceLock<Mutex<HashMap<ImageAssetCacheKey, CachedDecodedImage>>> =
     OnceLock::new();
+static BROWSER_SNAPSHOT_CACHE: OnceLock<
+    Mutex<HashMap<BrowserSnapshotCacheKey, CachedBrowserSnapshot>>,
+> = OnceLock::new();
 static VIDEO_ASSET_CACHE: OnceLock<Mutex<HashMap<VideoAssetCacheKey, CachedDecodedImage>>> =
     OnceLock::new();
 static LUT_ASSET_CACHE: OnceLock<Mutex<HashMap<LutAssetCacheKey, CachedCubeLut>>> = OnceLock::new();
 static INTER_FONT: OnceLock<Result<FontArc, String>> = OnceLock::new();
 const INTER_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/Inter.ttf");
 const SOFTWARE_TEXT_FONT_FAMILY: &str = "Inter";
+const BROWSER_SAMPLE_INTERVAL_MS: u64 = 1_000;
 const VIDEO_SAMPLE_INTERVAL_MS: u64 = 500;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -863,6 +974,7 @@ fn evaluate_node_for_target_with_input(
         .unwrap_or_else(|| node.status_detail.clone());
     let asset = input_frame.and_then(|frame| frame.asset.clone());
     let text = input_frame.and_then(|frame| frame.text.clone());
+    let browser = input_frame.and_then(|frame| frame.browser.clone());
     let filters = input_frame
         .map(|frame| frame.filters.clone())
         .unwrap_or_default();
@@ -875,6 +987,7 @@ fn evaluate_node_for_target_with_input(
         status_detail,
         asset,
         text,
+        browser,
         filters,
         rect: CompositorRect {
             x: offset_x + source_rect.x * scale_x,
@@ -1181,6 +1294,8 @@ fn software_input_frame_for_node(
 ) -> SoftwareCompositorInputFrame {
     let input_frame = if node.source_kind == SceneSourceKind::ImageMedia {
         image_media_input_frame_for_node(node, clock)
+    } else if node.source_kind == SceneSourceKind::BrowserOverlay {
+        browser_overlay_input_frame_for_node(node, clock)
     } else if node.source_kind == SceneSourceKind::Text {
         text_input_frame_for_node(node)
     } else {
@@ -1188,6 +1303,7 @@ fn software_input_frame_for_node(
             node,
             node.status.clone(),
             node.status_detail.clone(),
+            None,
             None,
             None,
         )
@@ -1214,6 +1330,7 @@ fn image_media_input_frame_for_node(
             "No local media asset has been selected.".to_string(),
             Some(metadata),
             None,
+            None,
         );
     }
 
@@ -1230,6 +1347,7 @@ fn image_media_input_frame_for_node(
                     metadata.status_detail.clone(),
                     Some(metadata),
                     None,
+                    None,
                 )
             }
         };
@@ -1244,6 +1362,7 @@ fn image_media_input_frame_for_node(
                 CompositorNodeStatus::Placeholder,
                 metadata.status_detail.clone(),
                 Some(metadata),
+                None,
                 None,
             )
         }
@@ -1283,6 +1402,7 @@ fn decoded_image_input_frame(
         status_detail: metadata.status_detail.clone(),
         asset: Some(metadata),
         text: None,
+        browser: None,
         filters: Vec::new(),
         checksum: decoded.image.checksum,
         pixels: decoded.image.pixels,
@@ -1326,9 +1446,164 @@ fn decoded_video_input_frame(
         status_detail: metadata.status_detail.clone(),
         asset: Some(metadata),
         text: None,
+        browser: None,
         filters: Vec::new(),
         checksum: decoded.image.checksum,
         pixels: decoded.image.pixels,
+    }
+}
+
+fn browser_overlay_input_frame_for_node(
+    node: &CompositorNode,
+    clock: &CompositorFrameClock,
+) -> SoftwareCompositorInputFrame {
+    browser_overlay_input_frame_for_node_with_browser(node, clock, find_browser_binary())
+}
+
+fn browser_overlay_input_frame_for_node_with_browser(
+    node: &CompositorNode,
+    clock: &CompositorFrameClock,
+    browser: Option<BrowserBinary>,
+) -> SoftwareCompositorInputFrame {
+    let viewport = browser_viewport_for_node(node);
+    let url = config_value_string(&node.config, "url").unwrap_or_default();
+    if url.trim().is_empty() {
+        let metadata = browser_metadata(
+            SoftwareCompositorBrowserStatus::NoUrl,
+            "No browser overlay URL has been configured.".to_string(),
+            None,
+            viewport,
+            None,
+        );
+        return placeholder_input_frame_for_node(
+            node,
+            CompositorNodeStatus::Placeholder,
+            metadata.status_detail.clone(),
+            None,
+            None,
+            Some(metadata),
+        );
+    }
+
+    if !is_supported_browser_overlay_url(&url) {
+        let metadata = browser_metadata(
+            SoftwareCompositorBrowserStatus::UnsupportedUrl,
+            "Unsupported browser overlay URL. Supported URLs are http, https, and file."
+                .to_string(),
+            Some(url),
+            viewport,
+            None,
+        );
+        return placeholder_input_frame_for_node(
+            node,
+            CompositorNodeStatus::Placeholder,
+            metadata.status_detail.clone(),
+            None,
+            None,
+            Some(metadata),
+        );
+    }
+
+    let Some(browser) = browser else {
+        let metadata = browser_metadata(
+            SoftwareCompositorBrowserStatus::BrowserUnavailable,
+            "Chrome, Chromium, or Edge is not available; browser overlay preview is using a placeholder."
+                .to_string(),
+            Some(url),
+            viewport,
+            None,
+        );
+        return placeholder_input_frame_for_node(
+            node,
+            CompositorNodeStatus::Placeholder,
+            metadata.status_detail.clone(),
+            None,
+            None,
+            Some(metadata),
+        );
+    };
+
+    let custom_css = config_value_string(&node.config, "custom_css").unwrap_or_default();
+    let sample_time_ms = quantized_browser_sample_time_ms(clock);
+    let request = BrowserSnapshotRequest {
+        url: url.clone(),
+        viewport_width: viewport.0,
+        viewport_height: viewport.1,
+        custom_css,
+        sample_time_ms,
+        sample_index: sample_time_ms / BROWSER_SAMPLE_INTERVAL_MS,
+    };
+
+    match browser_overlay_snapshot(&browser, &request) {
+        Ok(snapshot) => browser_snapshot_input_frame(node, &request, snapshot),
+        Err(error) => {
+            let metadata = browser_metadata(
+                error.status,
+                error.detail,
+                Some(url),
+                viewport,
+                Some((
+                    browser,
+                    request,
+                    error.custom_css_applied,
+                    error.custom_css_detail,
+                )),
+            );
+            placeholder_input_frame_for_node(
+                node,
+                CompositorNodeStatus::Placeholder,
+                metadata.status_detail.clone(),
+                None,
+                None,
+                Some(metadata),
+            )
+        }
+    }
+}
+
+fn browser_snapshot_input_frame(
+    node: &CompositorNode,
+    request: &BrowserSnapshotRequest,
+    snapshot: BrowserSnapshot,
+) -> SoftwareCompositorInputFrame {
+    let metadata = SoftwareCompositorBrowserMetadata {
+        status: SoftwareCompositorBrowserStatus::Rendered,
+        status_detail: format!(
+            "Rendered browser overlay {}x{} at {:.2}s using {}.",
+            snapshot.width,
+            snapshot.height,
+            snapshot.sample_time_ms as f64 / 1000.0,
+            snapshot.browser_name
+        ),
+        url: Some(request.url.clone()),
+        viewport_width: request.viewport_width,
+        viewport_height: request.viewport_height,
+        custom_css_present: !request.custom_css.trim().is_empty(),
+        custom_css_applied: snapshot.custom_css_applied,
+        custom_css_detail: snapshot.custom_css_detail,
+        browser_name: Some(snapshot.browser_name),
+        browser_path: Some(snapshot.browser_path),
+        sampled_frame_time_ms: Some(snapshot.sample_time_ms),
+        sample_index: Some(snapshot.sample_index),
+        checksum: Some(snapshot.checksum),
+        capture_duration_ms: Some(snapshot.capture_duration_ms),
+        cache_hit: snapshot.cache_hit,
+    };
+
+    SoftwareCompositorInputFrame {
+        source_id: node.source_id.clone(),
+        source_kind: node.source_kind.clone(),
+        width: snapshot.width,
+        height: snapshot.height,
+        frame_format: CompositorFrameFormat::Rgba8,
+        status: CompositorNodeStatus::Ready,
+        status_detail: metadata.status_detail.clone(),
+        asset: None,
+        text: None,
+        browser: Some(metadata),
+        filters: Vec::new(),
+        checksum: snapshot.checksum,
+        pixels: snapshot.pixels,
     }
 }
 
@@ -1348,6 +1623,7 @@ fn text_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFr
             metadata.status_detail.clone(),
             None,
             Some(metadata),
+            None,
         );
     }
 
@@ -1367,6 +1643,7 @@ fn text_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFr
                 metadata.status_detail.clone(),
                 None,
                 Some(metadata),
+                None,
             )
         }
     }
@@ -1432,6 +1709,7 @@ fn render_text_source(
         status_detail,
         asset: None,
         text: Some(metadata),
+        browser: None,
         filters: Vec::new(),
         checksum,
         pixels,
@@ -1576,6 +1854,7 @@ fn placeholder_input_frame_for_node(
     status_detail: String,
     asset: Option<SoftwareCompositorAssetMetadata>,
     text: Option<SoftwareCompositorTextMetadata>,
+    browser: Option<SoftwareCompositorBrowserMetadata>,
 ) -> SoftwareCompositorInputFrame {
     let size = input_frame_size(node);
     let width = size.width.max(1.0).round().min(3840.0) as u32;
@@ -1621,6 +1900,7 @@ fn placeholder_input_frame_for_node(
         status_detail,
         asset,
         text,
+        browser,
         filters: Vec::new(),
         checksum,
         pixels,
@@ -2410,6 +2690,21 @@ fn apply_software_input_validation(
                 }
             }
         }
+        if let Some(browser) = &input.browser {
+            match browser.status {
+                SoftwareCompositorBrowserStatus::Rendered => {}
+                SoftwareCompositorBrowserStatus::NoUrl
+                | SoftwareCompositorBrowserStatus::BrowserUnavailable
+                | SoftwareCompositorBrowserStatus::UnsupportedUrl
+                | SoftwareCompositorBrowserStatus::NavigationFailed
+                | SoftwareCompositorBrowserStatus::CaptureFailed => {
+                    validation.warnings.push(format!(
+                        "{} browser overlay is using a placeholder: {}",
+                        input.source_id, browser.status_detail
+                    ));
+                }
+            }
+        }
         for filter in &input.filters {
             match filter.status {
                 SoftwareCompositorFilterStatus::Applied
@@ -2690,6 +2985,541 @@ fn extract_video_frame_with_ffmpeg(
     })
 }
 
+fn browser_overlay_snapshot(
+    browser: &BrowserBinary,
+    request: &BrowserSnapshotRequest,
+) -> Result<BrowserSnapshot, BrowserCaptureError> {
+    let key = BrowserSnapshotCacheKey {
+        url: request.url.clone(),
+        viewport_width: request.viewport_width,
+        viewport_height: request.viewport_height,
+        custom_css_hash: checksum_pixels(request.custom_css.as_bytes()),
+        sample_time_ms: request.sample_time_ms,
+    };
+    if let Some(cached) = cached_browser_snapshot(&key) {
+        return Ok(BrowserSnapshot {
+            width: cached.width,
+            height: cached.height,
+            checksum: cached.checksum,
+            pixels: cached.pixels,
+            browser_name: browser.name.clone(),
+            browser_path: browser.path.display().to_string(),
+            sample_time_ms: request.sample_time_ms,
+            sample_index: request.sample_index,
+            capture_duration_ms: 0,
+            custom_css_applied: !request.custom_css.trim().is_empty(),
+            custom_css_detail: custom_css_success_detail(&request.custom_css),
+            cache_hit: true,
+        });
+    }
+
+    let started_at = Instant::now();
+    let (snapshot, custom_css_applied, custom_css_detail) =
+        capture_browser_snapshot_with_cdp(browser, request)?;
+    let capture_duration_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    store_cached_browser_snapshot(key, snapshot.clone());
+
+    Ok(BrowserSnapshot {
+        width: snapshot.width,
+        height: snapshot.height,
+        checksum: snapshot.checksum,
+        pixels: snapshot.pixels,
+        browser_name: browser.name.clone(),
+        browser_path: browser.path.display().to_string(),
+        sample_time_ms: request.sample_time_ms,
+        sample_index: request.sample_index,
+        capture_duration_ms,
+        custom_css_applied,
+        custom_css_detail,
+        cache_hit: false,
+    })
+}
+
+fn capture_browser_snapshot_with_cdp(
+    browser: &BrowserBinary,
+    request: &BrowserSnapshotRequest,
+) -> Result<(CachedBrowserSnapshot, bool, Option<String>), BrowserCaptureError> {
+    let port = allocate_local_port()?;
+    let user_data_dir = env::temp_dir().join(format!("vaexcore-browser-{}", Uuid::new_v4()));
+    fs::create_dir_all(&user_data_dir).map_err(|error| BrowserCaptureError {
+        status: SoftwareCompositorBrowserStatus::CaptureFailed,
+        detail: format!("Could not create temporary browser profile: {error}"),
+        custom_css_applied: false,
+        custom_css_detail: None,
+    })?;
+
+    let mut child = Command::new(&browser.path)
+        .arg("--headless=new")
+        .arg("--disable-gpu")
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .arg("--disable-background-networking")
+        .arg("--disable-extensions")
+        .arg("--disable-sync")
+        .arg("--hide-scrollbars")
+        .arg("--run-all-compositor-stages-before-draw")
+        .arg(format!(
+            "--window-size={},{}",
+            request.viewport_width, request.viewport_height
+        ))
+        .arg(format!("--remote-debugging-port={port}"))
+        .arg(format!("--user-data-dir={}", user_data_dir.display()))
+        .arg("about:blank")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|error| BrowserCaptureError {
+            status: SoftwareCompositorBrowserStatus::CaptureFailed,
+            detail: format!("Could not start {}: {error}", browser.name),
+            custom_css_applied: false,
+            custom_css_detail: None,
+        })?;
+
+    let result = run_browser_capture_session(port, request);
+    stop_browser_child(&mut child);
+    let _ = fs::remove_dir_all(&user_data_dir);
+    result
+}
+
+fn run_browser_capture_session(
+    port: u16,
+    request: &BrowserSnapshotRequest,
+) -> Result<(CachedBrowserSnapshot, bool, Option<String>), BrowserCaptureError> {
+    let web_socket_url = wait_for_cdp_target(port)?;
+    let mut cdp = CdpClient::connect(&web_socket_url).map_err(|error| BrowserCaptureError {
+        status: SoftwareCompositorBrowserStatus::CaptureFailed,
+        detail: format!("Could not connect to browser DevTools: {error}"),
+        custom_css_applied: false,
+        custom_css_detail: None,
+    })?;
+
+    cdp.send("Page.enable", serde_json::json!({}))
+        .map_err(browser_capture_failed)?;
+    cdp.send("Runtime.enable", serde_json::json!({}))
+        .map_err(browser_capture_failed)?;
+    cdp.send(
+        "Emulation.setDeviceMetricsOverride",
+        serde_json::json!({
+            "width": request.viewport_width,
+            "height": request.viewport_height,
+            "deviceScaleFactor": 1,
+            "mobile": false
+        }),
+    )
+    .map_err(browser_capture_failed)?;
+
+    let navigation = cdp
+        .send("Page.navigate", serde_json::json!({ "url": request.url }))
+        .map_err(browser_navigation_failed)?;
+    if let Some(error_text) = navigation
+        .get("errorText")
+        .and_then(serde_json::Value::as_str)
+    {
+        return Err(BrowserCaptureError {
+            status: SoftwareCompositorBrowserStatus::NavigationFailed,
+            detail: format!("Browser overlay navigation failed: {error_text}"),
+            custom_css_applied: false,
+            custom_css_detail: None,
+        });
+    }
+    if !wait_for_document_ready(&mut cdp) {
+        return Err(BrowserCaptureError {
+            status: SoftwareCompositorBrowserStatus::NavigationFailed,
+            detail: "Browser overlay navigation did not finish before the preview timeout."
+                .to_string(),
+            custom_css_applied: false,
+            custom_css_detail: None,
+        });
+    }
+
+    let (custom_css_applied, custom_css_detail) = inject_browser_custom_css(&mut cdp, request);
+    std::thread::sleep(Duration::from_millis(120));
+    let result = cdp
+        .send(
+            "Page.captureScreenshot",
+            serde_json::json!({
+                "format": "png",
+                "fromSurface": true,
+                "captureBeyondViewport": false
+            }),
+        )
+        .map_err(browser_capture_failed)?;
+    let encoded = result
+        .get("data")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| BrowserCaptureError {
+            status: SoftwareCompositorBrowserStatus::CaptureFailed,
+            detail: "Browser screenshot response did not include image data.".to_string(),
+            custom_css_applied,
+            custom_css_detail: custom_css_detail.clone(),
+        })?;
+    let png = general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| BrowserCaptureError {
+            status: SoftwareCompositorBrowserStatus::CaptureFailed,
+            detail: format!("Browser screenshot data could not be decoded: {error}"),
+            custom_css_applied,
+            custom_css_detail: custom_css_detail.clone(),
+        })?;
+    let image = image::load_from_memory(&png).map_err(|error| BrowserCaptureError {
+        status: SoftwareCompositorBrowserStatus::CaptureFailed,
+        detail: format!("Browser screenshot image could not be decoded: {error}"),
+        custom_css_applied,
+        custom_css_detail: custom_css_detail.clone(),
+    })?;
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let pixels = rgba.into_raw();
+    Ok((
+        CachedBrowserSnapshot {
+            width,
+            height,
+            checksum: checksum_pixels(&pixels),
+            pixels,
+        },
+        custom_css_applied,
+        custom_css_detail,
+    ))
+}
+
+fn inject_browser_custom_css(
+    cdp: &mut CdpClient,
+    request: &BrowserSnapshotRequest,
+) -> (bool, Option<String>) {
+    if request.custom_css.trim().is_empty() {
+        return (false, None);
+    }
+    let css = serde_json::to_string(&request.custom_css).unwrap_or_else(|_| "\"\"".to_string());
+    let expression = format!(
+        "(() => {{
+            const style = document.createElement('style');
+            style.setAttribute('data-vaexcore-preview-css', 'true');
+            style.textContent = {css};
+            (document.head || document.documentElement).appendChild(style);
+            return true;
+        }})()"
+    );
+    match cdp.evaluate_bool(&expression) {
+        Ok(true) => (true, custom_css_success_detail(&request.custom_css)),
+        Ok(false) => (
+            false,
+            Some("Custom CSS injection returned false.".to_string()),
+        ),
+        Err(error) => (false, Some(format!("Custom CSS injection failed: {error}"))),
+    }
+}
+
+fn wait_for_document_ready(cdp: &mut CdpClient) -> bool {
+    let started_at = Instant::now();
+    while started_at.elapsed() < Duration::from_secs(10) {
+        if cdp
+            .evaluate_bool(
+                "document.readyState === 'complete' || document.readyState === 'interactive'",
+            )
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    false
+}
+
+fn browser_capture_failed(detail: String) -> BrowserCaptureError {
+    BrowserCaptureError {
+        status: SoftwareCompositorBrowserStatus::CaptureFailed,
+        detail: format!("Browser overlay capture failed: {detail}"),
+        custom_css_applied: false,
+        custom_css_detail: None,
+    }
+}
+
+fn browser_navigation_failed(detail: String) -> BrowserCaptureError {
+    BrowserCaptureError {
+        status: SoftwareCompositorBrowserStatus::NavigationFailed,
+        detail: format!("Browser overlay navigation failed: {detail}"),
+        custom_css_applied: false,
+        custom_css_detail: None,
+    }
+}
+
+fn custom_css_success_detail(custom_css: &str) -> Option<String> {
+    if custom_css.trim().is_empty() {
+        None
+    } else {
+        Some("Custom CSS applied in preview.".to_string())
+    }
+}
+
+fn browser_viewport_for_node(node: &CompositorNode) -> (u32, u32) {
+    config_size(&node.config, "viewport")
+        .map(|size| {
+            (
+                size.width.max(1.0).round().min(3840.0) as u32,
+                size.height.max(1.0).round().min(2160.0) as u32,
+            )
+        })
+        .unwrap_or_else(|| {
+            (
+                node.transform.size.width.max(1.0).round().min(3840.0) as u32,
+                node.transform.size.height.max(1.0).round().min(2160.0) as u32,
+            )
+        })
+}
+
+fn browser_metadata(
+    status: SoftwareCompositorBrowserStatus,
+    status_detail: String,
+    url: Option<String>,
+    viewport: (u32, u32),
+    runtime: Option<(BrowserBinary, BrowserSnapshotRequest, bool, Option<String>)>,
+) -> SoftwareCompositorBrowserMetadata {
+    let (browser, request, custom_css_applied, custom_css_detail) = runtime.unwrap_or_else(|| {
+        (
+            BrowserBinary {
+                name: String::new(),
+                path: PathBuf::new(),
+            },
+            BrowserSnapshotRequest {
+                url: url.clone().unwrap_or_default(),
+                viewport_width: viewport.0,
+                viewport_height: viewport.1,
+                custom_css: String::new(),
+                sample_time_ms: 0,
+                sample_index: 0,
+            },
+            false,
+            None,
+        )
+    });
+    let browser_name = if browser.name.is_empty() {
+        None
+    } else {
+        Some(browser.name)
+    };
+    let browser_path = if browser.path.as_os_str().is_empty() {
+        None
+    } else {
+        Some(browser.path.display().to_string())
+    };
+    SoftwareCompositorBrowserMetadata {
+        status,
+        status_detail,
+        url,
+        viewport_width: viewport.0,
+        viewport_height: viewport.1,
+        custom_css_present: !request.custom_css.trim().is_empty(),
+        custom_css_applied,
+        custom_css_detail,
+        browser_name,
+        browser_path,
+        sampled_frame_time_ms: (request.sample_time_ms > 0).then_some(request.sample_time_ms),
+        sample_index: (request.sample_time_ms > 0).then_some(request.sample_index),
+        checksum: None,
+        capture_duration_ms: None,
+        cache_hit: false,
+    }
+}
+
+fn is_supported_browser_overlay_url(url: &str) -> bool {
+    let trimmed = url.trim().to_ascii_lowercase();
+    trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("file://")
+}
+
+fn quantized_browser_sample_time_ms(clock: &CompositorFrameClock) -> u64 {
+    let pts_ms = clock.pts_nanos / 1_000_000;
+    (pts_ms / BROWSER_SAMPLE_INTERVAL_MS) * BROWSER_SAMPLE_INTERVAL_MS
+}
+
+fn allocate_local_port() -> Result<u16, BrowserCaptureError> {
+    TcpListener::bind(("127.0.0.1", 0))
+        .and_then(|listener| listener.local_addr())
+        .map(|address| address.port())
+        .map_err(|error| BrowserCaptureError {
+            status: SoftwareCompositorBrowserStatus::CaptureFailed,
+            detail: format!("Could not allocate a browser DevTools port: {error}"),
+            custom_css_applied: false,
+            custom_css_detail: None,
+        })
+}
+
+fn wait_for_cdp_target(port: u16) -> Result<String, BrowserCaptureError> {
+    let started_at = Instant::now();
+    while started_at.elapsed() < Duration::from_secs(12) {
+        if let Ok(targets) = http_get_json(port, "/json/list") {
+            if let Some(web_socket_url) = targets
+                .as_array()
+                .and_then(|items| {
+                    items.iter().find_map(|target| {
+                        if target.get("type").and_then(serde_json::Value::as_str) != Some("page") {
+                            return None;
+                        }
+                        target
+                            .get("webSocketDebuggerUrl")
+                            .and_then(serde_json::Value::as_str)
+                    })
+                })
+                .map(ToOwned::to_owned)
+            {
+                return Ok(web_socket_url);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    Err(BrowserCaptureError {
+        status: SoftwareCompositorBrowserStatus::CaptureFailed,
+        detail: "Timed out waiting for browser DevTools target.".to_string(),
+        custom_css_applied: false,
+        custom_css_detail: None,
+    })
+}
+
+fn http_get_json(port: u16, path: &str) -> Result<serde_json::Value, String> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).map_err(|error| error.to_string())?;
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    )
+    .map_err(|error| error.to_string())?;
+    let mut response_bytes = Vec::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(bytes_read) => {
+                response_bytes.extend_from_slice(&buffer[..bytes_read]);
+                if http_response_body_complete(&response_bytes) {
+                    break;
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) && !response_bytes.is_empty() =>
+            {
+                break;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    let response = String::from_utf8_lossy(&response_bytes);
+    let Some((headers, body)) = response.split_once("\r\n\r\n") else {
+        return Err("DevTools response was malformed.".to_string());
+    };
+    if !headers.starts_with("HTTP/1.1 200") && !headers.starts_with("HTTP/1.0 200") {
+        return Err(headers
+            .lines()
+            .next()
+            .unwrap_or("DevTools HTTP error")
+            .to_string());
+    }
+    serde_json::from_str(body).map_err(|error| error.to_string())
+}
+
+fn http_response_body_complete(response: &[u8]) -> bool {
+    let Some(header_end) = response.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return false;
+    };
+    let headers = String::from_utf8_lossy(&response[..header_end]);
+    let Some(content_length) = headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("content-length")
+            .then(|| value.trim().parse::<usize>().ok())
+            .flatten()
+    }) else {
+        return false;
+    };
+    response.len().saturating_sub(header_end + 4) >= content_length
+}
+
+struct CdpClient {
+    socket: WebSocket<MaybeTlsStream<TcpStream>>,
+    next_id: u64,
+}
+
+impl CdpClient {
+    fn connect(web_socket_url: &str) -> Result<Self, String> {
+        let (mut socket, _) =
+            tungstenite::connect(web_socket_url).map_err(|error| error.to_string())?;
+        if let MaybeTlsStream::Plain(stream) = socket.get_mut() {
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+        }
+        Ok(Self { socket, next_id: 1 })
+    }
+
+    fn send(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        let payload = serde_json::json!({
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+        self.socket
+            .send(Message::Text(payload.to_string().into()))
+            .map_err(|error| error.to_string())?;
+        loop {
+            let message = self.socket.read().map_err(|error| error.to_string())?;
+            let text = match message {
+                Message::Text(text) => text.to_string(),
+                Message::Binary(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+                Message::Close(_) => return Err("DevTools socket closed.".to_string()),
+            };
+            let value: serde_json::Value =
+                serde_json::from_str(&text).map_err(|error| error.to_string())?;
+            if value.get("id").and_then(serde_json::Value::as_u64) != Some(id) {
+                continue;
+            }
+            if let Some(error) = value.get("error") {
+                let message = error
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("DevTools command failed");
+                return Err(message.to_string());
+            }
+            return Ok(value
+                .get("result")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!({})));
+        }
+    }
+
+    fn evaluate_bool(&mut self, expression: &str) -> Result<bool, String> {
+        let result = self.send(
+            "Runtime.evaluate",
+            serde_json::json!({
+                "expression": expression,
+                "returnByValue": true,
+                "awaitPromise": true
+            }),
+        )?;
+        if let Some(exception) = result.get("exceptionDetails") {
+            return Err(exception.to_string());
+        }
+        Ok(result
+            .get("result")
+            .and_then(|result| result.get("value"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false))
+    }
+}
+
+fn stop_browser_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn asset_uri_path(asset_uri: &str) -> Option<PathBuf> {
     let trimmed = asset_uri.trim();
     if trimmed.is_empty() {
@@ -2747,6 +3577,108 @@ fn find_ffmpeg_binary() -> Option<PathBuf> {
     ]);
 
     candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
+fn find_browser_binary() -> Option<BrowserBinary> {
+    let mut candidates = Vec::new();
+    if let Some(explicit_path) = env::var_os("VAEXCORE_BROWSER_PATH") {
+        candidates.push(PathBuf::from(explicit_path));
+    }
+    if let Some(path) = env::var_os("PATH") {
+        for directory in env::split_paths(&path) {
+            for executable_name in browser_executable_names() {
+                candidates.push(directory.join(executable_name));
+            }
+        }
+    }
+    add_platform_browser_candidates(&mut candidates);
+
+    let mut seen = HashSet::new();
+    candidates.into_iter().find_map(|candidate| {
+        let key = candidate.display().to_string();
+        if !seen.insert(key) || !candidate.is_file() {
+            return None;
+        }
+        Some(BrowserBinary {
+            name: browser_name_for_path(&candidate),
+            path: candidate,
+        })
+    })
+}
+
+fn browser_executable_names() -> &'static [&'static str] {
+    if cfg!(target_os = "windows") {
+        &[
+            "chrome.exe",
+            "msedge.exe",
+            "chromium.exe",
+            "chrome",
+            "msedge",
+            "chromium",
+        ]
+    } else {
+        &[
+            "google-chrome",
+            "google-chrome-stable",
+            "chromium",
+            "chromium-browser",
+            "microsoft-edge",
+            "msedge",
+            "chrome",
+        ]
+    }
+}
+
+fn add_platform_browser_candidates(candidates: &mut Vec<PathBuf>) {
+    if cfg!(target_os = "macos") {
+        candidates.extend([
+            PathBuf::from("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            PathBuf::from("/Applications/Chromium.app/Contents/MacOS/Chromium"),
+            PathBuf::from("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+        ]);
+    } else if cfg!(target_os = "windows") {
+        if let Some(program_files) = env::var_os("ProgramFiles") {
+            let root = PathBuf::from(program_files);
+            candidates.push(root.join("Google/Chrome/Application/chrome.exe"));
+            candidates.push(root.join("Microsoft/Edge/Application/msedge.exe"));
+        }
+        if let Some(program_files_x86) = env::var_os("ProgramFiles(x86)") {
+            let root = PathBuf::from(program_files_x86);
+            candidates.push(root.join("Google/Chrome/Application/chrome.exe"));
+            candidates.push(root.join("Microsoft/Edge/Application/msedge.exe"));
+        }
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            let root = PathBuf::from(local_app_data);
+            candidates.push(root.join("Google/Chrome/Application/chrome.exe"));
+            candidates.push(root.join("Microsoft/Edge/Application/msedge.exe"));
+        }
+    } else {
+        candidates.extend([
+            PathBuf::from("/usr/bin/google-chrome"),
+            PathBuf::from("/usr/bin/google-chrome-stable"),
+            PathBuf::from("/usr/bin/chromium"),
+            PathBuf::from("/usr/bin/chromium-browser"),
+            PathBuf::from("/usr/bin/microsoft-edge"),
+            PathBuf::from("/snap/bin/chromium"),
+        ]);
+    }
+}
+
+fn browser_name_for_path(path: &Path) -> String {
+    let display = path.display().to_string();
+    let lower = display.to_ascii_lowercase();
+    if lower.contains("edge") || lower.contains("msedge") {
+        "Microsoft Edge".to_string()
+    } else if lower.contains("chromium") {
+        "Chromium".to_string()
+    } else if lower.contains("chrome") {
+        "Google Chrome".to_string()
+    } else {
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("Browser")
+            .to_string()
+    }
 }
 
 fn ffmpeg_executable_names() -> &'static [&'static str] {
@@ -2819,6 +3751,37 @@ fn store_cached_video_asset(key: VideoAssetCacheKey, image: CachedDecodedImage) 
     });
     cache.insert(key, image);
     if cache.len() > 64 {
+        let Some(first_key) = cache.keys().next().cloned() else {
+            return;
+        };
+        cache.remove(&first_key);
+    }
+}
+
+fn cached_browser_snapshot(key: &BrowserSnapshotCacheKey) -> Option<CachedBrowserSnapshot> {
+    BROWSER_SNAPSHOT_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(key).cloned())
+}
+
+fn store_cached_browser_snapshot(key: BrowserSnapshotCacheKey, snapshot: CachedBrowserSnapshot) {
+    let Ok(mut cache) = BROWSER_SNAPSHOT_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    else {
+        return;
+    };
+    cache.retain(|existing_key, _| {
+        existing_key.url != key.url
+            || existing_key.viewport_width != key.viewport_width
+            || existing_key.viewport_height != key.viewport_height
+            || existing_key.custom_css_hash != key.custom_css_hash
+            || existing_key.sample_time_ms == key.sample_time_ms
+    });
+    cache.insert(key, snapshot);
+    if cache.len() > 32 {
         let Some(first_key) = cache.keys().next().cloned() else {
             return;
         };
@@ -3819,7 +4782,12 @@ mod tests {
         let input = &result.input_frames[0];
         let asset = input.asset.as_ref().unwrap();
 
-        assert_eq!(input.status, CompositorNodeStatus::Ready);
+        assert_eq!(
+            input.status,
+            CompositorNodeStatus::Ready,
+            "{:?}",
+            input.browser
+        );
         assert_eq!(asset.status, SoftwareCompositorAssetStatus::Decoded);
         assert_eq!(asset.format.as_deref(), Some("video:mp4"));
         assert_eq!(asset.decoder_name.as_deref(), Some("ffmpeg"));
@@ -3944,6 +4912,164 @@ mod tests {
         assert_eq!(
             result.frame.targets[0].nodes[0].status,
             CompositorNodeStatus::Ready
+        );
+        assert_ne!(
+            software_test_pixel(&result.pixel_frames[0], 3, 3),
+            [5, 7, 17, 255]
+        );
+    }
+
+    #[test]
+    fn software_compositor_reports_browser_overlay_placeholder_states() {
+        let no_url = render_test_browser_source("", None);
+        let browser = no_url.input_frames[0].browser.as_ref().unwrap();
+        assert_eq!(browser.status, SoftwareCompositorBrowserStatus::NoUrl);
+        assert_eq!(
+            no_url.input_frames[0].status,
+            CompositorNodeStatus::Placeholder
+        );
+        assert!(!no_url.frame.validation.warnings.is_empty());
+
+        let unsupported = render_test_browser_source("ftp://example.test/overlay", None);
+        assert_eq!(
+            unsupported.input_frames[0].browser.as_ref().unwrap().status,
+            SoftwareCompositorBrowserStatus::UnsupportedUrl
+        );
+
+        let scene = test_browser_scene("https://example.com/overlay", None);
+        let graph = build_compositor_graph(&scene);
+        let unavailable = browser_overlay_input_frame_for_node_with_browser(
+            &graph.nodes[0],
+            &default_software_input_clock(),
+            None,
+        );
+        assert_eq!(
+            unavailable.browser.as_ref().unwrap().status,
+            SoftwareCompositorBrowserStatus::BrowserUnavailable
+        );
+        assert_eq!(unavailable.status, CompositorNodeStatus::Placeholder);
+    }
+
+    #[test]
+    fn software_compositor_renders_browser_overlay_pixels_when_browser_is_available() {
+        let Some(_) = find_browser_binary() else {
+            eprintln!(
+                "skipping browser overlay render test because no compatible browser is available"
+            );
+            return;
+        };
+        let dir = tempdir().unwrap();
+        let url = write_browser_fixture(dir.path(), "overlay.html", "rgb(15, 80, 190)");
+
+        let result = render_test_browser_source(&url, None);
+        let input = &result.input_frames[0];
+        let browser = input.browser.as_ref().unwrap();
+
+        assert_eq!(input.status, CompositorNodeStatus::Ready);
+        assert_eq!(browser.status, SoftwareCompositorBrowserStatus::Rendered);
+        assert_eq!(browser.viewport_width, 128);
+        assert_eq!(browser.viewport_height, 72);
+        assert_eq!(browser.sampled_frame_time_ms, Some(0));
+        assert!(browser.checksum.is_some_and(|checksum| checksum > 0));
+        assert_ne!(
+            software_test_pixel(&result.pixel_frames[0], 64, 36),
+            [5, 7, 17, 255]
+        );
+    }
+
+    #[test]
+    fn software_compositor_applies_browser_custom_css_and_cache_keys() {
+        let Some(_) = find_browser_binary() else {
+            eprintln!("skipping browser overlay CSS/cache test because no compatible browser is available");
+            return;
+        };
+        let dir = tempdir().unwrap();
+        let url = write_browser_fixture(dir.path(), "cache.html", "rgb(180, 20, 20)");
+
+        let baseline =
+            render_test_scene_with_target_at_frame(test_browser_scene(&url, None), 128, 72, 31);
+        let cached =
+            render_test_scene_with_target_at_frame(test_browser_scene(&url, None), 128, 72, 32);
+        assert!(!baseline.input_frames[0].browser.as_ref().unwrap().cache_hit);
+        assert!(
+            cached.input_frames[0].browser.as_ref().unwrap().cache_hit,
+            "{:?}",
+            cached.input_frames[0].browser
+        );
+        assert_eq!(
+            cached.input_frames[0]
+                .browser
+                .as_ref()
+                .unwrap()
+                .sampled_frame_time_ms,
+            Some(1000)
+        );
+
+        let styled = render_test_scene_with_target_at_frame(
+            test_browser_scene(
+                &url,
+                Some("body { background: rgb(20, 170, 80) !important; }"),
+            ),
+            128,
+            72,
+            32,
+        );
+        let styled_browser = styled.input_frames[0].browser.as_ref().unwrap();
+        assert_eq!(
+            styled_browser.status,
+            SoftwareCompositorBrowserStatus::Rendered
+        );
+        assert!(!styled_browser.cache_hit);
+        assert!(styled_browser.custom_css_present);
+        assert!(styled_browser.custom_css_applied);
+        assert_ne!(
+            baseline.input_frames[0].checksum,
+            styled.input_frames[0].checksum
+        );
+    }
+
+    #[test]
+    fn software_compositor_applies_filters_and_transforms_to_browser_overlay_pixels() {
+        let Some(_) = find_browser_binary() else {
+            eprintln!("skipping browser overlay transform test because no compatible browser is available");
+            return;
+        };
+        let dir = tempdir().unwrap();
+        let url = write_browser_fixture(dir.path(), "filtered.html", "rgb(220, 190, 40)");
+        let mut scene = test_browser_scene(&url, None);
+        scene.canvas.width = 8;
+        scene.canvas.height = 8;
+        scene.sources[0].position = ScenePoint { x: 2.0, y: 2.0 };
+        scene.sources[0].size = SceneSize {
+            width: 4.0,
+            height: 4.0,
+        };
+        scene.sources[0].opacity = 0.5;
+        scene.sources[0].bounds_mode = SceneSourceBoundsMode::Fit;
+        scene.sources[0].filters = vec![test_filter(
+            "filter-browser-brightness",
+            SceneSourceFilterKind::ColorCorrection,
+            10,
+            true,
+            serde_json::json!({
+                "brightness": -0.3,
+                "contrast": 1.0,
+                "saturation": 1.0,
+                "gamma": 1.0
+            }),
+        )];
+
+        let result = render_test_scene(scene);
+
+        assert_eq!(
+            result.input_frames[0].filters[0].status,
+            SoftwareCompositorFilterStatus::Applied
+        );
+        assert_eq!(
+            result.frame.targets[0].nodes[0].status,
+            CompositorNodeStatus::Ready,
+            "{:?}",
+            result.input_frames[0].browser
         );
         assert_ne!(
             software_test_pixel(&result.pixel_frames[0], 3, 3),
@@ -4980,6 +6106,76 @@ mod tests {
             .arg(path)
             .status();
         matches!(status, Ok(status) if status.success())
+    }
+
+    fn write_browser_fixture(dir: &Path, filename: &str, background: &str) -> String {
+        let path = dir.join(filename);
+        fs::write(
+            &path,
+            format!(
+                r#"<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      html, body {{ margin: 0; width: 100%; height: 100%; overflow: hidden; }}
+      body {{ background: {background}; }}
+      .label {{ position: fixed; inset: 16px; color: white; font: 700 24px system-ui; }}
+    </style>
+  </head>
+  <body><div class="label">VaexCore Browser Overlay</div></body>
+</html>"#
+            ),
+        )
+        .unwrap();
+        format!("file://{}", path.display())
+    }
+
+    fn render_test_browser_source(
+        url: &str,
+        custom_css: Option<&str>,
+    ) -> SoftwareCompositorRenderResult {
+        render_test_scene_with_target(test_browser_scene(url, custom_css), 128, 72)
+    }
+
+    fn test_browser_scene(url: &str, custom_css: Option<&str>) -> Scene {
+        Scene {
+            id: "scene-browser".to_string(),
+            name: "Browser Scene".to_string(),
+            canvas: crate::SceneCanvas {
+                width: 128,
+                height: 72,
+                background_color: "#050711".to_string(),
+            },
+            sources: vec![SceneSource {
+                id: "source-browser".to_string(),
+                name: "Browser".to_string(),
+                kind: SceneSourceKind::BrowserOverlay,
+                position: ScenePoint { x: 0.0, y: 0.0 },
+                size: SceneSize {
+                    width: 128.0,
+                    height: 72.0,
+                },
+                crop: SceneCrop {
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                },
+                rotation_degrees: 0.0,
+                opacity: 1.0,
+                visible: true,
+                locked: false,
+                z_index: 10,
+                bounds_mode: SceneSourceBoundsMode::Stretch,
+                filters: Vec::new(),
+                config: serde_json::json!({
+                    "url": url,
+                    "viewport": { "width": 128, "height": 72 },
+                    "custom_css": custom_css
+                }),
+            }],
+        }
     }
 
     fn render_test_image_source(
