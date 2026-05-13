@@ -660,6 +660,7 @@ export type SceneRuntimeCommandKind =
   | "activate_scene"
   | "update_runtime_state"
   | "request_preview_frame"
+  | "request_program_preview_frame"
   | "request_transition_preview_frame"
   | "validate_runtime_graph"
   | "execute_transition";
@@ -668,6 +669,7 @@ export type SceneRuntimeCommandPayload =
   | SceneActivationRequest
   | SceneRuntimeStateUpdateRequest
   | PreviewFrameRequest
+  | ProgramPreviewFrameRequest
   | TransitionPreviewFrameRequest
   | CompositorRenderRequest
   | TransitionExecutionRequest;
@@ -778,6 +780,43 @@ export interface PreviewFrameResponse {
   frame_index: number;
   width: number;
   height: number;
+  frame_format: CompositorFrameFormat;
+  encoding: PreviewFrameEncoding;
+  image_data: string | null;
+  checksum: string | null;
+  render_time_ms: number;
+  generated_at: string;
+  rendered_frame: CompositorRenderedFrame | null;
+  validation: SceneRuntimeContractValidation;
+}
+
+export interface ProgramPreviewFrameRequest {
+  version: number;
+  request_id: string;
+  collection_id: string;
+  width: number;
+  height: number;
+  framerate: number;
+  frame_format: CompositorFrameFormat;
+  scale_mode: CompositorScaleMode;
+  encoding: PreviewFrameEncoding;
+  include_debug_overlay: boolean;
+  requested_at: string;
+}
+
+export interface ProgramPreviewFrameResponse {
+  version: number;
+  request_id: string;
+  collection_id: string;
+  scene_id: string;
+  scene_name: string;
+  active_transition_id: string;
+  active_transition_name: string;
+  program_target_id: string;
+  frame_index: number;
+  width: number;
+  height: number;
+  framerate: number;
   frame_format: CompositorFrameFormat;
   encoding: PreviewFrameEncoding;
   image_data: string | null;
@@ -4449,6 +4488,83 @@ export function validatePreviewFrameRequest(
   return runtimeValidation(errors, []);
 }
 
+export function createProgramPreviewFrameRequest(
+  collection: SceneCollection,
+  options: Partial<
+    Pick<
+      ProgramPreviewFrameRequest,
+      | "request_id"
+      | "width"
+      | "height"
+      | "framerate"
+      | "frame_format"
+      | "scale_mode"
+      | "encoding"
+      | "include_debug_overlay"
+      | "requested_at"
+    >
+  > = {},
+): ProgramPreviewFrameRequest {
+  const activeScene =
+    collection.scenes.find((scene) => scene.id === collection.active_scene_id) ??
+    collection.scenes[0];
+  return {
+    version: 1,
+    request_id: options.request_id ?? runtimeId("program-preview-frame"),
+    collection_id: collection.id,
+    width: options.width ?? activeScene?.canvas.width ?? 1920,
+    height: options.height ?? activeScene?.canvas.height ?? 1080,
+    framerate: options.framerate ?? 60,
+    frame_format: options.frame_format ?? "rgba8",
+    scale_mode: options.scale_mode ?? "fit",
+    encoding: options.encoding ?? "data_url",
+    include_debug_overlay: options.include_debug_overlay ?? false,
+    requested_at: options.requested_at ?? new Date().toISOString(),
+  };
+}
+
+export function validateProgramPreviewFrameRequest(
+  request: ProgramPreviewFrameRequest,
+  collection?: SceneCollection,
+): SceneRuntimeContractValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+
+  validateRuntimeEnvelope(
+    request.version,
+    request.request_id,
+    request.requested_at,
+    "Program preview frame request",
+    errors,
+  );
+  if (!request.collection_id.trim()) {
+    errors.push("Program preview frame collection id is required.");
+  }
+  validateGraphPositiveNumber(request.width, "program_preview.width", errors);
+  validateGraphPositiveNumber(request.height, "program_preview.height", errors);
+  validateGraphPositiveNumber(request.framerate, "program_preview.framerate", errors);
+  if (request.width > 7680 || request.height > 4320) {
+    errors.push("Program preview frame dimensions must be 8K or smaller.");
+  }
+
+  if (collection) {
+    if (collection.id !== request.collection_id) {
+      errors.push("Program preview frame collection id does not match collection.");
+    }
+    if (!collection.scenes.some((scene) => scene.id === collection.active_scene_id)) {
+      errors.push("Program preview frame requires an active scene.");
+    }
+    const collectionValidation = validateSceneCollection(collection);
+    if (!collectionValidation.ok) {
+      warnings.push(
+        `Scene collection has ${collectionValidation.issues.length} validation issue(s).`,
+      );
+    }
+  }
+
+  return runtimeValidation(errors, warnings);
+}
+
 export function createCompositorRenderRequest(
   plan: CompositorRenderPlan,
   options: {
@@ -4647,6 +4763,101 @@ export function validatePreviewFrameResponse(
   }
   if (response.rendered_frame && response.rendered_frame.scene_id !== response.scene_id) {
     errors.push("Preview frame response scene id must match rendered frame.");
+  }
+
+  return runtimeValidation(errors, warnings);
+}
+
+export function createProgramPreviewFrameResponse(
+  request: ProgramPreviewFrameRequest,
+  frame: CompositorRenderedFrame | null,
+  options: {
+    sceneName?: string;
+    activeTransitionId?: string;
+    activeTransitionName?: string;
+    programTargetId?: string;
+    imageData?: string | null;
+    checksum?: string | null;
+    renderTimeMs?: number;
+    generatedAt?: string;
+  } = {},
+): ProgramPreviewFrameResponse {
+  const validation = frame
+    ? runtimeValidation(frame.validation.errors, frame.validation.warnings)
+    : runtimeValidation([], ["Program preview frame response has no rendered frame payload."]);
+
+  return {
+    version: 1,
+    request_id: request.request_id,
+    collection_id: request.collection_id,
+    scene_id: frame?.scene_id ?? "",
+    scene_name: options.sceneName ?? frame?.scene_name ?? "",
+    active_transition_id: options.activeTransitionId ?? "",
+    active_transition_name: options.activeTransitionName ?? "",
+    program_target_id: options.programTargetId ?? "target-program-preview",
+    frame_index: frame?.clock.frame_index ?? 0,
+    width: request.width,
+    height: request.height,
+    framerate: request.framerate,
+    frame_format: request.frame_format,
+    encoding: request.encoding,
+    image_data: options.imageData ?? null,
+    checksum: options.checksum ?? null,
+    render_time_ms: options.renderTimeMs ?? 0,
+    generated_at: options.generatedAt ?? new Date().toISOString(),
+    rendered_frame: frame ? cloneJson(frame) : null,
+    validation,
+  };
+}
+
+export function validateProgramPreviewFrameResponse(
+  response: ProgramPreviewFrameResponse,
+): SceneRuntimeContractValidation {
+  const warnings = [...response.validation.warnings];
+  const errors = [...response.validation.errors];
+
+  validateRuntimeEnvelope(
+    response.version,
+    response.request_id,
+    response.generated_at,
+    "Program preview frame response",
+    errors,
+  );
+  if (!response.collection_id.trim()) {
+    errors.push("Program preview frame response collection id is required.");
+  }
+  if (!response.scene_id.trim()) {
+    errors.push("Program preview frame response scene id is required.");
+  }
+  if (!response.scene_name.trim()) {
+    errors.push("Program preview frame response scene name is required.");
+  }
+  if (!response.program_target_id.trim()) {
+    errors.push("Program preview frame response target id is required.");
+  }
+  validateGraphPositiveNumber(response.width, "program_preview.response.width", errors);
+  validateGraphPositiveNumber(response.height, "program_preview.response.height", errors);
+  validateGraphPositiveNumber(
+    response.framerate,
+    "program_preview.response.framerate",
+    errors,
+  );
+  validateGraphNonNegativeNumber(
+    response.render_time_ms,
+    "program_preview.response.render_time_ms",
+    errors,
+  );
+  if (response.rendered_frame) {
+    const programTarget = response.rendered_frame.targets.find(
+      (target) => target.target_id === response.program_target_id,
+    );
+    if (!programTarget) {
+      errors.push("Program preview response rendered frame is missing the program target.");
+    } else if (programTarget.target_kind !== "program") {
+      errors.push("Program preview response target must be a program target.");
+    }
+  } else {
+    warnings.push("Program preview response has no rendered frame metadata.");
   }
 
   return runtimeValidation(errors, warnings);
@@ -5078,6 +5289,10 @@ function validateSceneRuntimeCommandPayload(
       );
     case "request_preview_frame":
       return validatePreviewFrameRequest(command.payload as PreviewFrameRequest);
+    case "request_program_preview_frame":
+      return validateProgramPreviewFrameRequest(
+        command.payload as ProgramPreviewFrameRequest,
+      );
     case "request_transition_preview_frame":
       return validateTransitionPreviewFrameRequest(
         command.payload as TransitionPreviewFrameRequest,

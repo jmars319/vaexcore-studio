@@ -22,6 +22,7 @@ The shared contracts also define:
 - `SceneRuntimeCommand`
 - `SceneActivationRequest` / `SceneActivationResponse`
 - `PreviewFrameRequest` / `PreviewFrameResponse`
+- `ProgramPreviewFrameRequest` / `ProgramPreviewFrameResponse`
 - `CompositorRenderRequest` / `CompositorRenderResponse`
 - `RuntimeCaptureSourceBindingContract`
 - `RuntimeAudioSourceBindingContract`
@@ -31,6 +32,9 @@ The shared contracts also define:
 - `MediaPipelineValidation`
 
 These contracts let the UI, local API, sidecar, and future external tools agree on source selection and pipeline readiness before any real capture backend is started.
+The program-preview contract renders the active saved scene through the same
+software source runtime as the editor preview, but targets a `program` frame for
+output-pipeline readiness without starting recording, streaming, or encoders.
 Scene sources also carry ordered filter chains for effects such as color
 correction, chroma key, crop/pad, blur, LUTs, noise gates, and compressors.
 The software preview compositor applies visual filters for color correction,

@@ -580,6 +580,8 @@ test("scene runtime contracts validate preview, render, binding, and transition 
     createDefaultSceneCollection,
     createPreviewFrameRequest,
     createPreviewFrameResponse,
+    createProgramPreviewFrameRequest,
+    createProgramPreviewFrameResponse,
     createSceneActivationRequest,
     createSceneActivationResponse,
     createSceneRuntimeCommand,
@@ -593,6 +595,8 @@ test("scene runtime contracts validate preview, render, binding, and transition 
     validateCompositorRenderResponse,
     validatePreviewFrameRequest,
     validatePreviewFrameResponse,
+    validateProgramPreviewFrameRequest,
+    validateProgramPreviewFrameResponse,
     validateRuntimeAudioSourceBindingContract,
     validateRuntimeCaptureSourceBindingContract,
     validateSceneActivationRequest,
@@ -652,6 +656,18 @@ test("scene runtime contracts validate preview, render, binding, and transition 
   });
   assert.equal(validatePreviewFrameRequest(previewRequest).ready, true);
 
+  const programPreviewRequest = createProgramPreviewFrameRequest(collection, {
+    request_id: "program-preview-frame-test",
+    width: 1920,
+    height: 1080,
+    framerate: 60,
+    requested_at: requestedAt,
+  });
+  assert.equal(
+    validateProgramPreviewFrameRequest(programPreviewRequest, collection).ready,
+    true,
+  );
+
   const graph = buildCompositorGraph(scene);
   const renderPlan = buildCompositorRenderPlan(
     graph,
@@ -672,10 +688,29 @@ test("scene runtime contracts validate preview, render, binding, and transition 
     generatedAt: "2026-05-08T12:15:00.030Z",
     renderTimeMs: 2.5,
   });
+  const programPreviewResponse = createProgramPreviewFrameResponse(
+    programPreviewRequest,
+    renderedFrame,
+    {
+      activeTransitionId: collection.active_transition_id,
+      activeTransitionName: "Fade",
+      checksum: "sha256:program-test",
+      generatedAt: "2026-05-08T12:15:00.032Z",
+      programTargetId: "target-program",
+      renderTimeMs: 2.75,
+    },
+  );
 
   assert.equal(validateCompositorRenderRequest(renderRequest).ready, true);
   assert.equal(validateCompositorRenderResponse(renderResponse).ready, true);
   assert.equal(validatePreviewFrameResponse(previewResponse).ready, true);
+  assert.equal(validateProgramPreviewFrameResponse(programPreviewResponse).ready, true);
+  const programPreviewCommand = createSceneRuntimeCommand(
+    "request_program_preview_frame",
+    programPreviewRequest,
+    { commandId: "runtime-program-preview-command-test", requestedAt },
+  );
+  assert.equal(validateSceneRuntimeCommand(programPreviewCommand).ready, true);
 
   const captureContract = buildRuntimeCaptureSourceBindingContract(scene);
   const captureValidation = validateRuntimeCaptureSourceBindingContract(captureContract);

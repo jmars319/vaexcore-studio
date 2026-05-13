@@ -99,6 +99,33 @@ const targets = [
     ],
   },
   {
+    name: "designer-program-preview-runtime",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "assert",
+        expression:
+          'Boolean(document.querySelector("[data-testid=\\"designer-program-preview-runtime\\"]"))',
+        message: "Designer program preview runtime panel did not render.",
+      },
+      {
+        type: "click",
+        selector: '[aria-label="Request program preview frame"]',
+      },
+      {
+        type: "wait",
+        ms: 1200,
+      },
+      {
+        type: "assert",
+        expression:
+          'document.querySelector("[data-testid=\\"designer-program-preview-runtime\\"]")?.textContent?.includes("Program Preview Readiness")',
+        message: "Designer program preview runtime panel did not show readiness copy.",
+      },
+    ],
+  },
+  {
     name: "designer-multi-select",
     path: "/?section=designer",
     minBytes: 50_000,

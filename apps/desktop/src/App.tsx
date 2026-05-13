@@ -98,6 +98,7 @@ import type {
   RecordingContainer,
   RecordingHistoryEntry,
   PreviewFrameResponse,
+  ProgramPreviewFrameResponse,
   RuntimeAudioSourceBinding,
   RuntimeCaptureSourceBinding,
   Scene,
@@ -129,6 +130,7 @@ import {
   createDefaultSceneCollection,
   createDefaultSceneSource,
   createPreviewFrameRequest,
+  createProgramPreviewFrameRequest,
   createTransitionPreviewFrameRequest,
   platformLabels,
   sceneSourceKindLabels,
@@ -1352,6 +1354,10 @@ function App() {
     useState<PreviewStats>(initialPreviewStats);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [programPreviewFrame, setProgramPreviewFrame] =
+    useState<ProgramPreviewFrameResponse | null>(null);
+  const [programPreviewLoading, setProgramPreviewLoading] = useState(false);
+  const [programPreviewError, setProgramPreviewError] = useState<string | null>(null);
   const [captureBindingRefreshing, setCaptureBindingRefreshing] = useState(false);
   const [suiteLaunchStatus, setSuiteLaunchStatus] = useState<string | null>(null);
   const [suiteStatus, setSuiteStatus] = useState<SuiteAppStatus[]>([]);
@@ -1671,6 +1677,39 @@ function App() {
     }
   }
 
+  async function fetchDesignerProgramPreviewFrame() {
+    if (!config || !activeDesignerScene) return;
+    setProgramPreviewLoading(true);
+    try {
+      const response = await StudioApi.programPreviewFrame(
+        config,
+        createProgramPreviewFrameRequest(designerSceneCollection, {
+          request_id: `designer-program-preview-${Date.now()}`,
+          width: activeDesignerScene.canvas.width,
+          height: activeDesignerScene.canvas.height,
+          framerate: 60,
+          frame_format: "rgba8",
+          scale_mode: "fit",
+          encoding: "data_url",
+          include_debug_overlay: true,
+          requested_at: new Date().toISOString(),
+        }),
+      );
+      setProgramPreviewFrame(response);
+      setProgramPreviewError(
+        response.validation.ready
+          ? null
+          : response.validation.errors.join("; ") || "Program preview not ready",
+      );
+    } catch (error) {
+      setProgramPreviewError(
+        error instanceof Error ? error.message : "Program preview unavailable",
+      );
+    } finally {
+      setProgramPreviewLoading(false);
+    }
+  }
+
   useEffect(() => {
     setPreviewStats({
       ...initialPreviewStats,
@@ -1721,6 +1760,10 @@ function App() {
 
   async function requestDesignerPreviewFrame() {
     await fetchDesignerPreviewFrame();
+  }
+
+  async function requestDesignerProgramPreviewFrame() {
+    await fetchDesignerProgramPreviewFrame();
   }
 
   async function refreshProfiles() {
@@ -3218,6 +3261,9 @@ function App() {
             previewPolling={previewPolling}
             previewQuality={previewQuality}
             previewStats={previewStats}
+            programPreviewError={programPreviewError}
+            programPreviewFrame={programPreviewFrame}
+            programPreviewLoading={programPreviewLoading}
             pipelinePlan={pipelinePlan}
             preflight={preflight}
             runtime={sceneRuntime}
@@ -3246,6 +3292,7 @@ function App() {
             onPickTransitionAsset={handlePickDesignerTransitionAsset}
             onPreviewPollingChange={setPreviewPolling}
             onPreviewQualityChange={setPreviewQuality}
+            onRequestProgramPreviewFrame={requestDesignerProgramPreviewFrame}
             onRequestPreviewFrame={requestDesignerPreviewFrame}
             onRefreshCaptureBindings={refreshDesignerRuntimeBindings}
             onRebindSource={handleRebindDesignerSource}
@@ -3432,6 +3479,9 @@ function App() {
     previewPolling,
     previewQuality,
     previewStats,
+    programPreviewError,
+    programPreviewFrame,
+    programPreviewLoading,
     sceneCollection,
     sceneDirty,
     sceneHistory,
@@ -3590,6 +3640,9 @@ function DesignerPage(props: {
   previewPolling: boolean;
   previewQuality: PreviewQuality;
   previewStats: PreviewStats;
+  programPreviewError: string | null;
+  programPreviewFrame: ProgramPreviewFrameResponse | null;
+  programPreviewLoading: boolean;
   pipelinePlan: MediaPipelinePlan | null;
   preflight: PreflightSnapshot | null;
   runtime: SceneRuntimeSnapshot | null;
@@ -3630,6 +3683,7 @@ function DesignerPage(props: {
   onPickTransitionAsset: (transitionId: string) => void;
   onPreviewPollingChange: (enabled: boolean) => void;
   onPreviewQualityChange: (quality: PreviewQuality) => void;
+  onRequestProgramPreviewFrame: () => void;
   onRequestPreviewFrame: () => void;
   onRefreshCaptureBindings: () => void;
   onRebindSource: (sceneId: string, sourceId: string) => void;
@@ -5533,7 +5587,19 @@ function DesignerPage(props: {
             >
               <RefreshCw size={14} />
             </button>
+            <button
+              aria-label="Request program preview frame"
+              className="secondary-button compact"
+              disabled={props.programPreviewLoading}
+              onClick={props.onRequestProgramPreviewFrame}
+              title="Render active saved scene as a program preview frame"
+              type="button"
+            >
+              <Radio size={14} />
+              Program
+            </button>
             {props.previewLoading && <Pill tone="amber">Loading</Pill>}
+            {props.programPreviewLoading && <Pill tone="amber">Program</Pill>}
             <Pill tone={props.previewFrame?.image_data ? "green" : "muted"}>
               {props.previewStats.fpsLimit} fps cap
             </Pill>
@@ -5796,12 +5862,16 @@ function DesignerPage(props: {
               >
                 {props.runtime?.status ?? "runtime pending"}
               </Pill>
+              <Pill tone={props.programPreviewFrame?.validation.ready ? "green" : "muted"}>
+                {props.programPreviewFrame ? "Program frame" : "Program pending"}
+              </Pill>
               <span>
                 {props.previewFrame
                   ? `${props.previewFrame.width}x${props.previewFrame.height} frame ${props.previewFrame.frame_index}`
                   : `${props.graph.nodes.filter((node) => node.visible).length} visible / ${props.graph.nodes.length} source nodes`}
               </span>
               {props.previewError && <span>{props.previewError}</span>}
+              {props.programPreviewError && <span>{props.programPreviewError}</span>}
             </div>
           </div>
           </div>
@@ -5850,6 +5920,16 @@ function DesignerPage(props: {
           <KeyValue
             label="Preview Stats"
             value={`${props.previewStats.renderedFrames} frames / ${props.previewStats.droppedFrames} dropped`}
+          />
+          <KeyValue
+            label="Program Preview"
+            value={
+              props.programPreviewFrame
+                ? `${props.programPreviewFrame.width}x${props.programPreviewFrame.height} @ ${props.programPreviewFrame.framerate} fps`
+                : props.programPreviewLoading
+                  ? "rendering"
+                  : "not requested"
+            }
           />
         </div>
         <div className="designer-command-bar" data-testid="designer-command-bar">
@@ -6101,6 +6181,96 @@ function DesignerPage(props: {
                     key={`preview-warning-${message}`}
                   >
                     <code>preview</code>
+                    <span>{message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+        </div>
+        <div
+          className="designer-preview-diagnostics"
+          data-testid="designer-program-preview-runtime"
+        >
+          <div className="designer-validation-header">
+            <Radio size={16} />
+            <div>
+              <strong>Program Preview Readiness</strong>
+              <span>
+                {props.programPreviewFrame
+                  ? `${props.programPreviewFrame.scene_name} rendered as ${props.programPreviewFrame.program_target_id}`
+                  : props.programPreviewLoading
+                    ? "Rendering active saved scene"
+                    : "Ready to request a program frame"}
+              </span>
+            </div>
+            <Pill tone={props.programPreviewFrame?.validation.ready ? "green" : "amber"}>
+              {props.programPreviewFrame?.validation.ready ? "ready" : "standby"}
+            </Pill>
+          </div>
+          {props.programPreviewFrame ? (
+            <div className="designer-preview-meta">
+              <KeyValue
+                label="Generated"
+                value={formatSuiteTimestamp(props.programPreviewFrame.generated_at)}
+              />
+              <KeyValue
+                label="Scene"
+                value={`${props.programPreviewFrame.scene_name} (${props.programPreviewFrame.scene_id})`}
+              />
+              <KeyValue
+                label="Transition"
+                value={
+                  props.programPreviewFrame.active_transition_name ||
+                  props.programPreviewFrame.active_transition_id ||
+                  "none"
+                }
+              />
+              <KeyValue
+                label="Frame"
+                value={`${props.programPreviewFrame.width}x${props.programPreviewFrame.height} frame ${props.programPreviewFrame.frame_index}`}
+              />
+              <KeyValue
+                label="Format"
+                value={`${props.programPreviewFrame.frame_format} / ${props.programPreviewFrame.encoding}`}
+              />
+              <KeyValue
+                label="Render"
+                value={`${props.programPreviewFrame.render_time_ms.toFixed(2)} ms server`}
+              />
+              <KeyValue
+                label="Checksum"
+                value={props.programPreviewFrame.checksum ?? "none"}
+              />
+              <KeyValue
+                label="Transport"
+                value={
+                  props.programPreviewFrame.image_data
+                    ? `${Math.round(props.programPreviewFrame.image_data.length / 1024)} KB image`
+                    : "metadata only"
+                }
+              />
+            </div>
+          ) : (
+            <div className="empty compact-empty">
+              No program frame requested.
+            </div>
+          )}
+          {props.programPreviewFrame &&
+            (props.programPreviewFrame.validation.errors.length > 0 ||
+              props.programPreviewFrame.validation.warnings.length > 0) && (
+              <div className="designer-validation-list">
+                {props.programPreviewFrame.validation.errors.map((message) => (
+                  <div className="validation-issue" key={`program-preview-error-${message}`}>
+                    <code>program</code>
+                    <span>{message}</span>
+                  </div>
+                ))}
+                {props.programPreviewFrame.validation.warnings.map((message) => (
+                  <div
+                    className="validation-issue warning"
+                    key={`program-preview-warning-${message}`}
+                  >
+                    <code>program</code>
                     <span>{message}</span>
                   </div>
                 ))}

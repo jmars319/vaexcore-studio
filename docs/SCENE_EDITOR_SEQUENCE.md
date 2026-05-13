@@ -11,15 +11,17 @@ foundation to OBS-class scene editing and output.
 4. Compositor render-graph contract: done for the serializable graph contract.
 5. Preview renderer using the compositor graph: done for the placeholder graph
    canvas.
-6. Program/output renderer for recording and streaming: started with a compact
-   software frame probe; real capture-backed recording/streaming output remains
-   Phase 2+.
+6. Program/output renderer for recording and streaming: started with a dedicated
+   program-preview frame API that renders the active saved scene as a software
+   `program` target at program resolution/FPS. Real capture-backed
+   recording/streaming output remains Phase 2+.
 7. Render runtime and frame evaluation: done for deterministic contract-frame
    evaluation and a deterministic RGBA software probe; GPU-backed pixel
    rendering is not started.
 8. GPU-backed preview renderer: not started.
 9. Program/output renderer producing real frames: started with deterministic
-   software RGBA frame buffers and checksums; encoder output is not started.
+   software RGBA program-preview frame buffers, encoded image data, and
+   checksums; encoder output is not started.
 10. Frame timing, resolution, FPS, scaling, and color contracts: started with
     render target timing/scaling evaluation.
 11. Display capture binding on macOS and Windows: started with inventory-backed

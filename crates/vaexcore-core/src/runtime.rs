@@ -30,6 +30,7 @@ pub enum SceneRuntimeCommandKind {
     ActivateScene,
     UpdateRuntimeState,
     RequestPreviewFrame,
+    RequestProgramPreviewFrame,
     ValidateRuntimeGraph,
     ExecuteTransition,
 }
@@ -163,6 +164,45 @@ pub struct PreviewFrameResponse {
     pub frame_index: u64,
     pub width: u32,
     pub height: u32,
+    pub frame_format: CompositorFrameFormat,
+    pub encoding: PreviewFrameEncoding,
+    pub image_data: Option<String>,
+    pub checksum: Option<String>,
+    pub render_time_ms: f64,
+    pub generated_at: chrono::DateTime<chrono::Utc>,
+    pub rendered_frame: Option<CompositorRenderedFrame>,
+    pub validation: SceneRuntimeContractValidation,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ProgramPreviewFrameRequest {
+    pub version: u32,
+    pub request_id: String,
+    pub collection_id: String,
+    pub width: u32,
+    pub height: u32,
+    pub framerate: u32,
+    pub frame_format: CompositorFrameFormat,
+    pub scale_mode: CompositorScaleMode,
+    pub encoding: PreviewFrameEncoding,
+    pub include_debug_overlay: bool,
+    pub requested_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ProgramPreviewFrameResponse {
+    pub version: u32,
+    pub request_id: String,
+    pub collection_id: String,
+    pub scene_id: String,
+    pub scene_name: String,
+    pub active_transition_id: String,
+    pub active_transition_name: String,
+    pub program_target_id: String,
+    pub frame_index: u64,
+    pub width: u32,
+    pub height: u32,
+    pub framerate: u32,
     pub frame_format: CompositorFrameFormat,
     pub encoding: PreviewFrameEncoding,
     pub image_data: Option<String>,
@@ -650,6 +690,51 @@ pub fn validate_preview_frame_request(
     runtime_validation(errors, Vec::new())
 }
 
+pub fn validate_program_preview_frame_request(
+    request: &ProgramPreviewFrameRequest,
+    collection: &SceneCollection,
+) -> SceneRuntimeContractValidation {
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+
+    validate_runtime_envelope(
+        request.version,
+        &request.request_id,
+        "program preview frame request",
+        &mut errors,
+    );
+    if request.collection_id.trim().is_empty() {
+        errors.push("program preview frame collection id is required".to_string());
+    }
+    if request.collection_id != collection.id {
+        errors.push(
+            "program preview frame collection id does not match saved collection".to_string(),
+        );
+    }
+    if collection.active_scene().is_none() {
+        errors.push("program preview frame requires an active scene".to_string());
+    }
+    if request.width == 0 || request.height == 0 {
+        errors.push("program preview frame dimensions must be greater than zero".to_string());
+    }
+    if request.width > 7680 || request.height > 4320 {
+        errors.push("program preview frame dimensions must be 8K or smaller".to_string());
+    }
+    if request.framerate == 0 {
+        errors.push("program preview frame framerate must be greater than zero".to_string());
+    }
+
+    let collection_validation = validate_scene_collection(collection);
+    if !collection_validation.ok {
+        warnings.push(format!(
+            "scene collection has {} validation issue(s)",
+            collection_validation.issues.len()
+        ));
+    }
+
+    runtime_validation(errors, warnings)
+}
+
 pub fn create_preview_frame_response(
     request: &PreviewFrameRequest,
     collection: &SceneCollection,
@@ -694,6 +779,87 @@ pub fn create_preview_frame_response(
         frame_index,
         width: request.width,
         height: request.height,
+        frame_format: request.frame_format.clone(),
+        encoding: request.encoding.clone(),
+        image_data,
+        checksum,
+        render_time_ms: started_at.elapsed().as_secs_f64() * 1000.0,
+        generated_at: crate::now_utc(),
+        rendered_frame,
+        validation,
+    }
+}
+
+pub fn create_program_preview_frame_response(
+    request: &ProgramPreviewFrameRequest,
+    collection: &SceneCollection,
+    frame_index: u64,
+) -> ProgramPreviewFrameResponse {
+    let started_at = Instant::now();
+    let mut validation = validate_program_preview_frame_request(request, collection);
+    let scene = collection
+        .active_scene()
+        .or_else(|| collection.scenes.first());
+    let transition = collection
+        .transitions
+        .iter()
+        .find(|transition| transition.id == collection.active_transition_id)
+        .or_else(|| collection.transitions.first());
+    let render_result = scene.map(|scene| {
+        scene_render_result(
+            scene,
+            SceneRenderTargetOptions {
+                target_id: "target-program-preview",
+                target_name: "Program Preview",
+                target_kind: CompositorRenderTargetKind::Program,
+                width: request.width,
+                height: request.height,
+                framerate: request.framerate,
+                frame_format: request.frame_format.clone(),
+                scale_mode: request.scale_mode.clone(),
+            },
+            frame_index,
+        )
+    });
+    let rendered_frame = render_result.as_ref().map(|result| result.frame.clone());
+
+    if let Some(frame) = &rendered_frame {
+        validation
+            .warnings
+            .extend(frame.validation.warnings.clone());
+        validation.errors.extend(frame.validation.errors.clone());
+        validation.ready = validation.errors.is_empty();
+    }
+
+    let pixel_frame = render_result
+        .as_ref()
+        .and_then(|result| result.pixel_frames.first());
+    let checksum = pixel_frame
+        .map(|frame| format!("software-program:{:016x}", frame.checksum))
+        .or_else(|| {
+            rendered_frame
+                .as_ref()
+                .map(|frame| rendered_frame_checksum(frame, request.width, request.height))
+        });
+    let image_data = pixel_frame.and_then(|frame| preview_image_data(frame, &request.encoding));
+
+    ProgramPreviewFrameResponse {
+        version: 1,
+        request_id: request.request_id.clone(),
+        collection_id: request.collection_id.clone(),
+        scene_id: scene.map(|scene| scene.id.clone()).unwrap_or_default(),
+        scene_name: scene.map(|scene| scene.name.clone()).unwrap_or_default(),
+        active_transition_id: transition
+            .map(|transition| transition.id.clone())
+            .unwrap_or_default(),
+        active_transition_name: transition
+            .map(|transition| transition.name.clone())
+            .unwrap_or_default(),
+        program_target_id: "target-program-preview".to_string(),
+        frame_index,
+        width: request.width,
+        height: request.height,
+        framerate: request.framerate,
         frame_format: request.frame_format.clone(),
         encoding: request.encoding.clone(),
         image_data,
@@ -1357,16 +1523,48 @@ fn preview_render_result(
     request: &PreviewFrameRequest,
     frame_index: u64,
 ) -> SoftwareCompositorRenderResult {
+    scene_render_result(
+        scene,
+        SceneRenderTargetOptions {
+            target_id: "target-runtime-preview",
+            target_name: "Runtime Preview",
+            target_kind: CompositorRenderTargetKind::Preview,
+            width: request.width,
+            height: request.height,
+            framerate: request.framerate,
+            frame_format: request.frame_format.clone(),
+            scale_mode: request.scale_mode.clone(),
+        },
+        frame_index,
+    )
+}
+
+struct SceneRenderTargetOptions {
+    target_id: &'static str,
+    target_name: &'static str,
+    target_kind: CompositorRenderTargetKind,
+    width: u32,
+    height: u32,
+    framerate: u32,
+    frame_format: CompositorFrameFormat,
+    scale_mode: CompositorScaleMode,
+}
+
+fn scene_render_result(
+    scene: &Scene,
+    target_options: SceneRenderTargetOptions,
+    frame_index: u64,
+) -> SoftwareCompositorRenderResult {
     let graph = build_compositor_graph(scene);
     let target = CompositorRenderTarget {
-        id: "target-runtime-preview".to_string(),
-        name: "Runtime Preview".to_string(),
-        kind: crate::CompositorRenderTargetKind::Preview,
-        width: request.width,
-        height: request.height,
-        framerate: request.framerate,
-        frame_format: request.frame_format.clone(),
-        scale_mode: request.scale_mode.clone(),
+        id: target_options.target_id.to_string(),
+        name: target_options.target_name.to_string(),
+        kind: target_options.target_kind,
+        width: target_options.width,
+        height: target_options.height,
+        framerate: target_options.framerate,
+        frame_format: target_options.frame_format,
+        scale_mode: target_options.scale_mode,
         enabled: true,
     };
     let plan = build_compositor_render_plan(&graph, vec![target]);
@@ -1574,6 +1772,10 @@ fn preview_frame_checksum(
     frame: &CompositorRenderedFrame,
     request: &PreviewFrameRequest,
 ) -> String {
+    rendered_frame_checksum(frame, request.width, request.height)
+}
+
+fn rendered_frame_checksum(frame: &CompositorRenderedFrame, width: u32, height: u32) -> String {
     let visible_nodes = frame
         .targets
         .iter()
@@ -1581,7 +1783,7 @@ fn preview_frame_checksum(
         .count();
     format!(
         "contract:{}:{}:{}x{}:{}",
-        frame.scene_id, frame.clock.frame_index, request.width, request.height, visible_nodes
+        frame.scene_id, frame.clock.frame_index, width, height, visible_nodes
     )
 }
 
@@ -1764,6 +1966,47 @@ mod tests {
         let rendered_frame = response.rendered_frame.as_ref().unwrap();
         assert_eq!(rendered_frame.renderer, CompositorRendererKind::Software);
         assert!(response.render_time_ms.is_finite());
+        assert!(
+            response.validation.ready,
+            "{:?}",
+            response.validation.errors
+        );
+    }
+
+    #[test]
+    fn program_preview_frame_response_renders_active_scene_as_program_target() {
+        let collection = SceneCollection::default_collection(crate::now_utc());
+        let request = ProgramPreviewFrameRequest {
+            version: 1,
+            request_id: "program-preview-test".to_string(),
+            collection_id: collection.id.clone(),
+            width: 1920,
+            height: 1080,
+            framerate: 60,
+            frame_format: CompositorFrameFormat::Rgba8,
+            scale_mode: CompositorScaleMode::Fit,
+            encoding: PreviewFrameEncoding::DataUrl,
+            include_debug_overlay: true,
+            requested_at: crate::now_utc(),
+        };
+        let response = create_program_preview_frame_response(&request, &collection, 7);
+
+        assert_eq!(response.collection_id, collection.id);
+        assert_eq!(response.scene_id, collection.active_scene_id);
+        assert_eq!(response.program_target_id, "target-program-preview");
+        assert_eq!(response.frame_index, 7);
+        assert_eq!(response.framerate, 60);
+        assert!(response
+            .checksum
+            .as_deref()
+            .is_some_and(|checksum| checksum.starts_with("software-program:")));
+        assert!(response
+            .image_data
+            .as_deref()
+            .is_some_and(|data| data.starts_with("data:image/bmp;base64,")));
+        let target = &response.rendered_frame.as_ref().unwrap().targets[0];
+        assert_eq!(target.target_id, "target-program-preview");
+        assert_eq!(target.target_kind, CompositorRenderTargetKind::Program);
         assert!(
             response.validation.ready,
             "{:?}",

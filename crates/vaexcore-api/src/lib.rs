@@ -36,10 +36,11 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use vaexcore_core::{
     build_audio_graph_runtime_snapshot, build_scene_runtime_bindings_snapshot,
     create_compositor_render_response, create_preview_frame_response,
-    create_scene_activation_response, create_scene_runtime_state_update_response,
-    create_transition_preview_frame_response, scene_runtime_snapshot,
-    scene_runtime_snapshot_with_options, AudioGraphRuntimeSnapshot, CompositorRenderRequest,
-    CompositorRenderResponse,
+    create_program_preview_frame_response, create_scene_activation_response,
+    create_scene_runtime_state_update_response, create_transition_preview_frame_response,
+    scene_runtime_snapshot, scene_runtime_snapshot_with_options, AudioGraphRuntimeSnapshot,
+    CompositorRenderRequest, CompositorRenderResponse, ProgramPreviewFrameRequest,
+    ProgramPreviewFrameResponse,
 };
 use vaexcore_core::{
     new_id, now_utc, scene_capture_sources, ApiResponse, AuditLogEntry, AuditLogSnapshot,
@@ -91,6 +92,7 @@ pub struct ApiState {
     pub pipeline_config_path: Option<PathBuf>,
     pub scene_runtime: RwLock<SceneRuntimeSnapshot>,
     pub preview_frame_index: AtomicU64,
+    pub program_preview_frame_index: AtomicU64,
     pub audio_graph_frame_index: AtomicU64,
 }
 
@@ -120,6 +122,7 @@ impl ApiState {
             pipeline_config_path: config.pipeline_config_path.clone(),
             scene_runtime: RwLock::new(scene_runtime),
             preview_frame_index: AtomicU64::new(0),
+            program_preview_frame_index: AtomicU64::new(0),
             audio_graph_frame_index: AtomicU64::new(0),
         });
 
@@ -157,6 +160,7 @@ impl ApiState {
             pipeline_config_path: None,
             scene_runtime: RwLock::new(scene_runtime),
             preview_frame_index: AtomicU64::new(0),
+            program_preview_frame_index: AtomicU64::new(0),
             audio_graph_frame_index: AtomicU64::new(0),
         });
 
@@ -317,6 +321,10 @@ pub fn router(state: Arc<ApiState>) -> Router {
         .route(
             "/scene-runtime/preview-frame",
             post(post_scene_runtime_preview_frame),
+        )
+        .route(
+            "/scene-runtime/program-preview-frame",
+            post(post_scene_runtime_program_preview_frame),
         )
         .route(
             "/scene-runtime/transition-preview-frame",
@@ -497,6 +505,7 @@ fn command_action(method: &Method, path: &str) -> Option<String> {
         ("POST", "/scene-runtime/activate") => "scene_runtime.activate",
         ("PUT", "/scene-runtime/state") => "scene_runtime.state",
         ("POST", "/scene-runtime/preview-frame") => "scene_runtime.preview_frame",
+        ("POST", "/scene-runtime/program-preview-frame") => "scene_runtime.program_preview_frame",
         ("POST", "/scene-runtime/transition-preview-frame") => {
             "scene_runtime.transition_preview_frame"
         }
@@ -851,6 +860,20 @@ async fn post_scene_runtime_preview_frame(
     let collection = state.store.scene_collection()?;
     let frame_index = state.preview_frame_index.fetch_add(1, Ordering::Relaxed);
     let response = create_preview_frame_response(&request, &collection, frame_index);
+    Ok(Json(ApiResponse::ok(response)))
+}
+
+async fn post_scene_runtime_program_preview_frame(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(request): Json<ProgramPreviewFrameRequest>,
+) -> Result<Json<ApiResponse<ProgramPreviewFrameResponse>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let collection = state.store.scene_collection()?;
+    let frame_index = state
+        .program_preview_frame_index
+        .fetch_add(1, Ordering::Relaxed);
+    let response = create_program_preview_frame_response(&request, &collection, frame_index);
     Ok(Json(ApiResponse::ok(response)))
 }
 
@@ -2144,6 +2167,40 @@ mod tests {
             "target-runtime-preview"
         );
         assert_eq!(preview["data"]["rendered_frame"]["renderer"], "software");
+
+        let (status, program_preview) = request_json(
+            app.clone(),
+            "POST",
+            "/scene-runtime/program-preview-frame".to_string(),
+            Some(json!({
+                "version": 1,
+                "request_id": "program-preview-test",
+                "collection_id": "collection-default",
+                "width": 1920,
+                "height": 1080,
+                "framerate": 60,
+                "frame_format": "rgba8",
+                "scale_mode": "fit",
+                "encoding": "data_url",
+                "include_debug_overlay": true,
+                "requested_at": "2026-05-09T12:00:02Z"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(program_preview["data"]["scene_id"], "scene-main");
+        assert_eq!(
+            program_preview["data"]["program_target_id"],
+            "target-program-preview"
+        );
+        assert_eq!(
+            program_preview["data"]["rendered_frame"]["targets"][0]["target_kind"],
+            "program"
+        );
+        assert!(program_preview["data"]["checksum"]
+            .as_str()
+            .unwrap()
+            .starts_with("software-program:"));
 
         let (status, bindings) = request_json(
             app.clone(),

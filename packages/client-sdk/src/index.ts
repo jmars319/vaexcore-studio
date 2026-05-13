@@ -18,6 +18,8 @@ import type {
   MediaProfileInput,
   PreviewFrameRequest,
   PreviewFrameResponse,
+  ProgramPreviewFrameRequest,
+  ProgramPreviewFrameResponse,
   ProfilesSnapshot,
   RecentRecordingsSnapshot,
   SceneActivationRequest,
@@ -157,6 +159,18 @@ export class VaexcoreStudioClient {
       method: "POST",
       body: JSON.stringify(request),
     });
+  }
+
+  programPreviewFrame(
+    request: ProgramPreviewFrameRequest,
+  ): Promise<ProgramPreviewFrameResponse> {
+    return this.request<ProgramPreviewFrameResponse>(
+      "/scene-runtime/program-preview-frame",
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    );
   }
 
   transitionPreviewFrame(

@@ -22,6 +22,8 @@ import type {
   CompositorRenderResponse,
   PreviewFrameRequest,
   PreviewFrameResponse,
+  ProgramPreviewFrameRequest,
+  ProgramPreviewFrameResponse,
   SceneActivationRequest,
   SceneActivationResponse,
   SceneCollection,
@@ -569,6 +571,18 @@ export const StudioApi = {
       method: "POST",
       body: JSON.stringify(request),
     }),
+  programPreviewFrame: (
+    config: RuntimeApiConfig,
+    request: ProgramPreviewFrameRequest,
+  ) =>
+    apiRequest<ProgramPreviewFrameResponse>(
+      config,
+      "/scene-runtime/program-preview-frame",
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    ),
   transitionPreviewFrame: (
     config: RuntimeApiConfig,
     request: TransitionPreviewFrameRequest,
