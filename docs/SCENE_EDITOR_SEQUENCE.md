@@ -37,8 +37,10 @@ foundation to OBS-class scene editing and output.
     buses, gain/mute/monitor/sync controls, simulated pre/post-filter levels,
     and pipeline validation; real audio mixing and live meters are not started.
 16. Image and media source engine: started with real local still-image decode
-    for PNG, JPEG, WebP, and first-frame GIF preview rendering. Video media
-    playback remains placeholder-only.
+    for PNG, JPEG, WebP, and first-frame GIF preview rendering plus optional
+    FFmpeg-backed local video preview frame extraction for MP4, MOV, WebM, and
+    MKV assets. Video audio playback and long-running media timelines are not
+    started.
 17. Browser/web overlay source engine: started with source-specific preview
     rendering; real browser capture is not started.
 18. Text render engine with font controls: started with backend software
@@ -126,10 +128,11 @@ contracts for capture-backed frames in later phases.
 
 Phase F software compositor, covering steps 51-60, now has serializable input
 frame contracts, per-source placeholder providers, local still-image decode,
-backend text rasterization with bundled Inter, asset cache invalidation by path
-and modified time, crop/opacity/rotation-aware software drawing, z-order
-compositing, and compositor tests. Capture, video, browser, and audio inputs
-are still deterministic placeholders.
+local video preview frame extraction through optional FFmpeg, backend text
+rasterization with bundled Inter, asset cache invalidation by path and modified
+time, crop/opacity/rotation-aware software drawing, z-order compositing, and
+compositor tests. Capture, browser, and live audio inputs are still
+deterministic placeholders.
 
 Phase G live preview, covering steps 61-70, now returns encoded software preview
 image data through the runtime preview API and Designer draws it as the preview
@@ -162,10 +165,11 @@ Offline Editor V1 is now complete for local authoring scope: scene/source
 editing, grouping, numeric transforms, local asset URI selection, explicit
 bundle import/export, app-data fallback bundles, validation, runtime refresh,
 deterministic placeholder transition preview, real local still-image preview
-pixels, backend-rendered single-line text pixels, and software visual filter
-preview pixels. The remaining Scene Designer work starts the real capture,
-video, browser, audio, and output path; offline editor completion does not imply
-OBS-level capture, encoder, plugin, or live-output parity.
+pixels, FFmpeg-backed local video preview frames when FFmpeg is available,
+backend-rendered single-line text pixels, and software visual filter preview
+pixels. The remaining Scene Designer work starts the real capture, browser,
+live audio, stinger playback, and output path; offline editor completion does
+not imply OBS-level capture, encoder, plugin, or live-output parity.
 
 ## Validation Contract
 

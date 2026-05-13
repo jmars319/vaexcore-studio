@@ -42,14 +42,19 @@ real captured audio mixing remains deferred.
 The software preview compositor can decode local still-image `image_media`
 sources when `media_type = "image"`. It supports PNG, JPEG, WebP, and the first
 frame of GIF files, caches decoded pixels by normalized path plus file modified
-time, and reports asset readiness metadata to Designer. It also rasterizes
-single-line `text` sources with the bundled Inter font and reports font fallback,
-color fallback, rendered bounds, and checksum metadata. Filter diagnostics report
-applied, skipped, deferred, or failed runtime state plus filtered checksums.
-Mask images use the same still-image decode/cache path, and LUT files are parsed
-and cached by normalized path plus modified time. Video media, stinger video
-playback, live capture, browser capture, recording, and streaming output remain
-outside this path.
+time, and reports asset readiness metadata to Designer. It can also extract
+local video preview frames for `image_media` sources when `media_type = "video"`
+and FFmpeg is available. Video V1 supports MP4, MOV, WebM, and MKV files,
+samples the preview clock at a conservative deterministic interval, and caches
+decoded frames by normalized path, file modified time, and sampled time. Missing
+FFmpeg, missing files, unsupported extensions, and extraction failures remain
+explicit placeholder states. The compositor also rasterizes single-line `text`
+sources with the bundled Inter font and reports font fallback, color fallback,
+rendered bounds, and checksum metadata. Filter diagnostics report applied,
+skipped, deferred, or failed runtime state plus filtered checksums. Mask images
+use the same still-image decode/cache path, and LUT files are parsed and cached
+by normalized path plus modified time. Stinger video playback, live capture,
+browser capture, recording, and streaming output remain outside this path.
 
 `CaptureFramePlan` maps visible capture-backed scene sources to the video or
 audio frame stream the compositor will eventually consume. Each binding records

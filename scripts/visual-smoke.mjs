@@ -151,6 +151,47 @@ const targets = [
     ],
   },
   {
+    name: "designer-video-media-runtime",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "click",
+        selector: '[data-testid="designer-open-source-modal"]',
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-source-add-modal\\"]"))',
+        message: "Designer source add modal did not render for video source smoke.",
+      },
+      {
+        type: "click",
+        selector:
+          '[data-testid="designer-source-preset"][data-source-kind="image_media"]',
+      },
+      {
+        type: "select",
+        selector: '[data-testid="designer-media-type-select"]',
+        value: "video",
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-image-asset-runtime\\"]"))',
+        message: "Designer video asset runtime panel did not render.",
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelector("[data-testid=\\"designer-image-asset-runtime\\"]")?.textContent?.includes("Video Asset Runtime")',
+        message: "Designer image/media runtime panel did not switch to video metadata.",
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelector("[data-testid=\\"designer-image-asset-runtime\\"]")?.textContent?.includes("Decoder")',
+        message: "Designer video runtime panel did not show decoder metadata.",
+      },
+    ],
+  },
+  {
     name: "designer-text-runtime",
     path: "/?section=designer",
     minBytes: 50_000,

@@ -6847,19 +6847,18 @@ function ImageAssetRuntimePanel(props: {
 
   const asset = props.node?.asset ?? null;
   const mediaType = props.source.config.media_type ?? "image";
+  const isVideo = mediaType === "video";
   const status =
     asset?.status ??
-    (mediaType === "video"
-      ? "video_placeholder"
-      : props.source.config.asset_uri
-        ? "pending"
-        : "no_asset");
+    (props.source.config.asset_uri ? "pending" : "no_asset");
   const detail =
     asset?.status_detail ??
-    (mediaType === "video"
-      ? "Video media decode/playback is deferred for this source."
-      : props.source.config.asset_uri
-        ? "Waiting for the next runtime preview frame to decode this image."
+    (props.source.config.asset_uri
+      ? isVideo
+        ? "Waiting for the next runtime preview frame to extract a video preview frame."
+        : "Waiting for the next runtime preview frame to decode this image."
+      : isVideo
+        ? "No local video asset has been selected."
         : "No local image asset has been selected.");
 
   return (
@@ -6869,7 +6868,7 @@ function ImageAssetRuntimePanel(props: {
     >
       <div className="runtime-binding-header">
         <div>
-          <strong>Image Asset Runtime</strong>
+          <strong>{isVideo ? "Video Asset Runtime" : "Image Asset Runtime"}</strong>
           <span>{detail}</span>
         </div>
         <Pill tone={imageAssetStatusTone(status)}>
@@ -6890,6 +6889,24 @@ function ImageAssetRuntimePanel(props: {
           }
         />
         <KeyValue label="Format" value={asset?.format ?? mediaType} />
+        {isVideo && (
+          <>
+            <KeyValue
+              label="Sample"
+              value={
+                asset?.sampled_frame_time_ms != null
+                  ? `${(asset.sampled_frame_time_ms / 1000).toFixed(2)}s (#${
+                      asset.sample_index ?? 0
+                    })`
+                  : "not sampled"
+              }
+            />
+            <KeyValue
+              label="Decoder"
+              value={asset?.decoder_name ?? "ffmpeg optional"}
+            />
+          </>
+        )}
         <KeyValue
           label="Checksum"
           value={asset?.checksum ? asset.checksum.toString(16) : "none"}
@@ -8506,6 +8523,7 @@ function SourceConfigEditor(props: {
             <label>
               Media Type
               <select
+                data-testid="designer-media-type-select"
                 value={source.config.media_type}
                 onChange={(event) =>
                   props.onChange({
