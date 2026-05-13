@@ -121,6 +121,13 @@ budget, render budget, encode budget, dropped-frame tolerance, latency ceiling,
 and estimated RGBA throughput. It is a contract and validation layer for frame
 pacing and hardware-readiness reporting; it does not start runtime profiling.
 
+The Designer readiness panel rolls the current scene model, runtime preview,
+program preview, capture, browser, media, audio, transitions, filters,
+performance, desktop permissions, and output handoff contracts into one operator
+view. It is the Scene Designer runtime V1 milestone surface; it does not start
+recording, streaming, encoder execution, or cross-platform hardware capture
+validation.
+
 The Scene Runtime contracts define the payloads that the future runtime API will
 use for scene activation, runtime state patching, preview polling, compositor
 render requests, source binding readiness, audio binding readiness, and

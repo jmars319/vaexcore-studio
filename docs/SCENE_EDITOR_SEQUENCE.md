@@ -118,8 +118,11 @@ foundation to OBS-class scene editing and output.
 28. Full validation matrix: automated, visual, Windows/macOS hardware, installer,
     and long-run soak tests: started with repeatable macOS app build validation
     a Windows validation runner/guide, and Chrome screenshot smoke checks with
-    PNG size/dimension assertions. Real Windows hardware results, installer QA,
-    and long-run soak tests are not started.
+    PNG size/dimension assertions. Full Scene Designer Pass 10 adds an in-app
+    readiness panel covering scene model, runtime preview, program preview,
+    capture, browser, media, audio, transitions, filters, performance,
+    permissions, and output handoff state. Real Windows hardware results,
+    installer QA, and long-run soak tests are not started.
 
 ## 100-Step Progress
 
@@ -219,9 +222,11 @@ multiline text pixels with basic effects and optional font files, optional
 browser overlay preview snapshots, software visual filter preview pixels,
 one-shot macOS display/window capture snapshots, and one-shot macOS camera
 snapshots through optional FFmpeg when source bindings and permissions are
-available. The remaining Scene Designer work starts persistent capture sessions,
-readiness/soak validation, and the output handoff path; offline editor
-completion does not imply OBS-level encoder, plugin, or live-output parity.
+available. Full Scene Designer Pass 10 adds the milestone readiness surface and
+validation coverage for the OBS-class runtime V1 scope. The remaining work after
+this milestone is outside Scene Designer itself: true long-running capture
+sessions on every platform, recording/streaming encoder execution, plugin
+ecosystem work, installer QA, and hardware validation on Windows.
 
 ## Validation Contract
 

@@ -51,6 +51,17 @@ const targets = [
       },
       {
         type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-readiness-panel\\"]"))',
+        message: "Designer readiness panel did not render.",
+      },
+      {
+        type: "assert",
+        expression:
+          'document.querySelector("[data-testid=\\"designer-readiness-panel\\"]")?.textContent?.includes("Scene Designer Readiness")',
+        message: "Designer readiness panel did not show its title.",
+      },
+      {
+        type: "assert",
         expression:
           'Boolean(document.querySelector("[data-testid=\\"designer-shortcuts-panel\\"]"))',
         message: "Designer shortcuts panel did not render.",

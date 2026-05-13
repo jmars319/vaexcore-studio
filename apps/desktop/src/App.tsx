@@ -6400,6 +6400,19 @@ function DesignerPage(props: {
           pipelinePlan={props.pipelinePlan}
           preflight={props.preflight}
         />
+        <SceneDesignerReadinessPanel
+          audioGraphRuntime={props.audioGraphRuntime}
+          captureProviderRuntime={props.captureProviderRuntime}
+          collection={props.collection}
+          graphReady={graphValidation.ready}
+          pipelinePlan={props.pipelinePlan}
+          preflight={props.preflight}
+          previewFrame={props.previewFrame}
+          previewStats={props.previewStats}
+          programPreviewFrame={props.programPreviewFrame}
+          scene={props.scene}
+          sceneValid={validation.ok}
+        />
       </section>
 
       <section className="panel designer-inspector">
@@ -7174,6 +7187,213 @@ function OutputPreflightPanel(props: {
       ) : (
         <div className="empty compact-empty">No output preflight plan yet</div>
       )}
+    </div>
+  );
+}
+
+type DesignerReadinessState = "ready" | "warning" | "blocked" | "pending";
+
+interface DesignerReadinessItem {
+  id: string;
+  label: string;
+  state: DesignerReadinessState;
+  detail: string;
+}
+
+function SceneDesignerReadinessPanel(props: {
+  audioGraphRuntime: AudioGraphRuntimeSnapshot | null;
+  captureProviderRuntime: CaptureProviderRuntimeSnapshot | null;
+  collection: SceneCollection;
+  graphReady: boolean;
+  pipelinePlan: MediaPipelinePlan | null;
+  preflight: PreflightSnapshot | null;
+  previewFrame: PreviewFrameResponse | null;
+  previewStats: PreviewStats;
+  programPreviewFrame: ProgramPreviewFrameResponse | null;
+  scene: Scene;
+  sceneValid: boolean;
+}) {
+  const nodes =
+    props.previewFrame?.rendered_frame?.targets.flatMap((target) => target.nodes) ?? [];
+  const captureSources = props.scene.sources.filter((source) =>
+    ["display", "window", "camera"].includes(source.kind),
+  );
+  const browserNodes = nodes.filter((node) => node.browser);
+  const mediaNodes = nodes.filter((node) => node.asset);
+  const filterNodes = nodes.filter((node) => node.filters.length > 0);
+  const transitionCount = props.collection.transitions.length;
+  const outputPlan = props.pipelinePlan?.config.output_preflight_plan ?? null;
+  const readiness: DesignerReadinessItem[] = [
+    {
+      id: "scene-model",
+      label: "Scene Model",
+      state: props.sceneValid && props.graphReady ? "ready" : "blocked",
+      detail: props.sceneValid && props.graphReady
+        ? "Collection and compositor graph validate."
+        : "Collection or compositor graph needs attention.",
+    },
+    {
+      id: "runtime-preview",
+      label: "Runtime Preview",
+      state: props.previewFrame
+        ? props.previewFrame.validation.ready
+          ? "ready"
+          : "warning"
+        : "pending",
+      detail: props.previewFrame
+        ? `${props.previewFrame.width}x${props.previewFrame.height}, ${props.previewFrame.render_time_ms.toFixed(1)} ms render, ${props.previewStats.droppedFrames} dropped.`
+        : "No runtime preview frame has been requested yet.",
+    },
+    {
+      id: "program-preview",
+      label: "Program Preview",
+      state: props.programPreviewFrame
+        ? props.programPreviewFrame.validation.ready
+          ? "ready"
+          : "warning"
+        : "pending",
+      detail: props.programPreviewFrame
+        ? `${props.programPreviewFrame.width}x${props.programPreviewFrame.height} program frame is available.`
+        : "No program preview frame has been requested yet.",
+    },
+    {
+      id: "capture",
+      label: "Capture",
+      state: captureSources.length === 0
+        ? "ready"
+        : props.captureProviderRuntime?.validation.errors.length
+          ? "blocked"
+          : props.captureProviderRuntime
+            ? "warning"
+            : "pending",
+      detail: captureSources.length === 0
+        ? "No display/window/camera sources in this scene."
+        : props.captureProviderRuntime
+          ? `${props.captureProviderRuntime.providers.length} provider(s), ${props.captureProviderRuntime.validation.warnings.length} warning(s).`
+          : "Capture provider runtime has not been evaluated.",
+    },
+    {
+      id: "browser",
+      label: "Browser",
+      state: browserNodes.length === 0
+        ? "ready"
+        : browserNodes.some((node) => node.browser?.status === "rendered")
+          ? "ready"
+          : "warning",
+      detail: browserNodes.length === 0
+        ? "No browser overlay source rendered in the latest frame."
+        : `${browserNodes.length} browser source(s) evaluated.`,
+    },
+    {
+      id: "media",
+      label: "Media",
+      state: mediaNodes.length === 0
+        ? "ready"
+        : mediaNodes.some((node) => node.asset?.status !== "decoded")
+          ? "warning"
+          : "ready",
+      detail: mediaNodes.length === 0
+        ? "No image/video assets rendered in the latest frame."
+        : `${mediaNodes.length} media source(s) evaluated.`,
+    },
+    {
+      id: "audio",
+      label: "Audio",
+      state: props.audioGraphRuntime?.validation.errors.length
+        ? "blocked"
+        : props.audioGraphRuntime
+          ? "ready"
+          : "pending",
+      detail: props.audioGraphRuntime
+        ? `${props.audioGraphRuntime.sources.length} audio source(s), ${props.audioGraphRuntime.validation.warnings.length} warning(s).`
+        : "Audio graph runtime has not been evaluated.",
+    },
+    {
+      id: "transitions",
+      label: "Transitions",
+      state: transitionCount > 0 ? "ready" : "warning",
+      detail: `${transitionCount} transition contract(s) in this collection.`,
+    },
+    {
+      id: "filters",
+      label: "Filters",
+      state: filterNodes.some((node) =>
+        node.filters.some((filter) => filter.status === "error"),
+      )
+        ? "warning"
+        : "ready",
+      detail: filterNodes.length
+        ? `${filterNodes.reduce((total, node) => total + node.filters.length, 0)} filter runtime result(s) in latest frame.`
+        : "No filters evaluated in the latest frame.",
+    },
+    {
+      id: "performance",
+      label: "Performance",
+      state: props.previewFrame && props.previewFrame.render_time_ms > 100
+        ? "warning"
+        : props.previewFrame
+          ? "ready"
+          : "pending",
+      detail: props.previewFrame
+        ? `${props.previewFrame.render_time_ms.toFixed(1)} ms last render, ${props.previewStats.averageRenderTimeMs.toFixed(1)} ms average.`
+        : "No render timing sample yet.",
+    },
+    {
+      id: "permissions",
+      label: "Permissions",
+      state: props.preflight?.overall === "blocked"
+        ? "blocked"
+        : props.preflight
+          ? props.preflight.overall === "warning"
+            ? "warning"
+            : "ready"
+          : "pending",
+      detail: props.preflight
+        ? `Desktop preflight is ${preflightLabel(props.preflight.overall)}.`
+        : "Desktop preflight has not loaded.",
+    },
+    {
+      id: "output-handoff",
+      label: "Output Handoff",
+      state: outputPlan?.validation.errors.length
+        ? "blocked"
+        : outputPlan
+          ? "ready"
+          : "pending",
+      detail: outputPlan
+        ? `${outputPlan.render_targets.length} dry-run render target(s) prepared.`
+        : "Output handoff preflight has not loaded.",
+    },
+  ];
+  const blocked = readiness.filter((item) => item.state === "blocked").length;
+  const warnings = readiness.filter((item) => item.state === "warning").length;
+  const pending = readiness.filter((item) => item.state === "pending").length;
+  const overall: DesignerReadinessState =
+    blocked > 0 ? "blocked" : warnings > 0 ? "warning" : pending > 0 ? "pending" : "ready";
+
+  return (
+    <div className="designer-preview-diagnostics" data-testid="designer-readiness-panel">
+      <div className="designer-validation-header">
+        <ListChecks size={16} />
+        <div>
+          <strong>Scene Designer Readiness</strong>
+          <span>
+            {blocked} blocked, {warnings} warning, {pending} pending
+          </span>
+        </div>
+        <Pill tone={readinessTone(overall)}>{overall}</Pill>
+      </div>
+      <div className="check-list compact-check-list">
+        {readiness.map((item) => (
+          <div className="check-row-compact" key={item.id}>
+            <div>
+              <strong>{item.label}</strong>
+              <span>{item.detail}</span>
+            </div>
+            <Pill tone={readinessTone(item.state)}>{item.state}</Pill>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -13190,6 +13410,10 @@ function stepTone(status: string): "green" | "red" | "amber" | "muted" {
     default:
       return "muted";
   }
+}
+
+function readinessTone(status: DesignerReadinessState): "green" | "red" | "amber" | "muted" {
+  return stepTone(status);
 }
 
 function mask(value: string): string {
