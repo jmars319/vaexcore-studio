@@ -506,6 +506,7 @@ export interface CompositorEvaluatedNode {
   status_detail: string;
   asset?: SoftwareCompositorAssetMetadata | null;
   text?: SoftwareCompositorTextMetadata | null;
+  filters: SoftwareCompositorFilterMetadata[];
   rect: CompositorRect;
   crop: SceneCrop;
   rotation_degrees: number;
@@ -570,6 +571,22 @@ export interface SoftwareCompositorTextMetadata {
   checksum?: number | null;
 }
 
+export type SoftwareCompositorFilterStatus =
+  | "applied"
+  | "skipped"
+  | "deferred"
+  | "error";
+
+export interface SoftwareCompositorFilterMetadata {
+  id: string;
+  name: string;
+  kind: SceneSourceFilterKind;
+  status: SoftwareCompositorFilterStatus;
+  status_detail: string;
+  order: number;
+  checksum?: number | null;
+}
+
 export interface SoftwareCompositorInputFrame {
   source_id: string;
   source_kind: SceneSourceKind;
@@ -580,6 +597,7 @@ export interface SoftwareCompositorInputFrame {
   status_detail: string;
   asset?: SoftwareCompositorAssetMetadata | null;
   text?: SoftwareCompositorTextMetadata | null;
+  filters: SoftwareCompositorFilterMetadata[];
   checksum: number;
   pixels: number[];
 }
@@ -4427,6 +4445,7 @@ function evaluateNodeForTarget(
     status_detail: node.status_detail,
     asset: null,
     text: null,
+    filters: [],
     rect: {
       x: offsetX + sourceRect.x * scaleX,
       y: offsetY + sourceRect.y * scaleY,

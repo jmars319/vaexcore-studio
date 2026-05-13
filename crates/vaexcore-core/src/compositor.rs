@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Scene, SceneCrop, ScenePoint, SceneSize, SceneSource, SceneSourceBoundsMode, SceneSourceFilter,
-    SceneSourceKind,
+    SceneSourceFilterKind, SceneSourceKind,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -173,6 +173,8 @@ pub struct CompositorEvaluatedNode {
     pub asset: Option<SoftwareCompositorAssetMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<SoftwareCompositorTextMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<SoftwareCompositorFilterMetadata>,
     pub rect: CompositorRect,
     pub crop: SceneCrop,
     pub rotation_degrees: f64,
@@ -225,6 +227,8 @@ pub struct SoftwareCompositorInputFrame {
     pub asset: Option<SoftwareCompositorAssetMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<SoftwareCompositorTextMetadata>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<SoftwareCompositorFilterMetadata>,
     pub checksum: u64,
     pub pixels: Vec<u8>,
 }
@@ -280,6 +284,27 @@ pub struct SoftwareCompositorTextMetadata {
     pub text_length: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rendered_bounds: Option<CompositorRect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checksum: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SoftwareCompositorFilterStatus {
+    Applied,
+    Skipped,
+    Deferred,
+    Error,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SoftwareCompositorFilterMetadata {
+    pub id: String,
+    pub name: String,
+    pub kind: SceneSourceFilterKind,
+    pub status: SoftwareCompositorFilterStatus,
+    pub status_detail: String,
+    pub order: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checksum: Option<u64>,
 }
@@ -750,6 +775,9 @@ fn evaluate_node_for_target_with_input(
         .unwrap_or_else(|| node.status_detail.clone());
     let asset = input_frame.and_then(|frame| frame.asset.clone());
     let text = input_frame.and_then(|frame| frame.text.clone());
+    let filters = input_frame
+        .map(|frame| frame.filters.clone())
+        .unwrap_or_default();
     CompositorEvaluatedNode {
         node_id: node.id.clone(),
         source_id: node.source_id.clone(),
@@ -759,6 +787,7 @@ fn evaluate_node_for_target_with_input(
         status_detail,
         asset,
         text,
+        filters,
         rect: CompositorRect {
             x: offset_x + source_rect.x * scale_x,
             y: offset_y + source_rect.y * scale_y,
@@ -884,6 +913,26 @@ fn config_value_number(config: &serde_json::Value, key: &str) -> Option<f64> {
         .get(key)
         .and_then(serde_json::Value::as_f64)
         .filter(|value| value.is_finite())
+}
+
+fn filter_config_number(filter: &SceneSourceFilter, key: &str, fallback: f64) -> f64 {
+    filter
+        .config
+        .get(key)
+        .and_then(serde_json::Value::as_f64)
+        .filter(|value| value.is_finite())
+        .unwrap_or(fallback)
+}
+
+fn filter_config_string(filter: &SceneSourceFilter, key: &str, fallback: &str) -> String {
+    filter
+        .config
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(fallback)
+        .to_string()
 }
 
 fn effective_node_transform(node: &CompositorNode, graph: &CompositorGraph) -> CompositorTransform {
@@ -1039,20 +1088,21 @@ fn draw_node(
 }
 
 fn software_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFrame {
-    if node.source_kind == SceneSourceKind::ImageMedia {
-        return image_media_input_frame_for_node(node);
-    }
-    if node.source_kind == SceneSourceKind::Text {
-        return text_input_frame_for_node(node);
-    }
+    let input_frame = if node.source_kind == SceneSourceKind::ImageMedia {
+        image_media_input_frame_for_node(node)
+    } else if node.source_kind == SceneSourceKind::Text {
+        text_input_frame_for_node(node)
+    } else {
+        placeholder_input_frame_for_node(
+            node,
+            node.status.clone(),
+            node.status_detail.clone(),
+            None,
+            None,
+        )
+    };
 
-    placeholder_input_frame_for_node(
-        node,
-        node.status.clone(),
-        node.status_detail.clone(),
-        None,
-        None,
-    )
+    apply_software_filters(node, input_frame)
 }
 
 fn image_media_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFrame {
@@ -1136,6 +1186,7 @@ fn decoded_image_input_frame(
         status_detail: metadata.status_detail.clone(),
         asset: Some(metadata),
         text: None,
+        filters: Vec::new(),
         checksum: decoded.image.checksum,
         pixels: decoded.image.pixels,
     }
@@ -1241,6 +1292,7 @@ fn render_text_source(
         status_detail,
         asset: None,
         text: Some(metadata),
+        filters: Vec::new(),
         checksum,
         pixels,
     })
@@ -1429,9 +1481,333 @@ fn placeholder_input_frame_for_node(
         status_detail,
         asset,
         text,
+        filters: Vec::new(),
         checksum,
         pixels,
     }
+}
+
+fn apply_software_filters(
+    node: &CompositorNode,
+    mut frame: SoftwareCompositorInputFrame,
+) -> SoftwareCompositorInputFrame {
+    let filters = sorted_source_filters(&node.filters);
+    if filters.is_empty() {
+        return frame;
+    }
+
+    let mut metadata = Vec::with_capacity(filters.len());
+    for filter in filters {
+        let result = apply_software_filter(&mut frame, filter);
+        metadata.push(result);
+    }
+    frame.checksum = checksum_pixels(&frame.pixels);
+    frame.filters = metadata;
+    frame
+}
+
+fn sorted_source_filters(filters: &[SceneSourceFilter]) -> Vec<&SceneSourceFilter> {
+    let mut sorted = filters.iter().collect::<Vec<_>>();
+    sorted.sort_by(|left, right| {
+        left.order
+            .cmp(&right.order)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    sorted
+}
+
+fn apply_software_filter(
+    frame: &mut SoftwareCompositorInputFrame,
+    filter: &SceneSourceFilter,
+) -> SoftwareCompositorFilterMetadata {
+    if !filter.enabled {
+        return filter_metadata(
+            filter,
+            SoftwareCompositorFilterStatus::Skipped,
+            "Filter is disabled.".to_string(),
+            Some(frame.checksum),
+        );
+    }
+
+    let result = match filter.kind {
+        SceneSourceFilterKind::ColorCorrection => {
+            apply_color_correction_filter(frame, filter);
+            Ok("Applied color correction.".to_string())
+        }
+        SceneSourceFilterKind::ChromaKey => apply_chroma_key_filter(frame, filter),
+        SceneSourceFilterKind::CropPad => {
+            apply_crop_pad_filter(frame, filter);
+            Ok("Applied crop/pad as source-frame alpha crop.".to_string())
+        }
+        SceneSourceFilterKind::Blur => apply_blur_filter(frame, filter),
+        SceneSourceFilterKind::Sharpen => apply_sharpen_filter(frame, filter),
+        SceneSourceFilterKind::MaskBlend => Err((
+            SoftwareCompositorFilterStatus::Deferred,
+            deferred_filter_detail(&filter.kind).to_string(),
+        )),
+        SceneSourceFilterKind::Lut => Err((
+            SoftwareCompositorFilterStatus::Deferred,
+            deferred_filter_detail(&filter.kind).to_string(),
+        )),
+        SceneSourceFilterKind::AudioGain
+        | SceneSourceFilterKind::NoiseGate
+        | SceneSourceFilterKind::Compressor => Err((
+            SoftwareCompositorFilterStatus::Deferred,
+            deferred_filter_detail(&filter.kind).to_string(),
+        )),
+    };
+
+    match result {
+        Ok(detail) => {
+            frame.checksum = checksum_pixels(&frame.pixels);
+            filter_metadata(
+                filter,
+                SoftwareCompositorFilterStatus::Applied,
+                detail,
+                Some(frame.checksum),
+            )
+        }
+        Err((status, detail)) => filter_metadata(filter, status, detail, Some(frame.checksum)),
+    }
+}
+
+fn filter_metadata(
+    filter: &SceneSourceFilter,
+    status: SoftwareCompositorFilterStatus,
+    status_detail: String,
+    checksum: Option<u64>,
+) -> SoftwareCompositorFilterMetadata {
+    SoftwareCompositorFilterMetadata {
+        id: filter.id.clone(),
+        name: filter.name.clone(),
+        kind: filter.kind.clone(),
+        status,
+        status_detail,
+        order: filter.order,
+        checksum,
+    }
+}
+
+fn deferred_filter_detail(kind: &SceneSourceFilterKind) -> &'static str {
+    match kind {
+        SceneSourceFilterKind::MaskBlend => {
+            "Mask/blend preview rendering is deferred until mask asset decoding is implemented."
+        }
+        SceneSourceFilterKind::Lut => {
+            "LUT preview rendering is deferred until LUT file parsing is implemented."
+        }
+        SceneSourceFilterKind::AudioGain
+        | SceneSourceFilterKind::NoiseGate
+        | SceneSourceFilterKind::Compressor => {
+            "Audio filter execution is deferred until the real audio mixer path is implemented."
+        }
+        _ => "Filter execution is deferred.",
+    }
+}
+
+fn apply_color_correction_filter(
+    frame: &mut SoftwareCompositorInputFrame,
+    filter: &SceneSourceFilter,
+) {
+    let brightness = filter_config_number(filter, "brightness", 0.0).clamp(-1.0, 1.0);
+    let contrast = filter_config_number(filter, "contrast", 1.0).clamp(0.0, 4.0);
+    let saturation = filter_config_number(filter, "saturation", 1.0).clamp(0.0, 4.0);
+    let gamma = filter_config_number(filter, "gamma", 1.0).clamp(0.01, 4.0);
+
+    for pixel in frame.pixels.chunks_exact_mut(4) {
+        if pixel[3] == 0 {
+            continue;
+        }
+        let mut red = color_channel_to_unit(pixel[0]);
+        let mut green = color_channel_to_unit(pixel[1]);
+        let mut blue = color_channel_to_unit(pixel[2]);
+
+        red = ((red - 0.5) * contrast + 0.5 + brightness).clamp(0.0, 1.0);
+        green = ((green - 0.5) * contrast + 0.5 + brightness).clamp(0.0, 1.0);
+        blue = ((blue - 0.5) * contrast + 0.5 + brightness).clamp(0.0, 1.0);
+
+        let luma = red * 0.2126 + green * 0.7152 + blue * 0.0722;
+        red = (luma + (red - luma) * saturation).clamp(0.0, 1.0);
+        green = (luma + (green - luma) * saturation).clamp(0.0, 1.0);
+        blue = (luma + (blue - luma) * saturation).clamp(0.0, 1.0);
+
+        let inverse_gamma = 1.0 / gamma;
+        pixel[0] = unit_to_color_channel(red.powf(inverse_gamma));
+        pixel[1] = unit_to_color_channel(green.powf(inverse_gamma));
+        pixel[2] = unit_to_color_channel(blue.powf(inverse_gamma));
+    }
+}
+
+fn apply_chroma_key_filter(
+    frame: &mut SoftwareCompositorInputFrame,
+    filter: &SceneSourceFilter,
+) -> Result<String, (SoftwareCompositorFilterStatus, String)> {
+    let key_color_value = filter_config_string(filter, "key_color", "#00ff00");
+    let Some(key_color) = parse_text_color(&key_color_value) else {
+        return Err((
+            SoftwareCompositorFilterStatus::Error,
+            format!(
+                "Chroma key was not applied because key color \"{key_color_value}\" is invalid."
+            ),
+        ));
+    };
+    let similarity = filter_config_number(filter, "similarity", 0.25).clamp(0.0, 1.0);
+    let smoothness = filter_config_number(filter, "smoothness", 0.08).clamp(0.0, 1.0);
+    let fade_end = (similarity + smoothness).clamp(similarity, 1.0);
+
+    for pixel in frame.pixels.chunks_exact_mut(4) {
+        if pixel[3] == 0 {
+            continue;
+        }
+        let distance = color_distance_unit(
+            [pixel[0], pixel[1], pixel[2]],
+            [key_color[0], key_color[1], key_color[2]],
+        );
+        let alpha_factor = if distance <= similarity {
+            0.0
+        } else if smoothness <= f64::EPSILON || distance >= fade_end {
+            1.0
+        } else {
+            ((distance - similarity) / smoothness).clamp(0.0, 1.0)
+        };
+        pixel[3] = (f64::from(pixel[3]) * alpha_factor).round() as u8;
+        if pixel[3] == 0 {
+            pixel[0] = 0;
+            pixel[1] = 0;
+            pixel[2] = 0;
+        }
+    }
+
+    Ok(format!(
+        "Applied chroma key for {} with similarity {:.2} and smoothness {:.2}.",
+        normalized_hex_color(key_color),
+        similarity,
+        smoothness
+    ))
+}
+
+fn apply_crop_pad_filter(frame: &mut SoftwareCompositorInputFrame, filter: &SceneSourceFilter) {
+    let top = filter_config_number(filter, "top", 0.0).max(0.0).round() as usize;
+    let right = filter_config_number(filter, "right", 0.0).max(0.0).round() as usize;
+    let bottom = filter_config_number(filter, "bottom", 0.0).max(0.0).round() as usize;
+    let left = filter_config_number(filter, "left", 0.0).max(0.0).round() as usize;
+    let width = frame.width as usize;
+    let height = frame.height as usize;
+
+    for y in 0..height {
+        for x in 0..width {
+            if y < top
+                || y >= height.saturating_sub(bottom)
+                || x < left
+                || x >= width.saturating_sub(right)
+            {
+                let offset = (y * width + x) * 4;
+                frame.pixels[offset] = 0;
+                frame.pixels[offset + 1] = 0;
+                frame.pixels[offset + 2] = 0;
+                frame.pixels[offset + 3] = 0;
+            }
+        }
+    }
+}
+
+fn apply_blur_filter(
+    frame: &mut SoftwareCompositorInputFrame,
+    filter: &SceneSourceFilter,
+) -> Result<String, (SoftwareCompositorFilterStatus, String)> {
+    let radius = filter_config_number(filter, "radius", 4.0)
+        .max(0.0)
+        .round()
+        .min(32.0) as usize;
+    if radius == 0 {
+        return Ok("Blur radius is zero; pixels were unchanged.".to_string());
+    }
+    frame.pixels = box_blur_rgba(
+        &frame.pixels,
+        frame.width as usize,
+        frame.height as usize,
+        radius,
+    );
+    Ok(format!("Applied CPU box blur with radius {radius}."))
+}
+
+fn apply_sharpen_filter(
+    frame: &mut SoftwareCompositorInputFrame,
+    filter: &SceneSourceFilter,
+) -> Result<String, (SoftwareCompositorFilterStatus, String)> {
+    let amount = filter_config_number(filter, "amount", 0.35).clamp(0.0, 5.0);
+    if amount <= f64::EPSILON {
+        return Ok("Sharpen amount is zero; pixels were unchanged.".to_string());
+    }
+    let blurred = box_blur_rgba(
+        &frame.pixels,
+        frame.width as usize,
+        frame.height as usize,
+        1,
+    );
+    for (pixel, blurred_pixel) in frame
+        .pixels
+        .chunks_exact_mut(4)
+        .zip(blurred.chunks_exact(4))
+    {
+        for channel in 0..3 {
+            let original = f64::from(pixel[channel]);
+            let low_pass = f64::from(blurred_pixel[channel]);
+            pixel[channel] = (original + (original - low_pass) * amount)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+        }
+    }
+    Ok(format!("Applied CPU sharpen with amount {:.2}.", amount))
+}
+
+fn box_blur_rgba(pixels: &[u8], width: usize, height: usize, radius: usize) -> Vec<u8> {
+    if radius == 0 || width == 0 || height == 0 {
+        return pixels.to_vec();
+    }
+
+    let mut horizontal = vec![0_u8; pixels.len()];
+    let mut output = vec![0_u8; pixels.len()];
+
+    for y in 0..height {
+        for x in 0..width {
+            let start = x.saturating_sub(radius);
+            let end = (x + radius).min(width - 1);
+            let count = (end - start + 1) as u32;
+            let mut totals = [0_u32; 4];
+            for sample_x in start..=end {
+                let offset = (y * width + sample_x) * 4;
+                for channel in 0..4 {
+                    totals[channel] += u32::from(pixels[offset + channel]);
+                }
+            }
+            let offset = (y * width + x) * 4;
+            for channel in 0..4 {
+                horizontal[offset + channel] = (totals[channel] / count) as u8;
+            }
+        }
+    }
+
+    for y in 0..height {
+        for x in 0..width {
+            let start = y.saturating_sub(radius);
+            let end = (y + radius).min(height - 1);
+            let count = (end - start + 1) as u32;
+            let mut totals = [0_u32; 4];
+            for sample_y in start..=end {
+                let offset = (sample_y * width + x) * 4;
+                for channel in 0..4 {
+                    totals[channel] += u32::from(horizontal[offset + channel]);
+                }
+            }
+            let offset = (y * width + x) * 4;
+            for channel in 0..4 {
+                output[offset + channel] = (totals[channel] / count) as u8;
+            }
+        }
+    }
+
+    output
 }
 
 fn apply_software_input_validation(
@@ -1468,6 +1844,24 @@ fn apply_software_input_validation(
                     validation.warnings.push(format!(
                         "{} text source is using a placeholder: {}",
                         input.source_id, text.status_detail
+                    ));
+                }
+            }
+        }
+        for filter in &input.filters {
+            match filter.status {
+                SoftwareCompositorFilterStatus::Applied
+                | SoftwareCompositorFilterStatus::Skipped => {}
+                SoftwareCompositorFilterStatus::Deferred => {
+                    validation.warnings.push(format!(
+                        "{} filter \"{}\" is deferred in software preview: {}",
+                        input.source_id, filter.name, filter.status_detail
+                    ));
+                }
+                SoftwareCompositorFilterStatus::Error => {
+                    validation.warnings.push(format!(
+                        "{} filter \"{}\" could not run in software preview: {}",
+                        input.source_id, filter.name, filter.status_detail
                     ));
                 }
             }
@@ -1875,6 +2269,21 @@ fn mix_channel(left: u8, right: u8, amount: f64) -> u8 {
     (f64::from(left) + (f64::from(right) - f64::from(left)) * amount)
         .round()
         .clamp(0.0, 255.0) as u8
+}
+
+fn color_channel_to_unit(channel: u8) -> f64 {
+    f64::from(channel) / 255.0
+}
+
+fn unit_to_color_channel(value: f64) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn color_distance_unit(left: [u8; 3], right: [u8; 3]) -> f64 {
+    let red = color_channel_to_unit(left[0]) - color_channel_to_unit(right[0]);
+    let green = color_channel_to_unit(left[1]) - color_channel_to_unit(right[1]);
+    let blue = color_channel_to_unit(left[2]) - color_channel_to_unit(right[2]);
+    ((red * red + green * green + blue * blue) / 3.0).sqrt()
 }
 
 fn stable_source_tint(value: &str) -> u8 {
@@ -2735,6 +3144,333 @@ mod tests {
     }
 
     #[test]
+    fn software_compositor_applies_color_correction_filter() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("gray.png");
+        write_test_image(&path, ImageFormat::Png, [96, 96, 96, 255]);
+
+        let baseline = render_test_image_source(&path.display().to_string(), None);
+        let filtered = render_test_image_source_with_filters(
+            &path.display().to_string(),
+            vec![test_filter(
+                "filter-color",
+                SceneSourceFilterKind::ColorCorrection,
+                10,
+                true,
+                serde_json::json!({
+                    "brightness": 0.25,
+                    "contrast": 1.2,
+                    "saturation": 1.0,
+                    "gamma": 1.0
+                }),
+            )],
+        );
+        let filter = &filtered.input_frames[0].filters[0];
+
+        assert_eq!(filter.status, SoftwareCompositorFilterStatus::Applied);
+        assert_ne!(
+            baseline.input_frames[0].checksum,
+            filtered.input_frames[0].checksum
+        );
+        assert!(
+            input_test_pixel(&filtered.input_frames[0], 0, 0)[0]
+                > input_test_pixel(&baseline.input_frames[0], 0, 0)[0]
+        );
+    }
+
+    #[test]
+    fn software_compositor_applies_chroma_key_filter() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("keyed.png");
+        write_split_image(&path, [0, 255, 0, 255], [255, 0, 0, 255]);
+
+        let filtered = render_test_image_source_with_filters(
+            &path.display().to_string(),
+            vec![test_filter(
+                "filter-key",
+                SceneSourceFilterKind::ChromaKey,
+                10,
+                true,
+                serde_json::json!({
+                    "key_color": "#00ff00",
+                    "similarity": 0.04,
+                    "smoothness": 0.02
+                }),
+            )],
+        );
+
+        assert_eq!(
+            filtered.input_frames[0].filters[0].status,
+            SoftwareCompositorFilterStatus::Applied
+        );
+        assert_eq!(input_test_pixel(&filtered.input_frames[0], 0, 0)[3], 0);
+        assert_eq!(input_test_pixel(&filtered.input_frames[0], 3, 0)[3], 255);
+    }
+
+    #[test]
+    fn software_compositor_reports_chroma_key_filter_errors() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("keyed.png");
+        write_test_image(&path, ImageFormat::Png, [0, 255, 0, 255]);
+
+        let filtered = render_test_image_source_with_filters(
+            &path.display().to_string(),
+            vec![test_filter(
+                "filter-key",
+                SceneSourceFilterKind::ChromaKey,
+                10,
+                true,
+                serde_json::json!({
+                    "key_color": "not-a-color",
+                    "similarity": 0.04,
+                    "smoothness": 0.02
+                }),
+            )],
+        );
+        let filter = &filtered.input_frames[0].filters[0];
+
+        assert_eq!(filter.status, SoftwareCompositorFilterStatus::Error);
+        assert!(filter.status_detail.contains("invalid"));
+        assert!(filtered
+            .frame
+            .validation
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("could not run")));
+    }
+
+    #[test]
+    fn software_compositor_applies_crop_pad_filter_as_alpha_crop() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("solid.png");
+        write_test_image_size(&path, ImageFormat::Png, [255, 0, 0, 255], 4, 4);
+
+        let filtered = render_test_image_source_with_filters(
+            &path.display().to_string(),
+            vec![test_filter(
+                "filter-crop",
+                SceneSourceFilterKind::CropPad,
+                10,
+                true,
+                serde_json::json!({ "top": 1, "right": 0, "bottom": 0, "left": 2 }),
+            )],
+        );
+
+        assert_eq!(
+            filtered.input_frames[0].filters[0].status,
+            SoftwareCompositorFilterStatus::Applied
+        );
+        assert_eq!(input_test_pixel(&filtered.input_frames[0], 0, 2)[3], 0);
+        assert_eq!(input_test_pixel(&filtered.input_frames[0], 3, 2)[3], 255);
+        assert_eq!(input_test_pixel(&filtered.input_frames[0], 3, 0)[3], 0);
+    }
+
+    #[test]
+    fn software_compositor_applies_blur_filter_deterministically() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("checker.png");
+        write_checker_image(&path);
+
+        let baseline = render_test_image_source(&path.display().to_string(), None);
+        let filtered = render_test_image_source_with_filters(
+            &path.display().to_string(),
+            vec![test_filter(
+                "filter-blur",
+                SceneSourceFilterKind::Blur,
+                10,
+                true,
+                serde_json::json!({ "radius": 1 }),
+            )],
+        );
+
+        assert_eq!(
+            filtered.input_frames[0].filters[0].status,
+            SoftwareCompositorFilterStatus::Applied
+        );
+        assert_ne!(
+            baseline.input_frames[0].checksum,
+            filtered.input_frames[0].checksum
+        );
+        assert_ne!(
+            input_test_pixel(&filtered.input_frames[0], 0, 0),
+            [255, 255, 255, 255]
+        );
+    }
+
+    #[test]
+    fn software_compositor_applies_sharpen_filter_deterministically() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("soft.png");
+        write_soft_spot_image(&path);
+
+        let baseline = render_test_image_source(&path.display().to_string(), None);
+        let filtered = render_test_image_source_with_filters(
+            &path.display().to_string(),
+            vec![test_filter(
+                "filter-sharpen",
+                SceneSourceFilterKind::Sharpen,
+                10,
+                true,
+                serde_json::json!({ "amount": 0.8 }),
+            )],
+        );
+
+        assert_eq!(
+            filtered.input_frames[0].filters[0].status,
+            SoftwareCompositorFilterStatus::Applied
+        );
+        assert_ne!(
+            baseline.input_frames[0].checksum,
+            filtered.input_frames[0].checksum
+        );
+    }
+
+    #[test]
+    fn software_compositor_skips_disabled_filters_without_mutating_pixels() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("gray.png");
+        write_test_image(&path, ImageFormat::Png, [96, 96, 96, 255]);
+
+        let baseline = render_test_image_source(&path.display().to_string(), None);
+        let filtered = render_test_image_source_with_filters(
+            &path.display().to_string(),
+            vec![test_filter(
+                "filter-disabled",
+                SceneSourceFilterKind::ColorCorrection,
+                10,
+                false,
+                serde_json::json!({
+                    "brightness": 0.8,
+                    "contrast": 2.0,
+                    "saturation": 2.0,
+                    "gamma": 1.0
+                }),
+            )],
+        );
+
+        assert_eq!(
+            filtered.input_frames[0].filters[0].status,
+            SoftwareCompositorFilterStatus::Skipped
+        );
+        assert_eq!(
+            baseline.input_frames[0].checksum,
+            filtered.input_frames[0].checksum
+        );
+    }
+
+    #[test]
+    fn software_compositor_applies_filters_in_deterministic_order() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("gray.png");
+        write_test_image(&path, ImageFormat::Png, [96, 96, 96, 255]);
+        let gamma = test_filter(
+            "filter-gamma",
+            SceneSourceFilterKind::ColorCorrection,
+            20,
+            true,
+            serde_json::json!({
+                "brightness": 0,
+                "contrast": 1,
+                "saturation": 1,
+                "gamma": 2.0
+            }),
+        );
+        let brightness = test_filter(
+            "filter-brightness",
+            SceneSourceFilterKind::ColorCorrection,
+            10,
+            true,
+            serde_json::json!({
+                "brightness": 0.18,
+                "contrast": 1,
+                "saturation": 1,
+                "gamma": 1
+            }),
+        );
+
+        let reversed = render_test_image_source_with_filters(
+            &path.display().to_string(),
+            vec![gamma.clone(), brightness.clone()],
+        );
+        let ordered = render_test_image_source_with_filters(
+            &path.display().to_string(),
+            vec![brightness, gamma],
+        );
+
+        assert_eq!(
+            reversed.input_frames[0].checksum,
+            ordered.input_frames[0].checksum
+        );
+        assert_eq!(reversed.input_frames[0].filters[0].id, "filter-brightness");
+        assert_eq!(reversed.input_frames[0].filters[1].id, "filter-gamma");
+    }
+
+    #[test]
+    fn software_compositor_reports_deferred_filters_without_mutating_pixels() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("solid.png");
+        write_test_image(&path, ImageFormat::Png, [255, 0, 0, 255]);
+
+        let baseline = render_test_image_source(&path.display().to_string(), None);
+        let filtered = render_test_image_source_with_filters(
+            &path.display().to_string(),
+            vec![test_filter(
+                "filter-mask",
+                SceneSourceFilterKind::MaskBlend,
+                10,
+                true,
+                serde_json::json!({ "mask_uri": null, "blend_mode": "normal" }),
+            )],
+        );
+        let filter = &filtered.input_frames[0].filters[0];
+
+        assert_eq!(filter.status, SoftwareCompositorFilterStatus::Deferred);
+        assert_eq!(
+            baseline.input_frames[0].checksum,
+            filtered.input_frames[0].checksum
+        );
+        assert!(filtered
+            .frame
+            .validation
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("deferred")));
+    }
+
+    #[test]
+    fn software_compositor_applies_filters_to_text_source_pixels() {
+        let baseline = render_test_text_source("VAEX", "Inter", "#808080", "center", 42.0);
+        let filtered = render_test_text_source_with_filters(
+            "VAEX",
+            vec![test_filter(
+                "filter-color",
+                SceneSourceFilterKind::ColorCorrection,
+                10,
+                true,
+                serde_json::json!({
+                    "brightness": 0.2,
+                    "contrast": 1.0,
+                    "saturation": 1.0,
+                    "gamma": 1.0
+                }),
+            )],
+        );
+
+        assert_eq!(
+            filtered.input_frames[0].filters[0].status,
+            SoftwareCompositorFilterStatus::Applied
+        );
+        assert_ne!(
+            baseline.input_frames[0].checksum,
+            filtered.input_frames[0].checksum
+        );
+        assert_eq!(
+            filtered.input_frames[0].text.as_ref().unwrap().status,
+            SoftwareCompositorTextStatus::Rendered
+        );
+    }
+
+    #[test]
     fn software_compositor_uses_decoded_image_dimensions_for_bounds_modes() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("tall.png");
@@ -2924,11 +3660,47 @@ mod tests {
             .unwrap();
     }
 
+    fn write_split_image(path: &Path, left: [u8; 4], right: [u8; 4]) {
+        let mut image = RgbaImage::new(4, 2);
+        for y in 0..2 {
+            for x in 0..4 {
+                image.put_pixel(x, y, Rgba(if x < 2 { left } else { right }));
+            }
+        }
+        image.save_with_format(path, ImageFormat::Png).unwrap();
+    }
+
+    fn write_checker_image(path: &Path) {
+        let mut image = RgbaImage::new(5, 5);
+        for y in 0..5 {
+            for x in 0..5 {
+                let value = if (x + y) % 2 == 0 { 255 } else { 0 };
+                image.put_pixel(x, y, Rgba([value, value, value, 255]));
+            }
+        }
+        image.save_with_format(path, ImageFormat::Png).unwrap();
+    }
+
+    fn write_soft_spot_image(path: &Path) {
+        let mut image = RgbaImage::from_pixel(5, 5, Rgba([96, 96, 96, 255]));
+        image.put_pixel(2, 2, Rgba([168, 168, 168, 255]));
+        image.save_with_format(path, ImageFormat::Png).unwrap();
+    }
+
     fn render_test_image_source(
         asset_uri: &str,
         media_type: Option<&str>,
     ) -> SoftwareCompositorRenderResult {
         render_test_scene(test_image_scene(asset_uri, media_type))
+    }
+
+    fn render_test_image_source_with_filters(
+        asset_uri: &str,
+        filters: Vec<SceneSourceFilter>,
+    ) -> SoftwareCompositorRenderResult {
+        let mut scene = test_image_scene(asset_uri, None);
+        scene.sources[0].filters = filters;
+        render_test_scene(scene)
     }
 
     fn render_test_image_source_with_bounds(
@@ -3033,6 +3805,69 @@ mod tests {
         )
     }
 
+    fn render_test_text_source_with_filters(
+        text: &str,
+        filters: Vec<SceneSourceFilter>,
+    ) -> SoftwareCompositorRenderResult {
+        let scene = Scene {
+            id: "scene-text".to_string(),
+            name: "Text Scene".to_string(),
+            canvas: crate::SceneCanvas {
+                width: 160,
+                height: 80,
+                background_color: "#050711".to_string(),
+            },
+            sources: vec![SceneSource {
+                id: "source-text".to_string(),
+                name: "Text".to_string(),
+                kind: SceneSourceKind::Text,
+                position: ScenePoint { x: 0.0, y: 0.0 },
+                size: SceneSize {
+                    width: 160.0,
+                    height: 80.0,
+                },
+                crop: SceneCrop {
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                },
+                rotation_degrees: 0.0,
+                opacity: 1.0,
+                visible: true,
+                locked: false,
+                z_index: 10,
+                bounds_mode: SceneSourceBoundsMode::Stretch,
+                filters,
+                config: serde_json::json!({
+                    "text": text,
+                    "font_family": "Inter",
+                    "font_size": 42,
+                    "color": "#808080",
+                    "align": "center"
+                }),
+            }],
+        };
+        render_test_scene_with_target(scene, 160, 80)
+    }
+
+    fn test_filter(
+        id: &str,
+        kind: SceneSourceFilterKind,
+        order: i32,
+        enabled: bool,
+        config: serde_json::Value,
+    ) -> SceneSourceFilter {
+        SceneSourceFilter {
+            id: id.to_string(),
+            name: id.replace("filter-", "").replace('-', " "),
+            kind,
+            enabled,
+            order,
+            config,
+        }
+    }
+
     fn render_test_scene(scene: Scene) -> SoftwareCompositorRenderResult {
         render_test_scene_with_target(scene, 8, 8)
     }
@@ -3063,6 +3898,16 @@ mod tests {
             .chunks_exact(4)
             .filter(|pixel| pixel[3] > 0)
             .count()
+    }
+
+    fn input_test_pixel(input: &SoftwareCompositorInputFrame, x: usize, y: usize) -> [u8; 4] {
+        let offset = (y * input.width as usize + x) * 4;
+        [
+            input.pixels[offset],
+            input.pixels[offset + 1],
+            input.pixels[offset + 2],
+            input.pixels[offset + 3],
+        ]
     }
 
     fn non_background_bounds(

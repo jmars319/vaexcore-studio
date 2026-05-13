@@ -33,7 +33,8 @@ pub use compositor::{
     CompositorRenderPlan, CompositorRenderTarget, CompositorRenderTargetKind,
     CompositorRenderedFrame, CompositorRenderedTarget, CompositorRendererKind, CompositorScaleMode,
     CompositorTransform, CompositorValidation, SoftwareCompositorAssetMetadata,
-    SoftwareCompositorAssetStatus, SoftwareCompositorFrame, SoftwareCompositorInputFrame,
+    SoftwareCompositorAssetStatus, SoftwareCompositorFilterMetadata,
+    SoftwareCompositorFilterStatus, SoftwareCompositorFrame, SoftwareCompositorInputFrame,
     SoftwareCompositorRenderResult, SoftwareCompositorTextMetadata, SoftwareCompositorTextStatus,
 };
 pub use events::{StudioEvent, StudioEventKind};
