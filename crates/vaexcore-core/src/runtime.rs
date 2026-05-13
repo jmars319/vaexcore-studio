@@ -138,6 +138,22 @@ pub struct DesignerReadinessReportItem {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SceneOutputReadyDiagnostic {
+    pub version: u32,
+    pub ready: bool,
+    pub state: DesignerRuntimeReadinessState,
+    pub active_scene_id: String,
+    pub active_scene_name: String,
+    pub program_preview_frame_ready: bool,
+    pub compositor_render_plan_ready: bool,
+    pub output_preflight_ready: bool,
+    pub media_pipeline_ready: bool,
+    pub detail: String,
+    pub blockers: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DesignerReadinessReport {
     pub version: u32,
     pub collection_id: String,
@@ -146,6 +162,7 @@ pub struct DesignerReadinessReport {
     pub generated_at: chrono::DateTime<chrono::Utc>,
     pub overall: DesignerRuntimeReadinessState,
     pub items: Vec<DesignerReadinessReportItem>,
+    pub output_ready: SceneOutputReadyDiagnostic,
     pub windows_handoff: Vec<String>,
 }
 

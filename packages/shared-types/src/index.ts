@@ -48,12 +48,7 @@ export type SceneSourceFilterKind =
   | "noise_gate"
   | "compressor";
 
-export type SceneSourceBoundsMode =
-  | "stretch"
-  | "fit"
-  | "fill"
-  | "center"
-  | "original_size";
+export type SceneSourceBoundsMode = "stretch" | "fit" | "fill" | "center" | "original_size";
 
 export interface SceneSourceFilter {
   id: string;
@@ -64,11 +59,7 @@ export interface SceneSourceFilter {
   config: Record<string, unknown>;
 }
 
-export type SceneSourceAvailabilityState =
-  | "available"
-  | "permission_required"
-  | "unavailable"
-  | "unknown";
+export type SceneSourceAvailabilityState = "available" | "permission_required" | "unavailable" | "unknown";
 
 export interface SceneSourceAvailability {
   state: SceneSourceAvailabilityState;
@@ -160,10 +151,7 @@ export type SceneSourceConfig =
   | TextSceneSourceConfig
   | GroupSceneSourceConfig;
 
-export interface SceneSourceBase<
-  Kind extends SceneSourceKind,
-  Config extends SceneSourceConfig,
-> {
+export interface SceneSourceBase<Kind extends SceneSourceKind, Config extends SceneSourceConfig> {
   id: string;
   name: string;
   kind: Kind;
@@ -295,9 +283,7 @@ export interface SceneCollectionImportResult {
   collection: SceneCollection;
 }
 
-export type SceneCollectionBundleInput = Partial<
-  Omit<SceneCollectionBundle, "collection">
-> & {
+export type SceneCollectionBundleInput = Partial<Omit<SceneCollectionBundle, "collection">> & {
   collection?: Partial<SceneCollection> | null;
 };
 
@@ -313,12 +299,7 @@ export interface SceneValidationResult {
 
 export type CompositorNodeRole = "video" | "audio" | "overlay" | "text" | "group";
 
-export type CompositorNodeStatus =
-  | "ready"
-  | "placeholder"
-  | "permission_required"
-  | "unavailable"
-  | "hidden";
+export type CompositorNodeStatus = "ready" | "placeholder" | "permission_required" | "unavailable" | "hidden";
 
 export type CompositorBlendMode = "normal";
 
@@ -368,11 +349,7 @@ export interface CompositorGraph {
 
 export type CompositorRendererKind = "contract" | "software" | "gpu";
 
-export type CompositorRenderTargetKind =
-  | "preview"
-  | "program"
-  | "recording"
-  | "stream";
+export type CompositorRenderTargetKind = "preview" | "program" | "recording" | "stream";
 
 export type CompositorFrameFormat = "rgba8" | "bgra8" | "nv12";
 
@@ -483,6 +460,10 @@ export interface StreamingTargetContract {
 
 export interface OutputPreflightValidation {
   ready: boolean;
+  dry_run_render_targets_ready: boolean;
+  recording_path_ready: boolean;
+  encoder_preferences_ready: boolean;
+  stream_destinations_ready: boolean;
   warnings: string[];
   errors: string[];
 }
@@ -578,11 +559,7 @@ export interface SoftwareCompositorAssetMetadata {
   restart_on_scene_activate?: boolean | null;
 }
 
-export type SoftwareCompositorTextStatus =
-  | "rendered"
-  | "font_fallback"
-  | "empty"
-  | "invalid_color";
+export type SoftwareCompositorTextStatus = "rendered" | "font_fallback" | "empty" | "invalid_color";
 
 export interface SoftwareCompositorTextMetadata {
   status: SoftwareCompositorTextStatus;
@@ -615,13 +592,7 @@ export type SoftwareCompositorBrowserStatus =
   | "navigation_failed"
   | "capture_failed";
 
-export type BrowserSourceLifecycleState =
-  | "idle"
-  | "starting"
-  | "active"
-  | "reloading"
-  | "error"
-  | "stopped";
+export type BrowserSourceLifecycleState = "idle" | "starting" | "active" | "reloading" | "error" | "stopped";
 
 export interface SoftwareCompositorBrowserMetadata {
   status: SoftwareCompositorBrowserStatus;
@@ -671,11 +642,7 @@ export interface SoftwareCompositorCaptureMetadata {
   provider_name: string;
 }
 
-export type SoftwareCompositorFilterStatus =
-  | "applied"
-  | "skipped"
-  | "deferred"
-  | "error";
+export type SoftwareCompositorFilterStatus = "applied" | "skipped" | "deferred" | "error";
 
 export interface SoftwareCompositorFilterMetadata {
   id: string;
@@ -753,25 +720,11 @@ export interface SceneRuntimeCommand {
   payload: SceneRuntimeCommandPayload;
 }
 
-export type SceneRuntimeStatus =
-  | "idle"
-  | "activating"
-  | "active"
-  | "transitioning"
-  | "error";
+export type SceneRuntimeStatus = "idle" | "activating" | "active" | "transitioning" | "error";
 
-export type DesignerRuntimeSessionState =
-  | "idle"
-  | "running"
-  | "paused"
-  | "degraded"
-  | "blocked";
+export type DesignerRuntimeSessionState = "idle" | "running" | "paused" | "degraded" | "blocked";
 
-export type DesignerRuntimeReadinessState =
-  | "ready"
-  | "degraded"
-  | "blocked"
-  | "not_applicable";
+export type DesignerRuntimeReadinessState = "ready" | "degraded" | "blocked" | "not_applicable";
 
 export interface DesignerRuntimeSourceSession {
   source_id: string;
@@ -827,6 +780,21 @@ export interface DesignerReadinessReportItem {
   detail: string;
 }
 
+export interface SceneOutputReadyDiagnostic {
+  version: number;
+  ready: boolean;
+  state: DesignerRuntimeReadinessState;
+  active_scene_id: string;
+  active_scene_name: string;
+  program_preview_frame_ready: boolean;
+  compositor_render_plan_ready: boolean;
+  output_preflight_ready: boolean;
+  media_pipeline_ready: boolean;
+  detail: string;
+  blockers: string[];
+  warnings: string[];
+}
+
 export interface DesignerReadinessReport {
   version: number;
   collection_id: string;
@@ -835,6 +803,7 @@ export interface DesignerReadinessReport {
   generated_at: string;
   overall: DesignerRuntimeReadinessState;
   items: DesignerReadinessReportItem[];
+  output_ready: SceneOutputReadyDiagnostic;
   windows_handoff: string[];
 }
 
@@ -1462,12 +1431,7 @@ export interface LocalRuntimeDependency {
   detail: string;
 }
 
-export type CaptureSourceKind =
-  | "display"
-  | "window"
-  | "camera"
-  | "microphone"
-  | "system_audio";
+export type CaptureSourceKind = "display" | "window" | "camera" | "microphone" | "system_audio";
 
 export interface CaptureSourceSelection {
   id: string;
@@ -1493,24 +1457,11 @@ export type CaptureFrameMediaKind = "video" | "audio";
 
 export type CaptureFrameFormat = "rgba8" | "bgra8" | "nv12" | "pcm_f32" | "pcm_s16";
 
-export type CaptureFrameTransport =
-  | "unavailable"
-  | "shared_memory"
-  | "texture_handle"
-  | "external_process";
+export type CaptureFrameTransport = "unavailable" | "shared_memory" | "texture_handle" | "external_process";
 
-export type CaptureFrameBindingStatus =
-  | "ready"
-  | "placeholder"
-  | "permission_required"
-  | "unavailable";
+export type CaptureFrameBindingStatus = "ready" | "placeholder" | "permission_required" | "unavailable";
 
-export type CaptureProviderLifecycleState =
-  | "idle"
-  | "starting"
-  | "running"
-  | "stopping"
-  | "error";
+export type CaptureProviderLifecycleState = "idle" | "starting" | "running" | "stopping" | "error";
 
 export interface CaptureFrameBinding {
   scene_source_id: string;
@@ -1600,11 +1551,7 @@ export interface CaptureFrameValidation {
 
 export type AudioMixBusKind = "master" | "monitor" | "recording" | "stream";
 
-export type AudioMixSourceStatus =
-  | "ready"
-  | "placeholder"
-  | "permission_required"
-  | "unavailable";
+export type AudioMixSourceStatus = "ready" | "placeholder" | "permission_required" | "unavailable";
 
 export type AudioGraphInputMode = "live" | "simulated" | "silent";
 
@@ -1734,12 +1681,7 @@ export interface AudioGraphRuntimeSnapshot {
   validation: AudioGraphRuntimeValidation;
 }
 
-export type PreflightStatus =
-  | "ready"
-  | "warning"
-  | "blocked"
-  | "unknown"
-  | "not_required";
+export type PreflightStatus = "ready" | "warning" | "blocked" | "unknown" | "not_required";
 
 export interface PreflightCheck {
   id: string;
@@ -1773,10 +1715,7 @@ export type CreatedProfile =
   | { kind: "recording_profile"; value: MediaProfile }
   | { kind: "stream_destination"; value: StreamDestination };
 
-export type PipelineIntent =
-  | "recording"
-  | "stream"
-  | "recording_and_stream";
+export type PipelineIntent = "recording" | "stream" | "recording_and_stream";
 
 export interface MediaPipelineConfig {
   version: number;
@@ -1887,26 +1826,18 @@ function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function defaultAvailability(
-  state: SceneSourceAvailabilityState,
-  detail: string,
-): SceneSourceAvailability {
+function defaultAvailability(state: SceneSourceAvailabilityState, detail: string): SceneSourceAvailability {
   return { state, detail };
 }
 
-export function defaultSceneSourceConfig(
-  kind: SceneSourceKind,
-): SceneSourceConfig {
+export function defaultSceneSourceConfig(kind: SceneSourceKind): SceneSourceConfig {
   switch (kind) {
     case "display":
       return {
         display_id: null,
         resolution: { width: 1920, height: 1080 },
         capture_cursor: true,
-        availability: defaultAvailability(
-          "permission_required",
-          "Screen Recording permission has not been verified.",
-        ),
+        availability: defaultAvailability("permission_required", "Screen Recording permission has not been verified."),
       };
     case "window":
       return {
@@ -1914,20 +1845,14 @@ export function defaultSceneSourceConfig(
         application_name: null,
         title: null,
         resolution: null,
-        availability: defaultAvailability(
-          "unknown",
-          "Window inventory has not been loaded.",
-        ),
+        availability: defaultAvailability("unknown", "Window inventory has not been loaded."),
       };
     case "camera":
       return {
         device_id: null,
         resolution: { width: 1280, height: 720 },
         framerate: 30,
-        availability: defaultAvailability(
-          "permission_required",
-          "Camera permission has not been verified.",
-        ),
+        availability: defaultAvailability("permission_required", "Camera permission has not been verified."),
       };
     case "audio_meter":
       return {
@@ -1939,10 +1864,7 @@ export function defaultSceneSourceConfig(
         monitor_enabled: false,
         meter_enabled: true,
         sync_offset_ms: 0,
-        availability: defaultAvailability(
-          "permission_required",
-          "Microphone permission has not been verified.",
-        ),
+        availability: defaultAvailability("permission_required", "Microphone permission has not been verified."),
       };
     case "image_media":
       return {
@@ -1953,10 +1875,7 @@ export function defaultSceneSourceConfig(
         timeline_position_ms: 0,
         playback_rate: 1,
         restart_on_scene_activate: true,
-        availability: defaultAvailability(
-          "unavailable",
-          "No local media asset has been selected.",
-        ),
+        availability: defaultAvailability("unavailable", "No local media asset has been selected."),
       };
     case "browser_overlay":
       return {
@@ -1965,10 +1884,7 @@ export function defaultSceneSourceConfig(
         custom_css: null,
         refresh_interval_ms: 1000,
         reload_token: 0,
-        availability: defaultAvailability(
-          "unavailable",
-          "No browser overlay URL has been configured.",
-        ),
+        availability: defaultAvailability("unavailable", "No browser overlay URL has been configured."),
       };
     case "text":
       return {
@@ -1994,10 +1910,7 @@ export function defaultSceneSourceConfig(
   }
 }
 
-export function createDefaultSceneSource(
-  kind: SceneSourceKind,
-  defaults: SceneSourceDefaults = {},
-): SceneSource {
+export function createDefaultSceneSource(kind: SceneSourceKind, defaults: SceneSourceDefaults = {}): SceneSource {
   const config = {
     ...(defaultSceneSourceConfig(kind) as object),
     ...((defaults.config ?? {}) as object),
@@ -2086,48 +1999,43 @@ export function createDefaultSceneCollection(now = new Date().toISOString()): Sc
   };
 }
 
-export function normalizeSceneCollection(
-  collection: Partial<SceneCollection> | null | undefined,
-): SceneCollection {
+export function normalizeSceneCollection(collection: Partial<SceneCollection> | null | undefined): SceneCollection {
   if (!collection) {
     return createDefaultSceneCollection();
   }
 
   const fallback = createDefaultSceneCollection(collection.updated_at);
-  const scenes = (collection.scenes?.length ? collection.scenes : fallback.scenes).map(
-    (scene, sceneIndex) => ({
-      id: scene.id || `scene-${sceneIndex + 1}`,
-      name: scene.name || `Scene ${sceneIndex + 1}`,
-      canvas: {
-        ...defaultSceneCanvas,
-        ...scene.canvas,
-      },
-      sources: (scene.sources ?? []).map((source, sourceIndex) =>
-        createDefaultSceneSource(source.kind, {
-          ...source,
-          id: source.id || `source-${sceneIndex + 1}-${sourceIndex + 1}`,
-          name: source.name || sceneSourceKindLabels[source.kind],
-          config: source.config,
-        }),
-      ),
-    }),
-  );
+  const scenes = (collection.scenes?.length ? collection.scenes : fallback.scenes).map((scene, sceneIndex) => ({
+    id: scene.id || `scene-${sceneIndex + 1}`,
+    name: scene.name || `Scene ${sceneIndex + 1}`,
+    canvas: {
+      ...defaultSceneCanvas,
+      ...scene.canvas,
+    },
+    sources: (scene.sources ?? []).map((source, sourceIndex) =>
+      createDefaultSceneSource(source.kind, {
+        ...source,
+        id: source.id || `source-${sceneIndex + 1}-${sourceIndex + 1}`,
+        name: source.name || sceneSourceKindLabels[source.kind],
+        config: source.config,
+      }),
+    ),
+  }));
 
   const activeSceneId =
     collection.active_scene_id && scenes.some((scene) => scene.id === collection.active_scene_id)
       ? collection.active_scene_id
       : scenes[0].id;
-  const transitions = (collection.transitions?.length
-    ? collection.transitions
-    : fallback.transitions
-  ).map((transition, transitionIndex) => ({
-    id: transition.id || `transition-${transitionIndex + 1}`,
-    name: transition.name || `Transition ${transitionIndex + 1}`,
-    kind: transition.kind || "fade",
-    duration_ms: transition.duration_ms ?? 300,
-    easing: transition.easing || "ease_in_out",
-    config: transition.config ?? {},
-  })) satisfies SceneTransition[];
+  const transitions = (collection.transitions?.length ? collection.transitions : fallback.transitions).map(
+    (transition, transitionIndex) => ({
+      id: transition.id || `transition-${transitionIndex + 1}`,
+      name: transition.name || `Transition ${transitionIndex + 1}`,
+      kind: transition.kind || "fade",
+      duration_ms: transition.duration_ms ?? 300,
+      easing: transition.easing || "ease_in_out",
+      config: transition.config ?? {},
+    }),
+  ) satisfies SceneTransition[];
   const activeTransitionId =
     collection.active_transition_id &&
     transitions.some((transition) => transition.id === collection.active_transition_id)
@@ -2175,16 +2083,13 @@ export function buildSceneTransitionPreviewPlan(
   framerate = 60,
 ): SceneTransitionPreviewPlan {
   const fallbackScene =
-    collection.scenes.find((scene) => scene.id === collection.active_scene_id) ??
-    collection.scenes[0];
-  const fromScene =
-    collection.scenes.find((scene) => scene.id === fromSceneId) ?? fallbackScene;
-  const toScene =
-    collection.scenes.find((scene) => scene.id === toSceneId) ?? fallbackScene;
+    collection.scenes.find((scene) => scene.id === collection.active_scene_id) ?? collection.scenes[0];
+  const fromScene = collection.scenes.find((scene) => scene.id === fromSceneId) ?? fallbackScene;
+  const toScene = collection.scenes.find((scene) => scene.id === toSceneId) ?? fallbackScene;
   const transition =
-    collection.transitions.find(
-      (item) => item.id === collection.active_transition_id,
-    ) ?? collection.transitions[0] ?? defaultSceneTransitions[0];
+    collection.transitions.find((item) => item.id === collection.active_transition_id) ??
+    collection.transitions[0] ??
+    defaultSceneTransitions[0];
   const frameCount = transitionFrameCount(transition.duration_ms, framerate);
   const plan: SceneTransitionPreviewPlan = {
     version: 1,
@@ -2207,9 +2112,7 @@ export function buildSceneTransitionPreviewPlan(
   return plan;
 }
 
-export function validateSceneTransitionPreviewPlan(
-  plan: SceneTransitionPreviewPlan,
-): SceneTransitionPreviewValidation {
+export function validateSceneTransitionPreviewPlan(plan: SceneTransitionPreviewPlan): SceneTransitionPreviewValidation {
   const warnings: string[] = [];
   const errors: string[] = [];
 
@@ -2264,33 +2167,14 @@ export function buildSceneTransitionPreviewFrame(
   height = 360,
 ): SceneTransitionPreviewFrame {
   const safeFrameCount = Math.max(1, plan.frame_count);
-  const clampedFrameIndex = Math.min(
-    safeFrameCount - 1,
-    Math.max(0, Math.round(frameIndex)),
-  );
-  const linearProgress =
-    safeFrameCount <= 1 ? 1 : clampedFrameIndex / (safeFrameCount - 1);
-  const easedProgress = transitionEasedProgress(
-    linearProgress,
-    plan.transition.easing,
-  );
+  const clampedFrameIndex = Math.min(safeFrameCount - 1, Math.max(0, Math.round(frameIndex)));
+  const linearProgress = safeFrameCount <= 1 ? 1 : clampedFrameIndex / (safeFrameCount - 1);
+  const easedProgress = transitionEasedProgress(linearProgress, plan.transition.easing);
   const elapsedMs =
-    plan.framerate <= 0
-      ? 0
-      : Math.min(
-          plan.duration_ms,
-          Math.floor((clampedFrameIndex * 1000) / plan.framerate),
-        );
+    plan.framerate <= 0 ? 0 : Math.min(plan.duration_ms, Math.floor((clampedFrameIndex * 1000) / plan.framerate));
   const frameWidth = Math.max(1, Math.round(width));
   const frameHeight = Math.max(1, Math.round(height));
-  const layers = transitionPreviewLayers(
-    plan,
-    linearProgress,
-    easedProgress,
-    elapsedMs,
-    frameWidth,
-    frameHeight,
-  );
+  const layers = transitionPreviewLayers(plan, linearProgress, easedProgress, elapsedMs, frameWidth, frameHeight);
   const validation = validateSceneTransitionPreviewPlan(plan);
   const checksum = transitionPreviewChecksum({
     transition_id: plan.transition.id,
@@ -2330,9 +2214,9 @@ function transitionSampleFrames(
   frameCount: number,
   framerate: number,
 ): SceneTransitionPreviewSample[] {
-  const indices = [
-    ...new Set([0, Math.floor(frameCount / 2), Math.max(0, frameCount - 1)]),
-  ].sort((left, right) => left - right);
+  const indices = [...new Set([0, Math.floor(frameCount / 2), Math.max(0, frameCount - 1)])].sort(
+    (left, right) => left - right,
+  );
   return indices.map((frameIndex) => {
     const linearProgress = frameCount <= 1 ? 1 : frameIndex / (frameCount - 1);
     return {
@@ -2344,10 +2228,7 @@ function transitionSampleFrames(
   });
 }
 
-function transitionEasedProgress(
-  progress: number,
-  easing: SceneTransitionEasing,
-): number {
+function transitionEasedProgress(progress: number, easing: SceneTransitionEasing): number {
   const value = Math.min(1, Math.max(0, progress));
   switch (easing) {
     case "linear":
@@ -2357,9 +2238,7 @@ function transitionEasedProgress(
     case "ease_out":
       return 1 - (1 - value) * (1 - value);
     case "ease_in_out":
-      return value < 0.5
-        ? 2 * value * value
-        : 1 - Math.pow(-2 * value + 2, 2) / 2;
+      return value < 0.5 ? 2 * value * value : 1 - Math.pow(-2 * value + 2, 2) / 2;
   }
 }
 
@@ -2382,8 +2261,16 @@ function transitionPreviewLayers(
       ];
     case "fade":
       return [
-        { ...baseFrom, visible: true, opacity: roundPreviewNumber(1 - easedProgress) },
-        { ...baseTo, visible: true, opacity: roundPreviewNumber(easedProgress) },
+        {
+          ...baseFrom,
+          visible: true,
+          opacity: roundPreviewNumber(1 - easedProgress),
+        },
+        {
+          ...baseTo,
+          visible: true,
+          opacity: roundPreviewNumber(easedProgress),
+        },
       ];
     case "swipe": {
       const direction = String(plan.transition.config.direction ?? "left");
@@ -2404,9 +2291,7 @@ function transitionPreviewLayers(
       ];
     }
     case "stinger": {
-      const triggerMs = Number(
-        plan.transition.config.trigger_time_ms ?? Math.floor(plan.duration_ms / 2),
-      );
+      const triggerMs = Number(plan.transition.config.trigger_time_ms ?? Math.floor(plan.duration_ms / 2));
       const triggered = elapsedMs >= Math.max(0, triggerMs);
       const assetUri = String(plan.transition.config.asset_uri ?? "").trim();
       return [
@@ -2429,11 +2314,7 @@ function transitionPreviewLayers(
   }
 }
 
-function transitionPreviewLayer(
-  role: "from" | "to",
-  sceneId: string,
-  sceneName: string,
-): SceneTransitionPreviewLayer {
+function transitionPreviewLayer(role: "from" | "to", sceneId: string, sceneName: string): SceneTransitionPreviewLayer {
   return {
     role,
     scene_id: sceneId,
@@ -2522,10 +2403,7 @@ export function bindSceneCollectionCaptureInventory(
   };
 }
 
-function bindSceneSourceCaptureInventory(
-  source: SceneSource,
-  inventory: CaptureSourceInventory,
-): SceneSource {
+function bindSceneSourceCaptureInventory(source: SceneSource, inventory: CaptureSourceInventory): SceneSource {
   switch (source.kind) {
     case "display":
       return bindCaptureCandidate(source, inventory, ["display"], "display_id", "display");
@@ -2534,13 +2412,7 @@ function bindSceneSourceCaptureInventory(
     case "camera":
       return bindCaptureCandidate(source, inventory, ["camera"], "device_id", "camera");
     case "audio_meter":
-      return bindCaptureCandidate(
-        source,
-        inventory,
-        ["microphone", "system_audio"],
-        "device_id",
-        "audio device",
-      );
+      return bindCaptureCandidate(source, inventory, ["microphone", "system_audio"], "device_id", "audio device");
     default:
       return source;
   }
@@ -2555,12 +2427,8 @@ function bindCaptureCandidate<Source extends SceneSource>(
 ): Source {
   const config = source.config as unknown as Record<string, unknown>;
   const configuredId = typeof config[configKey] === "string" ? String(config[configKey]) : "";
-  const candidates = inventory.candidates.filter((candidate) =>
-    candidateKinds.includes(candidate.kind),
-  );
-  const candidate = configuredId
-    ? candidates.find((item) => item.id === configuredId)
-    : undefined;
+  const candidates = inventory.candidates.filter((candidate) => candidateKinds.includes(candidate.kind));
+  const candidate = configuredId ? candidates.find((item) => item.id === configuredId) : undefined;
   const availability = candidate
     ? {
         state: candidate.available ? "available" : "unavailable",
@@ -2604,9 +2472,7 @@ export function buildCaptureFramePlan(scene: Scene): CaptureFramePlan {
   return plan;
 }
 
-export function validateCaptureFramePlan(
-  plan: CaptureFramePlan,
-): CaptureFrameValidation {
+export function validateCaptureFramePlan(plan: CaptureFramePlan): CaptureFrameValidation {
   const warnings: string[] = [];
   const errors: string[] = [];
 
@@ -2636,32 +2502,18 @@ export function validateCaptureFramePlan(
     if (binding.media_kind === "video") {
       validateNullablePositiveNumber(binding.width, `${binding.scene_source_id}.width`, errors);
       validateNullablePositiveNumber(binding.height, `${binding.scene_source_id}.height`, errors);
-      validateNullablePositiveNumber(
-        binding.framerate,
-        `${binding.scene_source_id}.framerate`,
-        errors,
-      );
+      validateNullablePositiveNumber(binding.framerate, `${binding.scene_source_id}.framerate`, errors);
     } else {
-      validateNullablePositiveNumber(
-        binding.sample_rate,
-        `${binding.scene_source_id}.sample_rate`,
-        errors,
-      );
+      validateNullablePositiveNumber(binding.sample_rate, `${binding.scene_source_id}.sample_rate`, errors);
       validateNullablePositiveNumber(binding.channels, `${binding.scene_source_id}.channels`, errors);
     }
 
     if (binding.status === "placeholder") {
-      warnings.push(
-        `${binding.scene_source_name} is waiting for capture assignment: ${binding.status_detail}`,
-      );
+      warnings.push(`${binding.scene_source_name} is waiting for capture assignment: ${binding.status_detail}`);
     } else if (binding.status === "permission_required") {
-      warnings.push(
-        `${binding.scene_source_name} requires capture permission: ${binding.status_detail}`,
-      );
+      warnings.push(`${binding.scene_source_name} requires capture permission: ${binding.status_detail}`);
     } else if (binding.status === "unavailable") {
-      warnings.push(
-        `${binding.scene_source_name} capture is unavailable: ${binding.status_detail}`,
-      );
+      warnings.push(`${binding.scene_source_name} capture is unavailable: ${binding.status_detail}`);
     }
   });
 
@@ -2672,13 +2524,9 @@ export function validateCaptureFramePlan(
   };
 }
 
-export function buildCaptureProviderRuntimeSnapshot(
-  scene: Scene,
-): CaptureProviderRuntimeSnapshot {
+export function buildCaptureProviderRuntimeSnapshot(scene: Scene): CaptureProviderRuntimeSnapshot {
   const framePlan = buildCaptureFramePlan(scene);
-  const providers = framePlan.bindings.map((binding) =>
-    captureProviderStatusFromBinding(binding),
-  );
+  const providers = framePlan.bindings.map((binding) => captureProviderStatusFromBinding(binding));
   const snapshot: CaptureProviderRuntimeSnapshot = {
     version: 1,
     scene_id: scene.id,
@@ -2731,27 +2579,13 @@ export function validateCaptureProviderRuntimeSnapshot(
     if (provider.media_kind === "video") {
       validateNullablePositiveNumber(provider.width, `${provider.provider_id}.width`, errors);
       validateNullablePositiveNumber(provider.height, `${provider.provider_id}.height`, errors);
-      validateNullablePositiveNumber(
-        provider.framerate,
-        `${provider.provider_id}.framerate`,
-        errors,
-      );
+      validateNullablePositiveNumber(provider.framerate, `${provider.provider_id}.framerate`, errors);
     } else {
-      validateNullablePositiveNumber(
-        provider.sample_rate,
-        `${provider.provider_id}.sample_rate`,
-        errors,
-      );
-      validateNullablePositiveNumber(
-        provider.channels,
-        `${provider.provider_id}.channels`,
-        errors,
-      );
+      validateNullablePositiveNumber(provider.sample_rate, `${provider.provider_id}.sample_rate`, errors);
+      validateNullablePositiveNumber(provider.channels, `${provider.provider_id}.channels`, errors);
     }
     if (provider.lifecycle !== "running") {
-      warnings.push(
-        `${provider.scene_source_name} provider is ${provider.lifecycle}: ${provider.status_detail}`,
-      );
+      warnings.push(`${provider.scene_source_name} provider is ${provider.lifecycle}: ${provider.status_detail}`);
     }
   });
 
@@ -2762,16 +2596,10 @@ export function validateCaptureProviderRuntimeSnapshot(
   };
 }
 
-function captureProviderStatusFromBinding(
-  binding: CaptureFrameBinding,
-): CaptureProviderStatus {
+function captureProviderStatusFromBinding(binding: CaptureFrameBinding): CaptureProviderStatus {
   const running = binding.status === "ready";
   const lifecycle: CaptureProviderLifecycleState =
-    binding.status === "ready"
-      ? "running"
-      : binding.status === "unavailable"
-        ? "error"
-        : "idle";
+    binding.status === "ready" ? "running" : binding.status === "unavailable" ? "error" : "idle";
   return {
     provider_id: `provider:${binding.scene_source_id}`,
     scene_source_id: binding.scene_source_id,
@@ -2781,9 +2609,7 @@ function captureProviderStatusFromBinding(
     media_kind: binding.media_kind,
     lifecycle,
     binding_status: binding.status,
-    status_detail: running
-      ? "Mock capture provider is producing deterministic test frames."
-      : binding.status_detail,
+    status_detail: running ? "Mock capture provider is producing deterministic test frames." : binding.status_detail,
     width: binding.width,
     height: binding.height,
     framerate: binding.framerate,
@@ -2801,9 +2627,7 @@ function captureFrameBinding(source: SceneSource): CaptureFrameBinding | null {
   if (!captureKind) return null;
 
   const mediaKind: CaptureFrameMediaKind =
-    captureKind === "display" || captureKind === "window" || captureKind === "camera"
-      ? "video"
-      : "audio";
+    captureKind === "display" || captureKind === "window" || captureKind === "camera" ? "video" : "audio";
   const captureSourceId = sceneSourceCaptureIdentity(source);
   const { status, detail } = captureBindingStatus(source, captureSourceId);
   const videoShape = sourceVideoShape(source);
@@ -2861,11 +2685,13 @@ function captureBindingStatus(
   captureSourceId: string | null,
 ): { status: CaptureFrameBindingStatus; detail: string } {
   if (!captureSourceId) {
-    return { status: "placeholder", detail: "No capture source has been assigned." };
+    return {
+      status: "placeholder",
+      detail: "No capture source has been assigned.",
+    };
   }
 
-  const availability =
-    "availability" in source.config ? source.config.availability : null;
+  const availability = "availability" in source.config ? source.config.availability : null;
   if (!availability) {
     return { status: "ready", detail: "Capture source is configured." };
   }
@@ -2886,10 +2712,7 @@ function sourceVideoShape(source: SceneSource): {
   height: number;
   framerate: number;
 } {
-  const config = source.config as
-    | DisplaySceneSourceConfig
-    | WindowSceneSourceConfig
-    | CameraSceneSourceConfig;
+  const config = source.config as DisplaySceneSourceConfig | WindowSceneSourceConfig | CameraSceneSourceConfig;
   return {
     width: config.resolution?.width ?? Math.max(1, Math.round(source.size.width)),
     height: config.resolution?.height ?? Math.max(1, Math.round(source.size.height)),
@@ -3000,9 +2823,7 @@ export function buildAudioGraphRuntimeSnapshot(
   generatedAt = new Date().toISOString(),
 ): AudioGraphRuntimeSnapshot {
   const plan = buildAudioMixerPlan(scene);
-  const sources = plan.sources.map((source) =>
-    audioGraphRuntimeSource(source, frameIndex),
-  );
+  const sources = plan.sources.map((source) => audioGraphRuntimeSource(source, frameIndex));
   const buses = plan.buses.map((bus) => audioGraphRuntimeBus(bus, sources));
   const snapshot: AudioGraphRuntimeSnapshot = {
     version: 1,
@@ -3023,9 +2844,7 @@ export function buildAudioGraphRuntimeSnapshot(
   return snapshot;
 }
 
-export function validateAudioGraphRuntimeSnapshot(
-  snapshot: AudioGraphRuntimeSnapshot,
-): AudioGraphRuntimeValidation {
+export function validateAudioGraphRuntimeSnapshot(snapshot: AudioGraphRuntimeSnapshot): AudioGraphRuntimeValidation {
   const warnings = [...snapshot.validation.warnings];
   const errors = [...snapshot.validation.errors];
   const sourceIds = new Set<string>();
@@ -3083,18 +2902,8 @@ export function validateAudioGraphRuntimeSnapshot(
     validateAudioLevel(source.post_filter_level_db, source.name, errors);
     validateAudioLevel(source.post_filter_peak_db, source.name, errors);
     validateLinearAudioLevel(source.linear_level, source.name, "linear level", errors);
-    validateLinearAudioLevel(
-      source.pre_filter_linear_level,
-      source.name,
-      "pre-filter linear level",
-      errors,
-    );
-    validateLinearAudioLevel(
-      source.post_filter_linear_level,
-      source.name,
-      "post-filter linear level",
-      errors,
-    );
+    validateLinearAudioLevel(source.pre_filter_linear_level, source.name, "pre-filter linear level", errors);
+    validateLinearAudioLevel(source.post_filter_linear_level, source.name, "post-filter linear level", errors);
     source.filters.forEach((filter) => {
       validateAudioLevel(filter.input_level_db, filter.name, errors);
       validateAudioLevel(filter.output_level_db, filter.name, errors);
@@ -3162,10 +2971,7 @@ function audioMixSource(source: Extract<SceneSource, { kind: "audio_meter" }>): 
   };
 }
 
-function audioGraphRuntimeSource(
-  source: AudioMixSource,
-  frameIndex: number,
-): AudioGraphRuntimeSource {
+function audioGraphRuntimeSource(source: AudioMixSource, frameIndex: number): AudioGraphRuntimeSource {
   const simulated = simulatedAudioLevel(source, frameIndex);
   const filtered = applyAudioFilters(source, simulated.levelDb, simulated.peakDb);
   const postFilterLinearLevel = dbToLinear(filtered.levelDb);
@@ -3205,22 +3011,13 @@ function audioGraphRuntimeSource(
   };
 }
 
-function audioGraphRuntimeBus(
-  bus: AudioMixBus,
-  sources: AudioGraphRuntimeSource[],
-): AudioGraphRuntimeBus {
+function audioGraphRuntimeBus(bus: AudioMixBus, sources: AudioGraphRuntimeSource[]): AudioGraphRuntimeBus {
   const linearLevel =
-    bus.muted || sources.length === 0
-      ? 0
-      : Math.min(1, Math.max(...sources.map((source) => source.linear_level)));
+    bus.muted || sources.length === 0 ? 0 : Math.min(1, Math.max(...sources.map((source) => source.linear_level)));
   const levelDb = clampAudioLevel(linearToDb(linearLevel) + bus.gain_db);
   const peakDb = clampAudioLevel(levelDb + 4.5);
   const activeSourceCount = sources.filter(
-    (source) =>
-      source.input_mode !== "silent" &&
-      source.linear_level > 0 &&
-      !source.muted &&
-      source.meter_enabled,
+    (source) => source.input_mode !== "silent" && source.linear_level > 0 && !source.muted && source.meter_enabled,
   ).length;
   return {
     id: bus.id,
@@ -3291,15 +3088,7 @@ function applyAudioFilters(
     }
 
     filters.push(
-      audioFilterMetadata(
-        filter,
-        result.status,
-        result.detail,
-        inputLevelDb,
-        inputPeakDb,
-        inputLevelDb,
-        inputPeakDb,
-      ),
+      audioFilterMetadata(filter, result.status, result.detail, inputLevelDb, inputPeakDb, inputLevelDb, inputPeakDb),
     );
   });
 
@@ -3307,9 +3096,7 @@ function applyAudioFilters(
 }
 
 function sortedSceneSourceFilters(filters: SceneSourceFilter[]): SceneSourceFilter[] {
-  return [...filters].sort(
-    (left, right) => left.order - right.order || left.id.localeCompare(right.id),
-  );
+  return [...filters].sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
 }
 
 function applyAudioFilter(
@@ -3342,11 +3129,7 @@ function applyAudioFilter(
   }
 }
 
-function applyAudioGainFilter(
-  levelDb: number,
-  peakDb: number,
-  filter: SceneSourceFilter,
-) {
+function applyAudioGainFilter(levelDb: number, peakDb: number, filter: SceneSourceFilter) {
   const gainDb = audioFilterNumber(filter, "gain_db", -60, 24);
   if (typeof gainDb === "string") return { status: "error" as const, detail: gainDb };
   const outputLevelDb = clampAudioLevel(levelDb + gainDb);
@@ -3360,11 +3143,7 @@ function applyAudioGainFilter(
   };
 }
 
-function applyNoiseGateFilter(
-  levelDb: number,
-  peakDb: number,
-  filter: SceneSourceFilter,
-) {
+function applyNoiseGateFilter(levelDb: number, peakDb: number, filter: SceneSourceFilter) {
   const closeThresholdDb = audioFilterNumber(filter, "close_threshold_db", -100, 0);
   if (typeof closeThresholdDb === "string") {
     return { status: "error" as const, detail: closeThresholdDb };
@@ -3392,10 +3171,7 @@ function applyNoiseGateFilter(
     outputPeakDb = -90;
     detail = `Gate closed below ${closeThresholdDb.toFixed(1)} dB.`;
   } else if (levelDb < openThresholdDb) {
-    const openness = Math.min(
-      1,
-      Math.max(0, (levelDb - closeThresholdDb) / (openThresholdDb - closeThresholdDb)),
-    );
+    const openness = Math.min(1, Math.max(0, (levelDb - closeThresholdDb) / (openThresholdDb - closeThresholdDb)));
     outputLevelDb = linearToDb(dbToLinear(levelDb) * openness);
     outputPeakDb = linearToDb(dbToLinear(peakDb) * openness);
     detail = "Gate applied deterministic threshold-band attenuation.";
@@ -3411,11 +3187,7 @@ function applyNoiseGateFilter(
   };
 }
 
-function applyCompressorFilter(
-  levelDb: number,
-  peakDb: number,
-  filter: SceneSourceFilter,
-) {
+function applyCompressorFilter(levelDb: number, peakDb: number, filter: SceneSourceFilter) {
   const thresholdDb = audioFilterNumber(filter, "threshold_db", -100, 0);
   if (typeof thresholdDb === "string") return { status: "error" as const, detail: thresholdDb };
   const ratio = audioFilterNumber(filter, "ratio", 1, 20);
@@ -3475,12 +3247,7 @@ function audioFilterMetadata(
   };
 }
 
-function audioFilterNumber(
-  filter: SceneSourceFilter,
-  key: string,
-  min: number,
-  max: number,
-): number | string {
+function audioFilterNumber(filter: SceneSourceFilter, key: string, min: number, max: number): number | string {
   const value = filter.config?.[key];
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return `Filter config ${key} must be a number.`;
@@ -3499,7 +3266,7 @@ function simulatedAudioLevel(
     return { levelDb: -90, peakDb: -90, linearLevel: 0 };
   }
   const seed = stableAudioSeed(source.scene_source_id);
-  const phase = (((Math.trunc(frameIndex) * 17 + seed) % 100) / 100);
+  const phase = ((Math.trunc(frameIndex) * 17 + seed) % 100) / 100;
   const wave = Math.sin(phase * Math.PI * 2) * 0.5 + 0.5;
   const statusOffset =
     source.status === "ready"
@@ -3576,12 +3343,7 @@ function validateAudioLevel(value: number, label: string, errors: string[]) {
   }
 }
 
-function validateLinearAudioLevel(
-  value: number,
-  label: string,
-  field: string,
-  errors: string[],
-) {
+function validateLinearAudioLevel(value: number, label: string, field: string, errors: string[]) {
   if (!Number.isFinite(value) || value < 0 || value > 1) {
     errors.push(`${label} ${field} must be between zero and one.`);
   }
@@ -3707,11 +3469,13 @@ function compositorNodeStatus(source: SceneSource): {
   detail: string;
 } {
   if (!source.visible) {
-    return { status: "hidden", detail: "Source is hidden in the active scene." };
+    return {
+      status: "hidden",
+      detail: "Source is hidden in the active scene.",
+    };
   }
 
-  const availability =
-    "availability" in source.config ? source.config.availability : null;
+  const availability = "availability" in source.config ? source.config.availability : null;
   if (availability) {
     if (availability.state === "available") {
       return { status: "ready", detail: availability.detail };
@@ -3729,27 +3493,45 @@ function compositorNodeStatus(source: SceneSource): {
     case "display":
       return source.config.display_id
         ? { status: "ready", detail: "Display capture target configured." }
-        : { status: "placeholder", detail: "No display capture target has been assigned." };
+        : {
+            status: "placeholder",
+            detail: "No display capture target has been assigned.",
+          };
     case "window":
       return source.config.window_id
         ? { status: "ready", detail: "Window capture target configured." }
-        : { status: "placeholder", detail: "No window capture target has been assigned." };
+        : {
+            status: "placeholder",
+            detail: "No window capture target has been assigned.",
+          };
     case "camera":
       return source.config.device_id
         ? { status: "ready", detail: "Camera capture target configured." }
-        : { status: "placeholder", detail: "No camera capture target has been assigned." };
+        : {
+            status: "placeholder",
+            detail: "No camera capture target has been assigned.",
+          };
     case "audio_meter":
       return source.config.device_id
         ? { status: "ready", detail: "Audio device configured." }
-        : { status: "placeholder", detail: "No audio device has been assigned." };
+        : {
+            status: "placeholder",
+            detail: "No audio device has been assigned.",
+          };
     case "image_media":
       return source.config.asset_uri
         ? { status: "ready", detail: "Media asset configured." }
-        : { status: "placeholder", detail: "No media asset has been selected." };
+        : {
+            status: "placeholder",
+            detail: "No media asset has been selected.",
+          };
     case "browser_overlay":
       return source.config.url
         ? { status: "ready", detail: "Browser overlay URL configured." }
-        : { status: "placeholder", detail: "No browser overlay URL has been configured." };
+        : {
+            status: "placeholder",
+            detail: "No browser overlay URL has been configured.",
+          };
     case "text":
       return source.config.text.trim()
         ? { status: "ready", detail: "Text content configured." }
@@ -3804,9 +3586,7 @@ export function validateCompositorGraph(graph: CompositorGraph): CompositorValid
         errors.push(`Compositor node "${node.id}" cannot parent itself.`);
       }
       if (!graph.nodes.some((candidate) => candidate.source_id === node.parent_source_id)) {
-        errors.push(
-          `Compositor node "${node.id}" references missing parent source "${node.parent_source_id}".`,
-        );
+        errors.push(`Compositor node "${node.id}" references missing parent source "${node.parent_source_id}".`);
       }
     }
     validateGraphFiniteNumber(node.transform.position.x, `${node.id}.position.x`, errors);
@@ -3818,11 +3598,7 @@ export function validateCompositorGraph(graph: CompositorGraph): CompositorValid
     validateGraphNonNegativeNumber(node.transform.crop.bottom, `${node.id}.crop.bottom`, errors);
     validateGraphNonNegativeNumber(node.transform.crop.left, `${node.id}.crop.left`, errors);
     validateGraphFiniteNumber(node.transform.rotation_degrees, `${node.id}.rotation`, errors);
-    if (
-      !Number.isFinite(node.transform.opacity) ||
-      node.transform.opacity < 0 ||
-      node.transform.opacity > 1
-    ) {
+    if (!Number.isFinite(node.transform.opacity) || node.transform.opacity < 0 || node.transform.opacity > 1) {
       errors.push(`${node.id}.opacity must be between 0 and 1.`);
     }
 
@@ -3862,22 +3638,8 @@ export function buildDefaultCompositorRenderTargets(
 ): CompositorRenderTarget[] {
   const framerate = recordingProfile?.framerate ?? 60;
   const targets: CompositorRenderTarget[] = [
-    compositorRenderTarget(
-      "target-preview",
-      "Preview",
-      "preview",
-      graph.output.width,
-      graph.output.height,
-      framerate,
-    ),
-    compositorRenderTarget(
-      "target-program",
-      "Program",
-      "program",
-      graph.output.width,
-      graph.output.height,
-      framerate,
-    ),
+    compositorRenderTarget("target-preview", "Preview", "preview", graph.output.width, graph.output.height, framerate),
+    compositorRenderTarget("target-program", "Program", "program", graph.output.width, graph.output.height, framerate),
   ];
 
   if (intent === "recording" || intent === "recording_and_stream") {
@@ -3924,9 +3686,7 @@ export function buildDefaultCompositorRenderTargets(
   return targets;
 }
 
-export function validateCompositorRenderPlan(
-  plan: CompositorRenderPlan,
-): CompositorValidation {
+export function validateCompositorRenderPlan(plan: CompositorRenderPlan): CompositorValidation {
   const validation = validateCompositorGraph(plan.graph);
   const targetIds = new Set<string>();
   const enabledTargets = plan.targets.filter((target) => target.enabled);
@@ -3966,9 +3726,7 @@ export function validateCompositorRenderPlan(
   };
 }
 
-export function buildPerformanceTelemetryPlan(
-  renderPlan: CompositorRenderPlan,
-): PerformanceTelemetryPlan {
+export function buildPerformanceTelemetryPlan(renderPlan: CompositorRenderPlan): PerformanceTelemetryPlan {
   const plan: PerformanceTelemetryPlan = {
     version: 1,
     scene_id: renderPlan.graph.scene_id,
@@ -3976,9 +3734,7 @@ export function buildPerformanceTelemetryPlan(
     sample_window_seconds: 10,
     cpu_warning_percent: 85,
     gpu_warning_percent: 85,
-    targets: renderPlan.targets
-      .filter((target) => target.enabled)
-      .map(performanceTargetBudget),
+    targets: renderPlan.targets.filter((target) => target.enabled).map(performanceTargetBudget),
     validation: {
       ready: true,
       warnings: [],
@@ -3989,9 +3745,7 @@ export function buildPerformanceTelemetryPlan(
   return plan;
 }
 
-export function validatePerformanceTelemetryPlan(
-  plan: PerformanceTelemetryPlan,
-): PerformanceTelemetryValidation {
+export function validatePerformanceTelemetryPlan(plan: PerformanceTelemetryPlan): PerformanceTelemetryValidation {
   const warnings: string[] = [];
   const errors: string[] = [];
   const targetIds = new Set<string>();
@@ -4028,25 +3782,13 @@ export function validatePerformanceTelemetryPlan(
     validateGraphPositiveNumber(target.width, `${target.target_id}.width`, errors);
     validateGraphPositiveNumber(target.height, `${target.target_id}.height`, errors);
     validateGraphPositiveNumber(target.framerate, `${target.target_id}.framerate`, errors);
-    validateGraphPositiveNumber(
-      target.frame_budget_nanos,
-      `${target.target_id}.frame_budget_nanos`,
-      errors,
-    );
-    validateGraphPositiveNumber(
-      target.render_budget_nanos,
-      `${target.target_id}.render_budget_nanos`,
-      errors,
-    );
+    validateGraphPositiveNumber(target.frame_budget_nanos, `${target.target_id}.frame_budget_nanos`, errors);
+    validateGraphPositiveNumber(target.render_budget_nanos, `${target.target_id}.render_budget_nanos`, errors);
     if (target.framerate > 120) {
-      warnings.push(
-        `${target.target_name} targets ${target.framerate} fps; validate frame pacing on target hardware.`,
-      );
+      warnings.push(`${target.target_name} targets ${target.framerate} fps; validate frame pacing on target hardware.`);
     }
     if (target.estimated_rgba_bytes_per_frame > 33_177_600) {
-      warnings.push(
-        `${target.target_name} exceeds a 4K RGBA frame budget; validate GPU and encoder load.`,
-      );
+      warnings.push(`${target.target_name} exceeds a 4K RGBA frame budget; validate GPU and encoder load.`);
     }
   }
 
@@ -4056,9 +3798,7 @@ export function validatePerformanceTelemetryPlan(
   );
   if (totalRgbaBytesPerSecond > 2_000_000_000) {
     warnings.push(
-      `Estimated RGBA throughput is ${Math.floor(
-        totalRgbaBytesPerSecond / 1_000_000,
-      )} MB/s across enabled targets.`,
+      `Estimated RGBA throughput is ${Math.floor(totalRgbaBytesPerSecond / 1_000_000)} MB/s across enabled targets.`,
     );
   }
 
@@ -4077,16 +3817,12 @@ export function buildOutputPreflightPlan(
   streamDestinations: StreamDestination[] = [],
 ): OutputPreflightPlan {
   const renderTargets =
-    renderPlan?.targets.map((target) =>
-      renderTargetProfile(target, recordingProfile),
-    ) ?? fallbackRenderTargetProfiles(intent, recordingProfile, streamDestinations);
+    renderPlan?.targets.map((target) => renderTargetProfile(target, recordingProfile)) ??
+    fallbackRenderTargetProfiles(intent, recordingProfile, streamDestinations);
   const recordingTarget =
     intent === "recording" || intent === "recording_and_stream"
       ? recordingProfile
-        ? recordingTargetContract(
-            recordingProfile,
-            preferredRenderTargetId(renderTargets, "recording"),
-          )
+        ? recordingTargetContract(recordingProfile, preferredRenderTargetId(renderTargets, "recording"))
         : null
       : null;
   const streamingTargets =
@@ -4094,11 +3830,7 @@ export function buildOutputPreflightPlan(
       ? streamDestinations
           .filter((destination) => destination.enabled)
           .map((destination) =>
-            streamingTargetContract(
-              destination,
-              recordingProfile,
-              streamTargetProfile(renderTargets, destination),
-            ),
+            streamingTargetContract(destination, recordingProfile, streamTargetProfile(renderTargets, destination)),
           )
       : [];
   const plan: OutputPreflightPlan = {
@@ -4111,6 +3843,10 @@ export function buildOutputPreflightPlan(
     streaming_targets: streamingTargets,
     validation: {
       ready: true,
+      dry_run_render_targets_ready: true,
+      recording_path_ready: true,
+      encoder_preferences_ready: true,
+      stream_destinations_ready: true,
       warnings: [],
       errors: [],
     },
@@ -4119,14 +3855,11 @@ export function buildOutputPreflightPlan(
   return plan;
 }
 
-export function validateOutputPreflightPlan(
-  plan: OutputPreflightPlan,
-): OutputPreflightValidation {
+export function validateOutputPreflightPlan(plan: OutputPreflightPlan): OutputPreflightValidation {
   const warnings: string[] = [];
   const errors: string[] = [];
   const targetIds = new Set<string>();
-  const needsRecording =
-    plan.intent === "recording" || plan.intent === "recording_and_stream";
+  const needsRecording = plan.intent === "recording" || plan.intent === "recording_and_stream";
   const needsStream = plan.intent === "stream" || plan.intent === "recording_and_stream";
 
   if (!Number.isInteger(plan.version) || plan.version < 1) {
@@ -4154,12 +3887,7 @@ export function validateOutputPreflightPlan(
     if (!target.enabled) {
       warnings.push(`Render target profile "${target.id}" is disabled.`);
     }
-    validateEncoderPreference(
-      target.encoder_preference,
-      `Render target profile "${target.id}"`,
-      warnings,
-      errors,
-    );
+    validateEncoderPreference(target.encoder_preference, `Render target profile "${target.id}"`, warnings, errors);
   }
 
   if (needsRecording) {
@@ -4169,9 +3897,7 @@ export function validateOutputPreflightPlan(
       warnings.push(...plan.recording_target.warnings);
       errors.push(...plan.recording_target.errors);
       if (!targetIds.has(plan.recording_target.render_target_id)) {
-        errors.push(
-          `Recording target references unknown render target "${plan.recording_target.render_target_id}".`,
-        );
+        errors.push(`Recording target references unknown render target "${plan.recording_target.render_target_id}".`);
       }
     }
   }
@@ -4191,8 +3917,34 @@ export function validateOutputPreflightPlan(
     }
   }
 
+  const dryRunRenderTargetsReady =
+    plan.render_targets.length > 0 &&
+    plan.render_targets.some((target) => target.enabled && target.kind === "program") &&
+    (!needsRecording || plan.render_targets.some((target) => target.enabled && target.kind === "recording")) &&
+    (!needsStream || plan.render_targets.some((target) => target.enabled && target.kind === "stream")) &&
+    plan.render_targets.every(renderTargetShapeReady);
+  const recordingPathReady =
+    !needsRecording || Boolean(plan.recording_target?.ready && recordingTargetPathShapeReady(plan.recording_target));
+  const encoderPreferencesReady =
+    plan.render_targets.every((target) => encoderPreferenceContractReady(target.encoder_preference)) &&
+    (!plan.recording_target || encoderPreferenceContractReady(plan.recording_target.encoder_preference)) &&
+    plan.streaming_targets.every((target) => encoderPreferenceContractReady(target.encoder_preference));
+  const streamDestinationsReady =
+    !needsStream ||
+    (plan.streaming_targets.length > 0 &&
+      plan.streaming_targets.every(
+        (target) =>
+          target.ready &&
+          (!target.stream_key_required || target.has_stream_key) &&
+          ingestUrlShapeReady(target.ingest_url),
+      ));
+
   return {
     ready: errors.length === 0,
+    dry_run_render_targets_ready: dryRunRenderTargetsReady,
+    recording_path_ready: recordingPathReady,
+    encoder_preferences_ready: encoderPreferencesReady,
+    stream_destinations_ready: streamDestinationsReady,
     warnings,
     errors,
   };
@@ -4214,9 +3966,7 @@ function renderTargetProfile(
     enabled: target.enabled,
     encoder_preference: recordingProfile?.encoder_preference ?? "auto",
     bitrate_kbps:
-      target.kind === "recording" || target.kind === "stream"
-        ? (recordingProfile?.bitrate_kbps ?? 6000)
-        : null,
+      target.kind === "recording" || target.kind === "stream" ? (recordingProfile?.bitrate_kbps ?? 6000) : null,
   };
 }
 
@@ -4229,24 +3979,8 @@ function fallbackRenderTargetProfiles(
   const height = recordingProfile?.resolution.height ?? 1080;
   const framerate = recordingProfile?.framerate ?? 60;
   const targets = [
-    fallbackRenderTargetProfile(
-      "target-preview",
-      "Preview",
-      "preview",
-      width,
-      height,
-      framerate,
-      recordingProfile,
-    ),
-    fallbackRenderTargetProfile(
-      "target-program",
-      "Program",
-      "program",
-      width,
-      height,
-      framerate,
-      recordingProfile,
-    ),
+    fallbackRenderTargetProfile("target-preview", "Preview", "preview", width, height, framerate, recordingProfile),
+    fallbackRenderTargetProfile("target-program", "Program", "program", width, height, framerate, recordingProfile),
   ];
 
   if (intent === "recording" || intent === "recording_and_stream") {
@@ -4316,36 +4050,34 @@ function fallbackRenderTargetProfile(
     scale_mode: "fit",
     enabled: true,
     encoder_preference: recordingProfile?.encoder_preference ?? "auto",
-    bitrate_kbps:
-      kind === "recording" || kind === "stream"
-        ? (recordingProfile?.bitrate_kbps ?? 6000)
-        : null,
+    bitrate_kbps: kind === "recording" || kind === "stream" ? (recordingProfile?.bitrate_kbps ?? 6000) : null,
   };
 }
 
-function recordingTargetContract(
-  profile: MediaProfile,
-  renderTargetId: string,
-): RecordingTargetContract {
+function recordingTargetContract(profile: MediaProfile, renderTargetId: string): RecordingTargetContract {
   const warnings: string[] = [];
   const errors: string[] = [];
   if (!profile.output_folder.trim()) errors.push("Recording output folder is required.");
+  if (profile.output_folder.includes("\0")) {
+    errors.push("Recording output folder contains an invalid NUL byte.");
+  }
   if (!profile.filename_pattern.trim()) {
     errors.push("Recording filename pattern is required.");
   }
   if (profile.filename_pattern.includes("/") || profile.filename_pattern.includes("\\")) {
-    warnings.push("Recording filename pattern includes path separators.");
+    errors.push("Recording filename pattern cannot include path separators.");
+  }
+  if (profile.filename_pattern.trim() === "." || profile.filename_pattern.trim() === "..") {
+    errors.push("Recording filename pattern must name a file stem.");
+  }
+  if (profile.filename_pattern.includes("\0")) {
+    errors.push("Recording filename pattern contains an invalid NUL byte.");
   }
   validateGraphPositiveNumber(profile.resolution.width, "recording.width", errors);
   validateGraphPositiveNumber(profile.resolution.height, "recording.height", errors);
   validateGraphPositiveNumber(profile.framerate, "recording.framerate", errors);
   validateGraphPositiveNumber(profile.bitrate_kbps, "recording.bitrate_kbps", errors);
-  validateEncoderPreference(
-    profile.encoder_preference,
-    "Recording target",
-    warnings,
-    errors,
-  );
+  validateEncoderPreference(profile.encoder_preference, "Recording target", warnings, errors);
 
   return {
     id: `recording-target-${profile.id}`,
@@ -4376,16 +4108,13 @@ function streamingTargetContract(
   const encoderPreference = recordingProfile?.encoder_preference ?? "auto";
   if (!destination.ingest_url.trim()) {
     errors.push(`Stream destination "${destination.name}" requires an ingest URL.`);
+  } else if (!ingestUrlShapeReady(destination.ingest_url)) {
+    errors.push(`Stream destination "${destination.name}" ingest URL must start with rtmp:// or rtmps://.`);
   }
   if (!destination.stream_key_ref) {
     warnings.push(`Stream destination "${destination.name}" has no stored stream key.`);
   }
-  validateEncoderPreference(
-    encoderPreference,
-    `Streaming target "${destination.name}"`,
-    warnings,
-    errors,
-  );
+  validateEncoderPreference(encoderPreference, `Streaming target "${destination.name}"`, warnings, errors);
 
   return {
     id: `streaming-target-${destination.id}`,
@@ -4408,25 +4137,16 @@ function streamingTargetContract(
   };
 }
 
-function streamTargetProfile(
-  targets: RenderTargetProfile[],
-  destination: StreamDestination,
-) {
+function streamTargetProfile(targets: RenderTargetProfile[], destination: StreamDestination) {
   return (
-    targets.find(
-      (target) =>
-        target.kind === "stream" && target.id === `target-stream-${destination.id}`,
-    ) ??
+    targets.find((target) => target.kind === "stream" && target.id === `target-stream-${destination.id}`) ??
     targets.find((target) => target.kind === "stream") ??
     targets.find((target) => target.kind === "program") ??
     null
   );
 }
 
-function preferredRenderTargetId(
-  targets: RenderTargetProfile[],
-  kind: "recording" | "stream" | "program",
-) {
+function preferredRenderTargetId(targets: RenderTargetProfile[], kind: "recording" | "stream" | "program") {
   return (
     targets.find((target) => target.kind === kind)?.id ??
     targets.find((target) => target.kind === "program")?.id ??
@@ -4435,17 +4155,46 @@ function preferredRenderTargetId(
   );
 }
 
-function validateEncoderPreference(
-  encoder: EncoderPreference,
-  label: string,
-  warnings: string[],
-  errors: string[],
-) {
+function validateEncoderPreference(encoder: EncoderPreference, label: string, warnings: string[], errors: string[]) {
   if (typeof encoder === "object" && !encoder.named.trim()) {
     errors.push(`${label} named encoder cannot be empty.`);
   } else if (encoder === "hardware") {
     warnings.push(`${label} requests hardware encoding; validate availability on target machine.`);
   }
+}
+
+function renderTargetShapeReady(target: RenderTargetProfile): boolean {
+  return (
+    Boolean(target.id.trim()) &&
+    Boolean(target.name.trim()) &&
+    target.width > 0 &&
+    target.height > 0 &&
+    target.framerate > 0 &&
+    target.enabled
+  );
+}
+
+function recordingTargetPathShapeReady(target: RecordingTargetContract): boolean {
+  const filenamePattern = target.filename_pattern.trim();
+  return (
+    Boolean(target.output_folder.trim()) &&
+    !target.output_folder.includes("\0") &&
+    Boolean(filenamePattern) &&
+    !filenamePattern.includes("/") &&
+    !filenamePattern.includes("\\") &&
+    !filenamePattern.includes("\0") &&
+    filenamePattern !== "." &&
+    filenamePattern !== ".."
+  );
+}
+
+function encoderPreferenceContractReady(encoder: EncoderPreference): boolean {
+  return !(typeof encoder === "object" && !encoder.named.trim());
+}
+
+function ingestUrlShapeReady(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("rtmp://") || normalized.startsWith("rtmps://");
 }
 
 function recordingOutputPathPreview(profile: MediaProfile) {
@@ -4473,12 +4222,9 @@ export function createSceneRuntimeSnapshot(
   } = {},
 ): SceneRuntimeSnapshot {
   const activeScene =
-    collection.scenes.find((scene) => scene.id === collection.active_scene_id) ??
-    collection.scenes[0];
+    collection.scenes.find((scene) => scene.id === collection.active_scene_id) ?? collection.scenes[0];
   const activeTransition =
-    collection.transitions.find(
-      (transition) => transition.id === collection.active_transition_id,
-    ) ??
+    collection.transitions.find((transition) => transition.id === collection.active_transition_id) ??
     collection.transitions[0] ??
     defaultSceneTransitions[0];
 
@@ -4496,16 +4242,12 @@ export function createSceneRuntimeSnapshot(
     updated_at: options.updatedAt ?? new Date().toISOString(),
     validation: runtimeValidation(
       [],
-      validateSceneCollection(collection).ok
-        ? []
-        : ["Scene collection has validation issues."],
+      validateSceneCollection(collection).ok ? [] : ["Scene collection has validation issues."],
     ),
   };
 }
 
-export function validateSceneRuntimeSnapshot(
-  snapshot: SceneRuntimeSnapshot,
-): SceneRuntimeContractValidation {
+export function validateSceneRuntimeSnapshot(snapshot: SceneRuntimeSnapshot): SceneRuntimeContractValidation {
   const errors: string[] = [];
 
   if (!Number.isInteger(snapshot.version) || snapshot.version < 1) {
@@ -4544,19 +4286,11 @@ export function createSceneRuntimeCommand(
   };
 }
 
-export function validateSceneRuntimeCommand(
-  command: SceneRuntimeCommand,
-): SceneRuntimeContractValidation {
+export function validateSceneRuntimeCommand(command: SceneRuntimeCommand): SceneRuntimeContractValidation {
   const warnings: string[] = [];
   const errors: string[] = [];
 
-  validateRuntimeEnvelope(
-    command.version,
-    command.command_id,
-    command.requested_at,
-    "Scene runtime command",
-    errors,
-  );
+  validateRuntimeEnvelope(command.version, command.command_id, command.requested_at, "Scene runtime command", errors);
   if (!command.kind.trim()) {
     errors.push("Scene runtime command kind is required.");
   }
@@ -4623,25 +4357,17 @@ export function validateSceneActivationRequest(
       errors.push("Scene activation request collection id does not match collection.");
     }
     if (!collection.scenes.some((scene) => scene.id === request.target_scene_id)) {
-      errors.push(
-        `Scene activation target scene "${request.target_scene_id}" does not exist.`,
-      );
+      errors.push(`Scene activation target scene "${request.target_scene_id}" does not exist.`);
     }
     if (
       request.transition_id &&
-      !collection.transitions.some(
-        (transition) => transition.id === request.transition_id,
-      )
+      !collection.transitions.some((transition) => transition.id === request.transition_id)
     ) {
-      errors.push(
-        `Scene activation transition "${request.transition_id}" does not exist.`,
-      );
+      errors.push(`Scene activation transition "${request.transition_id}" does not exist.`);
     }
     const collectionValidation = validateSceneCollection(collection);
     if (!collectionValidation.ok) {
-      warnings.push(
-        `Scene collection has ${collectionValidation.issues.length} validation issue(s).`,
-      );
+      warnings.push(`Scene collection has ${collectionValidation.issues.length} validation issue(s).`);
     }
   }
 
@@ -4720,25 +4446,16 @@ export function validateSceneActivationResponse(
       errors.push("Scene activation response collection id does not match collection.");
     }
     if (!collection.scenes.some((scene) => scene.id === response.active_scene_id)) {
-      errors.push(
-        `Scene activation response active scene "${response.active_scene_id}" does not exist.`,
-      );
+      errors.push(`Scene activation response active scene "${response.active_scene_id}" does not exist.`);
     }
-    if (
-      response.previous_scene_id &&
-      !collection.scenes.some((scene) => scene.id === response.previous_scene_id)
-    ) {
-      errors.push(
-        `Scene activation response previous scene "${response.previous_scene_id}" does not exist.`,
-      );
+    if (response.previous_scene_id && !collection.scenes.some((scene) => scene.id === response.previous_scene_id)) {
+      errors.push(`Scene activation response previous scene "${response.previous_scene_id}" does not exist.`);
     }
     if (
       response.transition_id &&
       !collection.transitions.some((transition) => transition.id === response.transition_id)
     ) {
-      errors.push(
-        `Scene activation response transition "${response.transition_id}" does not exist.`,
-      );
+      errors.push(`Scene activation response transition "${response.transition_id}" does not exist.`);
     }
   }
 
@@ -4794,19 +4511,13 @@ export function validateSceneRuntimeStateUpdateRequest(
       request.patch.active_scene_id &&
       !collection.scenes.some((scene) => scene.id === request.patch.active_scene_id)
     ) {
-      errors.push(
-        `Scene runtime state active scene "${request.patch.active_scene_id}" does not exist.`,
-      );
+      errors.push(`Scene runtime state active scene "${request.patch.active_scene_id}" does not exist.`);
     }
     if (
       request.patch.active_transition_id &&
-      !collection.transitions.some(
-        (transition) => transition.id === request.patch.active_transition_id,
-      )
+      !collection.transitions.some((transition) => transition.id === request.patch.active_transition_id)
     ) {
-      errors.push(
-        `Scene runtime state active transition "${request.patch.active_transition_id}" does not exist.`,
-      );
+      errors.push(`Scene runtime state active transition "${request.patch.active_transition_id}" does not exist.`);
     }
   }
 
@@ -4824,8 +4535,7 @@ export function createSceneRuntimeStateUpdateResponse(
     request_id: request.request_id,
     collection_id: request.collection_id,
     active_scene_id: request.patch.active_scene_id ?? collection.active_scene_id,
-    active_transition_id:
-      request.patch.active_transition_id ?? collection.active_transition_id,
+    active_transition_id: request.patch.active_transition_id ?? collection.active_transition_id,
     status: request.patch.status ?? "active",
     updated_at: options.updatedAt ?? new Date().toISOString(),
     validation,
@@ -4861,20 +4571,12 @@ export function validateSceneRuntimeStateUpdateResponse(
 
   if (collection) {
     if (collection.id !== response.collection_id) {
-      errors.push(
-        "Scene runtime state update response collection id does not match collection.",
-      );
+      errors.push("Scene runtime state update response collection id does not match collection.");
     }
     if (!collection.scenes.some((scene) => scene.id === response.active_scene_id)) {
-      errors.push(
-        `Scene runtime state update response active scene "${response.active_scene_id}" does not exist.`,
-      );
+      errors.push(`Scene runtime state update response active scene "${response.active_scene_id}" does not exist.`);
     }
-    if (
-      !collection.transitions.some(
-        (transition) => transition.id === response.active_transition_id,
-      )
-    ) {
+    if (!collection.transitions.some((transition) => transition.id === response.active_transition_id)) {
       errors.push(
         `Scene runtime state update response active transition "${response.active_transition_id}" does not exist.`,
       );
@@ -4916,18 +4618,10 @@ export function createPreviewFrameRequest(
   };
 }
 
-export function validatePreviewFrameRequest(
-  request: PreviewFrameRequest,
-): SceneRuntimeContractValidation {
+export function validatePreviewFrameRequest(request: PreviewFrameRequest): SceneRuntimeContractValidation {
   const errors: string[] = [];
 
-  validateRuntimeEnvelope(
-    request.version,
-    request.request_id,
-    request.requested_at,
-    "Preview frame request",
-    errors,
-  );
+  validateRuntimeEnvelope(request.version, request.request_id, request.requested_at, "Preview frame request", errors);
   if (!request.scene_id.trim()) {
     errors.push("Preview frame scene id is required.");
   }
@@ -4959,8 +4653,7 @@ export function createProgramPreviewFrameRequest(
   > = {},
 ): ProgramPreviewFrameRequest {
   const activeScene =
-    collection.scenes.find((scene) => scene.id === collection.active_scene_id) ??
-    collection.scenes[0];
+    collection.scenes.find((scene) => scene.id === collection.active_scene_id) ?? collection.scenes[0];
   return {
     version: 1,
     request_id: options.request_id ?? runtimeId("program-preview-frame"),
@@ -5009,9 +4702,7 @@ export function validateProgramPreviewFrameRequest(
     }
     const collectionValidation = validateSceneCollection(collection);
     if (!collectionValidation.ok) {
-      warnings.push(
-        `Scene collection has ${collectionValidation.issues.length} validation issue(s).`,
-      );
+      warnings.push(`Scene collection has ${collectionValidation.issues.length} validation issue(s).`);
     }
   }
 
@@ -5028,10 +4719,7 @@ export function createCompositorRenderRequest(
     renderer?: CompositorRendererKind;
   } = {},
 ): CompositorRenderRequest {
-  const framerate =
-    options.framerate ??
-    plan.targets.find((target) => target.enabled)?.framerate ??
-    60;
+  const framerate = options.framerate ?? plan.targets.find((target) => target.enabled)?.framerate ?? 60;
   const frameIndex = options.frameIndex ?? 0;
   const durationNanos = Math.floor(1_000_000_000 / Math.max(1, framerate));
 
@@ -5050,9 +4738,7 @@ export function createCompositorRenderRequest(
   };
 }
 
-export function validateCompositorRenderRequest(
-  request: CompositorRenderRequest,
-): SceneRuntimeContractValidation {
+export function validateCompositorRenderRequest(request: CompositorRenderRequest): SceneRuntimeContractValidation {
   const renderValidation = validateCompositorRenderPlan(request.plan);
   const warnings = [...renderValidation.warnings];
   const errors = [...renderValidation.errors];
@@ -5069,11 +4755,7 @@ export function validateCompositorRenderRequest(
   }
   validateGraphPositiveNumber(request.clock.framerate, "render.clock.framerate", errors);
   validateGraphNonNegativeNumber(request.clock.pts_nanos, "render.clock.pts_nanos", errors);
-  validateGraphPositiveNumber(
-    request.clock.duration_nanos,
-    "render.clock.duration_nanos",
-    errors,
-  );
+  validateGraphPositiveNumber(request.clock.duration_nanos, "render.clock.duration_nanos", errors);
 
   return runtimeValidation(errors, warnings);
 }
@@ -5111,9 +4793,7 @@ export function createCompositorRenderResponse(
   };
 }
 
-export function validateCompositorRenderResponse(
-  response: CompositorRenderResponse,
-): SceneRuntimeContractValidation {
+export function validateCompositorRenderResponse(response: CompositorRenderResponse): SceneRuntimeContractValidation {
   const warnings = [...response.frame.validation.warnings];
   const errors = [...response.frame.validation.errors];
   const targetIds = new Set(response.frame.targets.map((target) => target.target_id));
@@ -5128,11 +4808,7 @@ export function validateCompositorRenderResponse(
   if (response.scene_id !== response.frame.scene_id) {
     errors.push("Compositor render response scene id must match rendered frame.");
   }
-  validateGraphNonNegativeNumber(
-    response.render_time_ms,
-    "render.response.render_time_ms",
-    errors,
-  );
+  validateGraphNonNegativeNumber(response.render_time_ms, "render.response.render_time_ms", errors);
   response.target_results.forEach((target) => {
     if (!targetIds.has(target.target_id)) {
       errors.push(`Render response target "${target.target_id}" is not in the frame.`);
@@ -5140,11 +4816,7 @@ export function validateCompositorRenderResponse(
     validateGraphPositiveNumber(target.width, `${target.target_id}.width`, errors);
     validateGraphPositiveNumber(target.height, `${target.target_id}.height`, errors);
     if (target.byte_length !== null) {
-      validateGraphNonNegativeNumber(
-        target.byte_length,
-        `${target.target_id}.byte_length`,
-        errors,
-      );
+      validateGraphNonNegativeNumber(target.byte_length, `${target.target_id}.byte_length`, errors);
     }
   });
 
@@ -5204,9 +4876,7 @@ export function createPreviewFrameResponse(
   };
 }
 
-export function validatePreviewFrameResponse(
-  response: PreviewFrameResponse,
-): SceneRuntimeContractValidation {
+export function validatePreviewFrameResponse(response: PreviewFrameResponse): SceneRuntimeContractValidation {
   const warnings = [...response.validation.warnings];
   const errors = [...response.validation.errors];
 
@@ -5225,20 +4895,14 @@ export function validatePreviewFrameResponse(
   }
   validateGraphPositiveNumber(response.width, "preview.response.width", errors);
   validateGraphPositiveNumber(response.height, "preview.response.height", errors);
-  validateGraphNonNegativeNumber(
-    response.render_time_ms,
-    "preview.response.render_time_ms",
-    errors,
-  );
+  validateGraphNonNegativeNumber(response.render_time_ms, "preview.response.render_time_ms", errors);
   if (response.encoding !== "none" && !response.image_data && !response.checksum) {
     warnings.push("Preview frame response has no image data or checksum.");
   }
   if (response.rendered_frame && response.rendered_frame.scene_id !== response.scene_id) {
     errors.push("Preview frame response scene id must match rendered frame.");
   }
-  const runtimeSessionValidation = validateDesignerRuntimeSessionSnapshot(
-    response.runtime_session,
-  );
+  const runtimeSessionValidation = validateDesignerRuntimeSessionSnapshot(response.runtime_session);
   errors.push(...runtimeSessionValidation.errors);
   warnings.push(...runtimeSessionValidation.warnings);
   if (response.runtime_session_id !== response.runtime_session.runtime_session_id) {
@@ -5319,17 +4983,9 @@ function createDefaultDesignerRuntimeSession(input: {
   validation: SceneRuntimeContractValidation;
 }): DesignerRuntimeSessionSnapshot {
   const readinessState: DesignerRuntimeReadinessState =
-    input.validation.errors.length > 0
-      ? "blocked"
-      : input.validation.warnings.length > 0
-        ? "degraded"
-        : "ready";
+    input.validation.errors.length > 0 ? "blocked" : input.validation.warnings.length > 0 ? "degraded" : "ready";
   const sessionState: DesignerRuntimeSessionState =
-    readinessState === "ready"
-      ? "running"
-      : readinessState === "blocked"
-        ? "blocked"
-        : "degraded";
+    readinessState === "ready" ? "running" : readinessState === "blocked" ? "blocked" : "degraded";
 
   return {
     version: 1,
@@ -5376,31 +5032,11 @@ export function validateDesignerRuntimeSessionSnapshot(
   if (!snapshot.scene_name.trim()) {
     errors.push("Designer runtime session scene name is required.");
   }
-  validateGraphNonNegativeNumber(
-    snapshot.frame_index,
-    "designer_runtime.frame_index",
-    errors,
-  );
-  validateGraphPositiveNumber(
-    snapshot.target_framerate,
-    "designer_runtime.target_framerate",
-    errors,
-  );
-  validateGraphNonNegativeNumber(
-    snapshot.stale_frame_ms,
-    "designer_runtime.stale_frame_ms",
-    errors,
-  );
-  validateGraphNonNegativeNumber(
-    snapshot.restart_count,
-    "designer_runtime.restart_count",
-    errors,
-  );
-  validateGraphNonNegativeNumber(
-    snapshot.dropped_frames,
-    "designer_runtime.dropped_frames",
-    errors,
-  );
+  validateGraphNonNegativeNumber(snapshot.frame_index, "designer_runtime.frame_index", errors);
+  validateGraphPositiveNumber(snapshot.target_framerate, "designer_runtime.target_framerate", errors);
+  validateGraphNonNegativeNumber(snapshot.stale_frame_ms, "designer_runtime.stale_frame_ms", errors);
+  validateGraphNonNegativeNumber(snapshot.restart_count, "designer_runtime.restart_count", errors);
+  validateGraphNonNegativeNumber(snapshot.dropped_frames, "designer_runtime.dropped_frames", errors);
   if (!snapshot.provider_status.trim()) {
     warnings.push("Designer runtime session provider status is empty.");
   }
@@ -5431,9 +5067,7 @@ export function validateDesignerRuntimeSessionSnapshot(
   return runtimeValidation(errors, warnings);
 }
 
-export function validateDesignerReadinessReport(
-  report: DesignerReadinessReport,
-): SceneRuntimeContractValidation {
+export function validateDesignerReadinessReport(report: DesignerReadinessReport): SceneRuntimeContractValidation {
   const errors: string[] = [];
   const warnings: string[] = [];
 
@@ -5452,6 +5086,26 @@ export function validateDesignerReadinessReport(
   }
   if (report.items.length === 0) {
     errors.push("Designer readiness report must include at least one item.");
+  }
+  if (!report.output_ready) {
+    errors.push("Designer readiness report must include output-ready diagnostics.");
+  } else {
+    validateRuntimeEnvelope(
+      report.output_ready.version,
+      report.output_ready.active_scene_id,
+      report.generated_at,
+      "Scene output-ready diagnostic",
+      errors,
+    );
+    if (!report.output_ready.active_scene_name.trim()) {
+      errors.push("Scene output-ready diagnostic active scene name is required.");
+    }
+    if (!report.output_ready.detail.trim()) {
+      warnings.push("Scene output-ready diagnostic detail is empty.");
+    }
+    if (report.output_ready.ready && report.output_ready.blockers.length > 0) {
+      errors.push("Scene output-ready diagnostic cannot be ready with blockers.");
+    }
   }
   if (report.windows_handoff.length === 0) {
     warnings.push("Designer readiness report has no Windows handoff checklist.");
@@ -5499,16 +5153,8 @@ export function validateProgramPreviewFrameResponse(
   }
   validateGraphPositiveNumber(response.width, "program_preview.response.width", errors);
   validateGraphPositiveNumber(response.height, "program_preview.response.height", errors);
-  validateGraphPositiveNumber(
-    response.framerate,
-    "program_preview.response.framerate",
-    errors,
-  );
-  validateGraphNonNegativeNumber(
-    response.render_time_ms,
-    "program_preview.response.render_time_ms",
-    errors,
-  );
+  validateGraphPositiveNumber(response.framerate, "program_preview.response.framerate", errors);
+  validateGraphNonNegativeNumber(response.render_time_ms, "program_preview.response.render_time_ms", errors);
   if (response.rendered_frame) {
     const programTarget = response.rendered_frame.targets.find(
       (target) => target.target_id === response.program_target_id,
@@ -5521,32 +5167,24 @@ export function validateProgramPreviewFrameResponse(
   } else {
     warnings.push("Program preview response has no rendered frame metadata.");
   }
-  const runtimeSessionValidation = validateDesignerRuntimeSessionSnapshot(
-    response.runtime_session,
-  );
+  const runtimeSessionValidation = validateDesignerRuntimeSessionSnapshot(response.runtime_session);
   errors.push(...runtimeSessionValidation.errors);
   warnings.push(...runtimeSessionValidation.warnings);
   if (response.runtime_session_id !== response.runtime_session.runtime_session_id) {
-    errors.push(
-      "Program preview response runtime session id must match its session snapshot.",
-    );
+    errors.push("Program preview response runtime session id must match its session snapshot.");
   }
 
   return runtimeValidation(errors, warnings);
 }
 
-export function buildRuntimeCaptureSourceBindingContract(
-  scene: Scene,
-): RuntimeCaptureSourceBindingContract {
+export function buildRuntimeCaptureSourceBindingContract(scene: Scene): RuntimeCaptureSourceBindingContract {
   const framePlan = buildCaptureFramePlan(scene);
   const contract: RuntimeCaptureSourceBindingContract = {
     version: 1,
     scene_id: scene.id,
     scene_name: scene.name,
     bindings: framePlan.bindings.map((binding) => {
-      const source = scene.sources.find(
-        (candidate) => candidate.id === binding.scene_source_id,
-      );
+      const source = scene.sources.find((candidate) => candidate.id === binding.scene_source_id);
       return {
         scene_source_id: binding.scene_source_id,
         scene_source_name: binding.scene_source_name,
@@ -5603,24 +5241,14 @@ export function validateRuntimeCaptureSourceBindingContract(
       errors.push(`Runtime capture binding "${binding.scene_source_id}" name is required.`);
     }
     if (binding.required && binding.status !== "ready") {
-      warnings.push(
-        `${binding.scene_source_name} capture is ${binding.status}: ${binding.status_detail}`,
-      );
+      warnings.push(`${binding.scene_source_name} capture is ${binding.status}: ${binding.status_detail}`);
     }
     if (binding.media_kind === "video") {
       validateNullablePositiveNumber(binding.width, `${binding.scene_source_id}.width`, errors);
       validateNullablePositiveNumber(binding.height, `${binding.scene_source_id}.height`, errors);
-      validateNullablePositiveNumber(
-        binding.framerate,
-        `${binding.scene_source_id}.framerate`,
-        errors,
-      );
+      validateNullablePositiveNumber(binding.framerate, `${binding.scene_source_id}.framerate`, errors);
     } else {
-      validateNullablePositiveNumber(
-        binding.sample_rate,
-        `${binding.scene_source_id}.sample_rate`,
-        errors,
-      );
+      validateNullablePositiveNumber(binding.sample_rate, `${binding.scene_source_id}.sample_rate`, errors);
       validateNullablePositiveNumber(binding.channels, `${binding.scene_source_id}.channels`, errors);
     }
   });
@@ -5628,9 +5256,7 @@ export function validateRuntimeCaptureSourceBindingContract(
   return runtimeValidation(errors, warnings);
 }
 
-export function buildRuntimeAudioSourceBindingContract(
-  scene: Scene,
-): RuntimeAudioSourceBindingContract {
+export function buildRuntimeAudioSourceBindingContract(scene: Scene): RuntimeAudioSourceBindingContract {
   const mixerPlan = buildAudioMixerPlan(scene);
   const busIds = mixerPlan.buses.map((bus) => bus.id);
   const contract: RuntimeAudioSourceBindingContract = {
@@ -5698,9 +5324,7 @@ export function validateRuntimeAudioSourceBindingContract(
       }
     });
     if (binding.status !== "ready") {
-      warnings.push(
-        `${binding.scene_source_name} audio is ${binding.status}: ${binding.status_detail}`,
-      );
+      warnings.push(`${binding.scene_source_name} audio is ${binding.status}: ${binding.status_detail}`);
     }
   });
 
@@ -5802,10 +5426,7 @@ export function createTransitionExecutionResponse(
     to_scene_id: request.to_scene_id,
     started_at: options.startedAt ?? new Date().toISOString(),
     preview_plan: previewPlan,
-    validation: runtimeValidation(
-      previewPlan.validation.errors,
-      previewPlan.validation.warnings,
-    ),
+    validation: runtimeValidation(previewPlan.validation.errors, previewPlan.validation.warnings),
   };
 }
 
@@ -5890,9 +5511,7 @@ export function validateTransitionPreviewFrameRequest(
   }
 
   if (collection) {
-    const transition = collection.transitions.find(
-      (item) => item.id === request.transition_id,
-    );
+    const transition = collection.transitions.find((item) => item.id === request.transition_id);
     if (collection.id !== request.collection_id) {
       errors.push("Transition preview frame collection id does not match collection.");
     }
@@ -5914,10 +5533,7 @@ function runtimeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
-function runtimeValidation(
-  errors: string[],
-  warnings: string[],
-): SceneRuntimeContractValidation {
+function runtimeValidation(errors: string[], warnings: string[]): SceneRuntimeContractValidation {
   return {
     ready: errors.length === 0,
     warnings,
@@ -5925,13 +5541,7 @@ function runtimeValidation(
   };
 }
 
-function validateRuntimeEnvelope(
-  version: number,
-  id: string,
-  timestamp: string,
-  label: string,
-  errors: string[],
-) {
+function validateRuntimeEnvelope(version: number, id: string, timestamp: string, label: string, errors: string[]) {
   if (!Number.isInteger(version) || version < 1) {
     errors.push(`${label} version must be a positive integer.`);
   }
@@ -5947,26 +5557,18 @@ function validateRuntimeEnvelope(
   }
 }
 
-function validateSceneRuntimeCommandPayload(
-  command: SceneRuntimeCommand,
-): SceneRuntimeContractValidation {
+function validateSceneRuntimeCommandPayload(command: SceneRuntimeCommand): SceneRuntimeContractValidation {
   switch (command.kind) {
     case "activate_scene":
       return validateSceneActivationRequest(command.payload as SceneActivationRequest);
     case "update_runtime_state":
-      return validateSceneRuntimeStateUpdateRequest(
-        command.payload as SceneRuntimeStateUpdateRequest,
-      );
+      return validateSceneRuntimeStateUpdateRequest(command.payload as SceneRuntimeStateUpdateRequest);
     case "request_preview_frame":
       return validatePreviewFrameRequest(command.payload as PreviewFrameRequest);
     case "request_program_preview_frame":
-      return validateProgramPreviewFrameRequest(
-        command.payload as ProgramPreviewFrameRequest,
-      );
+      return validateProgramPreviewFrameRequest(command.payload as ProgramPreviewFrameRequest);
     case "request_transition_preview_frame":
-      return validateTransitionPreviewFrameRequest(
-        command.payload as TransitionPreviewFrameRequest,
-      );
+      return validateTransitionPreviewFrameRequest(command.payload as TransitionPreviewFrameRequest);
     case "validate_runtime_graph":
       return validateCompositorRenderRequest(command.payload as CompositorRenderRequest);
     case "execute_transition":
@@ -5976,10 +5578,7 @@ function validateSceneRuntimeCommandPayload(
   }
 }
 
-export function evaluateCompositorFrame(
-  plan: CompositorRenderPlan,
-  frameIndex: number,
-): CompositorRenderedFrame {
+export function evaluateCompositorFrame(plan: CompositorRenderPlan, frameIndex: number): CompositorRenderedFrame {
   const validation = validateCompositorRenderPlan(plan);
   const framerate = plan.targets.find((target) => target.enabled)?.framerate ?? 60;
   const durationNanos = Math.floor(1_000_000_000 / Math.max(1, framerate));
@@ -6011,9 +5610,7 @@ export function evaluateCompositorFrame(
   };
 }
 
-function performanceTargetBudget(
-  target: CompositorRenderTarget,
-): PerformanceTargetBudget {
+function performanceTargetBudget(target: CompositorRenderTarget): PerformanceTargetBudget {
   const frameBudgetNanos = Math.floor(1_000_000_000 / Math.max(1, target.framerate));
   const pixelCount = target.width * target.height;
   const estimatedRgbaBytesPerFrame = pixelCount * 4;
@@ -6029,10 +5626,7 @@ function performanceTargetBudget(
     render_budget_nanos: Math.floor((frameBudgetNanos * 70) / 100),
     encode_budget_nanos: Math.floor((frameBudgetNanos * 20) / 100),
     max_latency_ms: Math.ceil((frameBudgetNanos * 2) / 1_000_000),
-    max_dropped_frames_per_minute: Math.max(
-      1,
-      Math.floor((target.framerate * 60) / 200),
-    ),
+    max_dropped_frames_per_minute: Math.max(1, Math.floor((target.framerate * 60) / 200)),
     pixel_count: pixelCount,
     estimated_rgba_bytes_per_frame: estimatedRgbaBytesPerFrame,
     estimated_rgba_bytes_per_second: estimatedRgbaBytesPerFrame * target.framerate,
@@ -6081,10 +5675,7 @@ function evaluateNodeForTarget(
   };
 }
 
-function nodeBoundsRect(
-  transform: CompositorTransform,
-  node: CompositorNode,
-): CompositorRect {
+function nodeBoundsRect(transform: CompositorTransform, node: CompositorNode): CompositorRect {
   const bounds: CompositorRect = {
     x: transform.position.x,
     y: transform.position.y,
@@ -6129,9 +5720,7 @@ function nodeNativeSize(node: CompositorNode, transform: CompositorTransform): S
   const size =
     node.source_kind === "browser_overlay"
       ? configSize(node.config, "viewport")
-      : node.source_kind === "display" ||
-          node.source_kind === "window" ||
-          node.source_kind === "camera"
+      : node.source_kind === "display" || node.source_kind === "window" || node.source_kind === "camera"
         ? configSize(node.config, "resolution")
         : null;
 
@@ -6149,23 +5738,14 @@ function configSize(config: SceneSourceConfig, key: "resolution" | "viewport"): 
         ? config.viewport
         : null;
 
-  if (
-    value &&
-    Number.isFinite(value.width) &&
-    Number.isFinite(value.height) &&
-    value.width > 0 &&
-    value.height > 0
-  ) {
+  if (value && Number.isFinite(value.width) && Number.isFinite(value.height) && value.width > 0 && value.height > 0) {
     return { width: value.width, height: value.height };
   }
 
   return null;
 }
 
-function effectiveNodeTransform(
-  node: CompositorNode,
-  graph: CompositorGraph,
-): CompositorTransform {
+function effectiveNodeTransform(node: CompositorNode, graph: CompositorGraph): CompositorTransform {
   const transform: CompositorTransform = {
     position: { ...node.transform.position },
     size: { ...node.transform.size },
@@ -6256,9 +5836,7 @@ function compositorRenderTarget(
   };
 }
 
-export function validateSceneCollection(
-  collection: SceneCollection,
-): SceneValidationResult {
+export function validateSceneCollection(collection: SceneCollection): SceneValidationResult {
   const issues: SceneValidationIssue[] = [];
   const sceneIds = new Set<string>();
 
@@ -6266,10 +5844,16 @@ export function validateSceneCollection(
     issues.push({ path: "id", message: "Scene collection id is required." });
   }
   if (!collection.name.trim()) {
-    issues.push({ path: "name", message: "Scene collection name is required." });
+    issues.push({
+      path: "name",
+      message: "Scene collection name is required.",
+    });
   }
   if (!Number.isInteger(collection.version) || collection.version < 1) {
-    issues.push({ path: "version", message: "Scene collection version must be a positive integer." });
+    issues.push({
+      path: "version",
+      message: "Scene collection version must be a positive integer.",
+    });
   }
   if (collection.scenes.length === 0) {
     issues.push({ path: "scenes", message: "At least one scene is required." });
@@ -6278,11 +5862,17 @@ export function validateSceneCollection(
   collection.scenes.forEach((scene, sceneIndex) => {
     const scenePath = `scenes[${sceneIndex}]`;
     if (sceneIds.has(scene.id)) {
-      issues.push({ path: `${scenePath}.id`, message: `Duplicate scene id "${scene.id}".` });
+      issues.push({
+        path: `${scenePath}.id`,
+        message: `Duplicate scene id "${scene.id}".`,
+      });
     }
     sceneIds.add(scene.id);
     if (!scene.name.trim()) {
-      issues.push({ path: `${scenePath}.name`, message: "Scene name is required." });
+      issues.push({
+        path: `${scenePath}.name`,
+        message: "Scene name is required.",
+      });
     }
     validatePositiveNumber(scene.canvas.width, `${scenePath}.canvas.width`, issues);
     validatePositiveNumber(scene.canvas.height, `${scenePath}.canvas.height`, issues);
@@ -6303,13 +5893,13 @@ export function validateSceneCollection(
   };
 }
 
-function validateSceneTransitions(
-  collection: SceneCollection,
-  issues: SceneValidationIssue[],
-) {
+function validateSceneTransitions(collection: SceneCollection, issues: SceneValidationIssue[]) {
   const transitionIds = new Set<string>();
   if (collection.transitions.length === 0) {
-    issues.push({ path: "transitions", message: "At least one scene transition is required." });
+    issues.push({
+      path: "transitions",
+      message: "At least one scene transition is required.",
+    });
   }
 
   collection.transitions.forEach((transition, transitionIndex) => {
@@ -6322,10 +5912,16 @@ function validateSceneTransitions(
     }
     transitionIds.add(transition.id);
     if (!transition.id.trim()) {
-      issues.push({ path: `${transitionPath}.id`, message: "Transition id is required." });
+      issues.push({
+        path: `${transitionPath}.id`,
+        message: "Transition id is required.",
+      });
     }
     if (!transition.name.trim()) {
-      issues.push({ path: `${transitionPath}.name`, message: "Transition name is required." });
+      issues.push({
+        path: `${transitionPath}.name`,
+        message: "Transition name is required.",
+      });
     }
     if (!Number.isInteger(transition.duration_ms) || transition.duration_ms < 0) {
       issues.push({
@@ -6346,10 +5942,7 @@ function validateSceneTransitions(
     }
   });
 
-  if (
-    collection.transitions.length > 0 &&
-    !transitionIds.has(collection.active_transition_id)
-  ) {
+  if (collection.transitions.length > 0 && !transitionIds.has(collection.active_transition_id)) {
     issues.push({
       path: "active_transition_id",
       message: "Active transition id must match a transition in the collection.",
@@ -6357,11 +5950,7 @@ function validateSceneTransitions(
   }
 }
 
-function validateSceneSources(
-  sources: SceneSource[],
-  scenePath: string,
-  issues: SceneValidationIssue[],
-) {
+function validateSceneSources(sources: SceneSource[], scenePath: string, issues: SceneValidationIssue[]) {
   const sourceIds = new Set<string>();
   if (!sources.some((source) => source.visible)) {
     issues.push({
@@ -6380,7 +5969,10 @@ function validateSceneSources(
     }
     sourceIds.add(source.id);
     if (!source.name.trim()) {
-      issues.push({ path: `${sourcePath}.name`, message: "Source name is required." });
+      issues.push({
+        path: `${sourcePath}.name`,
+        message: "Source name is required.",
+      });
     }
     validateFiniteNumber(source.position.x, `${sourcePath}.position.x`, issues);
     validateFiniteNumber(source.position.y, `${sourcePath}.position.y`, issues);
@@ -6410,9 +6002,7 @@ function validateGroupSourceChildren(
   sourceIds: Set<string>,
   issues: SceneValidationIssue[],
 ) {
-  const groupIds = new Set(
-    sources.filter((source) => source.kind === "group").map((source) => source.id),
-  );
+  const groupIds = new Set(sources.filter((source) => source.kind === "group").map((source) => source.id));
   const parentByChild = new Map<string, string>();
   const childrenByGroup = new Map<string, string[]>();
 
@@ -6424,7 +6014,10 @@ function validateGroupSourceChildren(
       const childPath = `${scenePath}.sources[${sourceIndex}].config.child_source_ids[${childIndex}]`;
       const childId = rawChildId.trim();
       if (!childId) {
-        issues.push({ path: childPath, message: "Group child source id is required." });
+        issues.push({
+          path: childPath,
+          message: "Group child source id is required.",
+        });
         return;
       }
       if (childIds.has(childId)) {
@@ -6435,7 +6028,10 @@ function validateGroupSourceChildren(
       }
       childIds.add(childId);
       if (childId === source.id) {
-        issues.push({ path: childPath, message: "Group cannot contain itself." });
+        issues.push({
+          path: childPath,
+          message: "Group cannot contain itself.",
+        });
       }
       if (!sourceIds.has(childId)) {
         issues.push({
@@ -6492,11 +6088,7 @@ function groupHasCycle(
   return false;
 }
 
-function validateSceneSourceFilters(
-  filters: SceneSourceFilter[],
-  sourcePath: string,
-  issues: SceneValidationIssue[],
-) {
+function validateSceneSourceFilters(filters: SceneSourceFilter[], sourcePath: string, issues: SceneValidationIssue[]) {
   const filterIds = new Set<string>();
   filters.forEach((filter, filterIndex) => {
     const filterPath = `${sourcePath}.filters[${filterIndex}]`;
@@ -6508,10 +6100,16 @@ function validateSceneSourceFilters(
     }
     filterIds.add(filter.id);
     if (!filter.id.trim()) {
-      issues.push({ path: `${filterPath}.id`, message: "Source filter id is required." });
+      issues.push({
+        path: `${filterPath}.id`,
+        message: "Source filter id is required.",
+      });
     }
     if (!filter.name.trim()) {
-      issues.push({ path: `${filterPath}.name`, message: "Source filter name is required." });
+      issues.push({
+        path: `${filterPath}.name`,
+        message: "Source filter name is required.",
+      });
     }
     validateFiniteNumber(filter.order, `${filterPath}.order`, issues);
     validateSceneSourceFilterConfig(filter, filterPath, issues);
@@ -6564,22 +6162,8 @@ function validateSceneSourceFilterConfig(
       validateFilterNumberRange(filter, filterPath, "gain_db", -60, 24, issues);
       break;
     case "noise_gate": {
-      const close = validateFilterNumberRange(
-        filter,
-        filterPath,
-        "close_threshold_db",
-        -100,
-        0,
-        issues,
-      );
-      const open = validateFilterNumberRange(
-        filter,
-        filterPath,
-        "open_threshold_db",
-        -100,
-        0,
-        issues,
-      );
+      const close = validateFilterNumberRange(filter, filterPath, "close_threshold_db", -100, 0, issues);
+      const open = validateFilterNumberRange(filter, filterPath, "open_threshold_db", -100, 0, issues);
       if (close !== null && open !== null && close >= open) {
         issues.push({
           path: `${filterPath}.config.open_threshold_db`,
@@ -6696,41 +6280,25 @@ function validateGraphNonNegativeNumber(value: number, path: string, errors: str
   }
 }
 
-function validateNullablePositiveNumber(
-  value: number | null,
-  path: string,
-  errors: string[],
-) {
+function validateNullablePositiveNumber(value: number | null, path: string, errors: string[]) {
   if (value !== null && (!Number.isFinite(value) || value <= 0)) {
     errors.push(`${path} must be greater than 0.`);
   }
 }
 
-function validateFiniteNumber(
-  value: number,
-  path: string,
-  issues: SceneValidationIssue[],
-) {
+function validateFiniteNumber(value: number, path: string, issues: SceneValidationIssue[]) {
   if (!Number.isFinite(value)) {
     issues.push({ path, message: "Value must be a finite number." });
   }
 }
 
-function validatePositiveNumber(
-  value: number,
-  path: string,
-  issues: SceneValidationIssue[],
-) {
+function validatePositiveNumber(value: number, path: string, issues: SceneValidationIssue[]) {
   if (!Number.isFinite(value) || value <= 0) {
     issues.push({ path, message: "Value must be greater than 0." });
   }
 }
 
-function validateNonNegativeNumber(
-  value: number,
-  path: string,
-  issues: SceneValidationIssue[],
-) {
+function validateNonNegativeNumber(value: number, path: string, issues: SceneValidationIssue[]) {
   if (!Number.isFinite(value) || value < 0) {
     issues.push({ path, message: "Value must be 0 or greater." });
   }

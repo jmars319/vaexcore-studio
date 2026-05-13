@@ -86,6 +86,10 @@ pub struct OutputPreflightPlan {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct OutputPreflightValidation {
     pub ready: bool,
+    pub dry_run_render_targets_ready: bool,
+    pub recording_path_ready: bool,
+    pub encoder_preferences_ready: bool,
+    pub stream_destinations_ready: bool,
     pub warnings: Vec<String>,
     pub errors: Vec<String>,
 }
@@ -352,6 +356,10 @@ pub fn build_output_preflight_plan(
         streaming_targets,
         validation: OutputPreflightValidation {
             ready: true,
+            dry_run_render_targets_ready: true,
+            recording_path_ready: true,
+            encoder_preferences_ready: true,
+            stream_destinations_ready: true,
             warnings: Vec::new(),
             errors: Vec::new(),
         },
@@ -457,8 +465,52 @@ pub fn validate_output_preflight_plan(plan: &OutputPreflightPlan) -> OutputPrefl
         }
     }
 
+    let dry_run_render_targets_ready = !plan.render_targets.is_empty()
+        && plan
+            .render_targets
+            .iter()
+            .any(|target| target.enabled && target.kind == CompositorRenderTargetKind::Program)
+        && (!needs_recording
+            || plan.render_targets.iter().any(|target| {
+                target.enabled && target.kind == CompositorRenderTargetKind::Recording
+            }))
+        && (!needs_stream
+            || plan
+                .render_targets
+                .iter()
+                .any(|target| target.enabled && target.kind == CompositorRenderTargetKind::Stream))
+        && plan.render_targets.iter().all(render_target_shape_ready);
+    let recording_path_ready = !needs_recording
+        || plan
+            .recording_target
+            .as_ref()
+            .is_some_and(|target| target.ready && recording_target_path_shape_ready(target));
+    let encoder_preferences_ready = plan
+        .render_targets
+        .iter()
+        .all(|target| encoder_preference_contract_ready(&target.encoder_preference))
+        && plan
+            .recording_target
+            .as_ref()
+            .is_none_or(|target| encoder_preference_contract_ready(&target.encoder_preference))
+        && plan
+            .streaming_targets
+            .iter()
+            .all(|target| encoder_preference_contract_ready(&target.encoder_preference));
+    let stream_destinations_ready = !needs_stream
+        || (!plan.streaming_targets.is_empty()
+            && plan.streaming_targets.iter().all(|target| {
+                target.ready
+                    && (!target.stream_key_required || target.has_stream_key)
+                    && ingest_url_shape_ready(&target.ingest_url)
+            }));
+
     OutputPreflightValidation {
         ready: errors.is_empty(),
+        dry_run_render_targets_ready,
+        recording_path_ready,
+        encoder_preferences_ready,
+        stream_destinations_ready,
         warnings,
         errors,
     }
@@ -603,11 +655,20 @@ fn recording_target_contract(
     if profile.output_folder.trim().is_empty() {
         errors.push("recording output folder is required".to_string());
     }
+    if profile.output_folder.contains('\0') {
+        errors.push("recording output folder contains an invalid NUL byte".to_string());
+    }
     if profile.filename_pattern.trim().is_empty() {
         errors.push("recording filename pattern is required".to_string());
     }
     if profile.filename_pattern.contains('/') || profile.filename_pattern.contains('\\') {
-        warnings.push("recording filename pattern includes path separators".to_string());
+        errors.push("recording filename pattern cannot include path separators".to_string());
+    }
+    if matches!(profile.filename_pattern.trim(), "." | "..") {
+        errors.push("recording filename pattern must name a file stem".to_string());
+    }
+    if profile.filename_pattern.contains('\0') {
+        errors.push("recording filename pattern contains an invalid NUL byte".to_string());
     }
     if profile.resolution.width == 0 || profile.resolution.height == 0 {
         errors.push("recording resolution must be greater than zero".to_string());
@@ -658,6 +719,11 @@ fn streaming_target_contract(
     if destination.ingest_url.trim().is_empty() {
         errors.push(format!(
             "stream destination \"{}\" requires an ingest URL",
+            destination.name
+        ));
+    } else if !ingest_url_shape_ready(&destination.ingest_url) {
+        errors.push(format!(
+            "stream destination \"{}\" ingest URL must start with rtmp:// or rtmps://",
             destination.name
         ));
     }
@@ -773,6 +839,34 @@ fn validate_encoder_preference(
     }
 }
 
+fn render_target_shape_ready(target: &RenderTargetProfile) -> bool {
+    !target.id.trim().is_empty()
+        && !target.name.trim().is_empty()
+        && target.width > 0
+        && target.height > 0
+        && target.framerate > 0
+        && target.enabled
+}
+
+fn recording_target_path_shape_ready(target: &RecordingTargetContract) -> bool {
+    !target.output_folder.trim().is_empty()
+        && !target.output_folder.contains('\0')
+        && !target.filename_pattern.trim().is_empty()
+        && !target.filename_pattern.contains('/')
+        && !target.filename_pattern.contains('\\')
+        && !target.filename_pattern.contains('\0')
+        && !matches!(target.filename_pattern.trim(), "." | "..")
+}
+
+fn encoder_preference_contract_ready(encoder: &EncoderPreference) -> bool {
+    !matches!(encoder, EncoderPreference::Named(name) if name.trim().is_empty())
+}
+
+fn ingest_url_shape_ready(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized.starts_with("rtmp://") || normalized.starts_with("rtmps://")
+}
+
 fn recording_output_path_preview(profile: &MediaProfile) -> String {
     let extension = match profile.container {
         RecordingContainer::Mkv => "mkv",
@@ -843,6 +937,10 @@ mod tests {
         let preflight = config.output_preflight_plan.unwrap();
 
         assert!(preflight.validation.ready, "{:?}", preflight.validation);
+        assert!(preflight.validation.dry_run_render_targets_ready);
+        assert!(preflight.validation.recording_path_ready);
+        assert!(preflight.validation.encoder_preferences_ready);
+        assert!(preflight.validation.stream_destinations_ready);
         assert_eq!(preflight.render_targets.len(), 4);
         assert_eq!(
             preflight.recording_target.unwrap().render_target_id,
@@ -868,10 +966,32 @@ mod tests {
         );
 
         assert!(!plan.validation.ready);
+        assert!(!plan.validation.encoder_preferences_ready);
         assert!(plan
             .validation
             .errors
             .iter()
             .any(|error| error.contains("named encoder")));
+    }
+
+    #[test]
+    fn output_preflight_validation_blocks_invalid_recording_path_shape() {
+        let mut profile = MediaProfile::from_input(MediaProfileInput::default());
+        profile.filename_pattern = "nested/{date}".to_string();
+        let plan = build_output_preflight_plan(
+            &PipelineIntent::Recording,
+            None,
+            None,
+            Some(&profile),
+            &[],
+        );
+
+        assert!(!plan.validation.ready);
+        assert!(!plan.validation.recording_path_ready);
+        assert!(plan
+            .validation
+            .errors
+            .iter()
+            .any(|error| error.contains("path separators")));
     }
 }

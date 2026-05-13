@@ -40,7 +40,8 @@ use vaexcore_core::{
     create_scene_activation_response, create_scene_runtime_state_update_response,
     create_transition_preview_frame_response, scene_runtime_snapshot,
     scene_runtime_snapshot_with_options, AudioGraphRuntimeSnapshot, CaptureProviderRuntimeSnapshot,
-    CompositorRenderRequest, CompositorRenderResponse, DesignerReadinessReport,
+    CompositorFrameFormat, CompositorRenderRequest, CompositorRenderResponse,
+    CompositorRenderTargetKind, CompositorScaleMode, DesignerReadinessReport,
     DesignerReadinessReportItem, DesignerRuntimeReadinessState,
     DesignerRuntimeSessionControlRequest, DesignerRuntimeSessionControlResponse,
     DesignerRuntimeSessionSnapshot, DesignerRuntimeSessionState, ProgramPreviewFrameRequest,
@@ -50,13 +51,14 @@ use vaexcore_core::{
     new_id, now_utc, scene_capture_sources, ApiResponse, AuditLogEntry, AuditLogSnapshot,
     CommandStatus, ConnectedClientsSnapshot, HealthResponse, LocalRuntimeDependency,
     LocalRuntimeHealth, Marker, MarkersSnapshot, MediaPipelinePlan, MediaPipelinePlanRequest,
-    MediaPipelineValidation, MediaProfileInput, PipelineIntent, PreviewFrameRequest,
-    PreviewFrameResponse, ProfilesSnapshot, RecentRecordingsSnapshot, Scene,
+    MediaPipelineValidation, MediaProfileInput, PipelineIntent, PreviewFrameEncoding,
+    PreviewFrameRequest, PreviewFrameResponse, ProfilesSnapshot, RecentRecordingsSnapshot, Scene,
     SceneActivationRequest, SceneActivationResponse, SceneCollection, SceneCollectionBundle,
-    SceneCollectionImportResult, SceneRuntimeBindingsSnapshot, SceneRuntimeSnapshot,
-    SceneRuntimeStateUpdateRequest, SceneRuntimeStateUpdateResponse, SceneRuntimeStatus,
-    SceneValidationResult, SecretStore, StreamDestinationInput, StudioEvent, StudioEventKind,
-    StudioStatus, TransitionPreviewFrameRequest, TransitionPreviewFrameResponse, APP_NAME,
+    SceneCollectionImportResult, SceneOutputReadyDiagnostic, SceneRuntimeBindingsSnapshot,
+    SceneRuntimeSnapshot, SceneRuntimeStateUpdateRequest, SceneRuntimeStateUpdateResponse,
+    SceneRuntimeStatus, SceneValidationResult, SecretStore, StreamDestinationInput, StudioEvent,
+    StudioEventKind, StudioStatus, TransitionPreviewFrameRequest, TransitionPreviewFrameResponse,
+    APP_NAME,
 };
 use vaexcore_media::{
     build_dry_run_pipeline_plan, DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor,
@@ -1229,6 +1231,25 @@ async fn designer_readiness_report_for_state(
     let capture = build_capture_provider_runtime_snapshot(active_scene);
     let audio = build_live_audio_graph_runtime_snapshot(active_scene, 0);
     let pipeline = plan_pipeline(state, default_pipeline_plan_request(state)?).await;
+    let program_preview = create_program_preview_frame_response(
+        &ProgramPreviewFrameRequest {
+            version: 1,
+            request_id: "scene-output-ready-diagnostic".to_string(),
+            collection_id: collection.id.clone(),
+            width: active_scene.canvas.width,
+            height: active_scene.canvas.height,
+            framerate: 60,
+            frame_format: CompositorFrameFormat::Bgra8,
+            scale_mode: CompositorScaleMode::Fit,
+            encoding: PreviewFrameEncoding::None,
+            include_debug_overlay: false,
+            requested_at: now_utc(),
+        },
+        &collection,
+        0,
+    );
+    let output_ready =
+        scene_output_ready_diagnostic(active_scene, &program_preview, &pipeline, validation.ok);
 
     let mut items = vec![
         DesignerReadinessReportItem {
@@ -1250,6 +1271,26 @@ async fn designer_readiness_report_for_state(
             label: "Runtime preview".to_string(),
             state: runtime.readiness_state.clone(),
             detail: runtime.provider_status.clone(),
+        },
+        DesignerReadinessReportItem {
+            id: "program_preview".to_string(),
+            label: "Program preview".to_string(),
+            state: readiness_from_validation(
+                false,
+                &program_preview.validation.errors,
+                &program_preview.validation.warnings,
+            ),
+            detail: if program_preview.validation.ready {
+                format!(
+                    "{}x{} program frame rendered for output handoff.",
+                    program_preview.width, program_preview.height
+                )
+            } else {
+                format!(
+                    "{} program preview issue(s).",
+                    program_preview.validation.errors.len()
+                )
+            },
         },
         DesignerReadinessReportItem {
             id: "capture".to_string(),
@@ -1291,6 +1332,12 @@ async fn designer_readiness_report_for_state(
             ),
             detail: "Dry-run output handoff contract is available; encoder execution remains outside Scene Designer.".to_string(),
         },
+        DesignerReadinessReportItem {
+            id: "scene_output_ready".to_string(),
+            label: "Scene output-ready".to_string(),
+            state: output_ready.state.clone(),
+            detail: output_ready.detail.clone(),
+        },
     ];
 
     items.extend(source_family_report_items(active_scene, &runtime));
@@ -1308,12 +1355,122 @@ async fn designer_readiness_report_for_state(
         generated_at: now_utc(),
         overall,
         items,
+        output_ready,
         windows_handoff: vec![
             "Run npm run validate:windows on this repo from the Windows checkout.".to_string(),
             "Launch Studio on Windows and verify display, window, camera, browser, media, text, transitions, filters, and readiness panels.".to_string(),
             "Confirm Windows capture permission/device failures are reported as degraded or blocked, not as ready.".to_string(),
         ],
     })
+}
+
+fn scene_output_ready_diagnostic(
+    active_scene: &Scene,
+    program_preview: &ProgramPreviewFrameResponse,
+    pipeline: &MediaPipelinePlan,
+    scene_model_ready: bool,
+) -> SceneOutputReadyDiagnostic {
+    let pipeline_validation = pipeline.validation();
+    let compositor_render_plan_ready =
+        pipeline
+            .config
+            .compositor_render_plan
+            .as_ref()
+            .is_some_and(|plan| {
+                plan.targets.iter().any(|target| {
+                    target.enabled
+                        && target.kind == CompositorRenderTargetKind::Program
+                        && target.width > 0
+                        && target.height > 0
+                        && target.framerate > 0
+                })
+            });
+    let output_preflight_ready =
+        pipeline
+            .config
+            .output_preflight_plan
+            .as_ref()
+            .is_some_and(|plan| {
+                plan.validation.ready
+                    && plan.validation.dry_run_render_targets_ready
+                    && plan.validation.recording_path_ready
+                    && plan.validation.encoder_preferences_ready
+                    && plan.validation.stream_destinations_ready
+            });
+    let media_pipeline_ready = pipeline_validation.ready;
+    let program_preview_frame_ready =
+        program_preview.validation.ready && program_preview.rendered_frame.is_some();
+
+    let mut blockers = Vec::new();
+    let mut warnings = Vec::new();
+    if !scene_model_ready {
+        blockers.push("Active scene model validation is blocked.".to_string());
+    }
+    if !program_preview_frame_ready {
+        blockers.push("Program preview frame is not ready.".to_string());
+    }
+    if !compositor_render_plan_ready {
+        blockers.push("Compositor render plan has no enabled program target.".to_string());
+    }
+    if !media_pipeline_ready {
+        blockers.extend(pipeline_validation.errors.iter().cloned());
+    }
+    if !output_preflight_ready {
+        if let Some(plan) = &pipeline.config.output_preflight_plan {
+            if !plan.validation.ready {
+                blockers.extend(plan.validation.errors.iter().cloned());
+            } else {
+                warnings.push(
+                    "Output preflight has unresolved recording, encoder, render target, or stream readiness.".to_string(),
+                );
+            }
+        } else {
+            blockers.push("Output preflight plan is unavailable.".to_string());
+        }
+    }
+    warnings.extend(program_preview.validation.warnings.iter().cloned());
+    warnings.extend(pipeline_validation.warnings.iter().cloned());
+    if let Some(plan) = &pipeline.config.output_preflight_plan {
+        warnings.extend(plan.validation.warnings.iter().cloned());
+    }
+    warnings.sort();
+    warnings.dedup();
+    blockers.sort();
+    blockers.dedup();
+
+    let state = if !blockers.is_empty() {
+        DesignerRuntimeReadinessState::Blocked
+    } else if !warnings.is_empty() {
+        DesignerRuntimeReadinessState::Degraded
+    } else {
+        DesignerRuntimeReadinessState::Ready
+    };
+    let ready = state == DesignerRuntimeReadinessState::Ready;
+    let detail = if ready {
+        "Active scene, program preview frame, compositor render plan, output preflight, and media pipeline are output-ready for dry-run handoff.".to_string()
+    } else if !blockers.is_empty() {
+        format!("{} output blocker(s) must be resolved.", blockers.len())
+    } else {
+        format!(
+            "{} output warning(s) remain before final handoff.",
+            warnings.len()
+        )
+    };
+
+    SceneOutputReadyDiagnostic {
+        version: 1,
+        ready,
+        state,
+        active_scene_id: active_scene.id.clone(),
+        active_scene_name: active_scene.name.clone(),
+        program_preview_frame_ready,
+        compositor_render_plan_ready,
+        output_preflight_ready,
+        media_pipeline_ready,
+        detail,
+        blockers,
+        warnings,
+    }
 }
 
 #[derive(Clone, Copy)]

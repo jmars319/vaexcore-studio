@@ -87,12 +87,12 @@ pub use runtime::{
     PreviewFrameRequest, PreviewFrameResponse, ProgramPreviewFrameRequest,
     ProgramPreviewFrameResponse, RuntimeAudioSourceBinding, RuntimeAudioSourceBindingContract,
     RuntimeCaptureSourceBinding, RuntimeCaptureSourceBindingContract, SceneActivationRequest,
-    SceneActivationResponse, SceneActivationStatus, SceneRuntimeBindingsSnapshot,
-    SceneRuntimeCommand, SceneRuntimeCommandKind, SceneRuntimeContractValidation,
-    SceneRuntimeSnapshot, SceneRuntimeStatePatch, SceneRuntimeStateUpdateRequest,
-    SceneRuntimeStateUpdateResponse, SceneRuntimeStatus, StingerTransitionRuntimeMetadata,
-    StingerTransitionRuntimeStatus, TransitionExecutionRequest, TransitionExecutionResponse,
-    TransitionPreviewFrameRequest, TransitionPreviewFrameResponse,
+    SceneActivationResponse, SceneActivationStatus, SceneOutputReadyDiagnostic,
+    SceneRuntimeBindingsSnapshot, SceneRuntimeCommand, SceneRuntimeCommandKind,
+    SceneRuntimeContractValidation, SceneRuntimeSnapshot, SceneRuntimeStatePatch,
+    SceneRuntimeStateUpdateRequest, SceneRuntimeStateUpdateResponse, SceneRuntimeStatus,
+    StingerTransitionRuntimeMetadata, StingerTransitionRuntimeStatus, TransitionExecutionRequest,
+    TransitionExecutionResponse, TransitionPreviewFrameRequest, TransitionPreviewFrameResponse,
 };
 pub use scenes::{
     build_scene_transition_preview_plan, scene_capture_sources, scene_resolution,

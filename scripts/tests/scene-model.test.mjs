@@ -35,12 +35,7 @@ test("default scene collection is serializable and valid", async () => {
   const collection = createDefaultSceneCollection("2026-05-08T12:00:00.000Z");
   const scene = collection.scenes[0];
   const bundle = createSceneCollectionBundle(collection, "2026-05-08T13:00:00.000Z");
-  const transitionPreview = buildSceneTransitionPreviewPlan(
-    collection,
-    scene.id,
-    scene.id,
-    60,
-  );
+  const transitionPreview = buildSceneTransitionPreviewPlan(collection, scene.id, scene.id, 60);
   const normalizedBundle = normalizeSceneCollectionBundle({
     collection: {
       name: "Imported Scenes",
@@ -77,16 +72,7 @@ test("default scene collection is serializable and valid", async () => {
 
 test("scene source defaults cover supported source kinds", async () => {
   const { createDefaultSceneSource, sceneSourceKindLabels } = await sharedTypes;
-  const kinds = [
-    "display",
-    "window",
-    "camera",
-    "audio_meter",
-    "image_media",
-    "browser_overlay",
-    "text",
-    "group",
-  ];
+  const kinds = ["display", "window", "camera", "audio_meter", "image_media", "browser_overlay", "text", "group"];
 
   assert.deepEqual(Object.keys(sceneSourceKindLabels).sort(), kinds.toSorted());
 
@@ -107,12 +93,8 @@ test("scene source defaults cover supported source kinds", async () => {
 });
 
 test("scene validation accepts current video media source configs", async () => {
-  const {
-    cloneSceneCollection,
-    createDefaultSceneCollection,
-    createDefaultSceneSource,
-    validateSceneCollection,
-  } = await sharedTypes;
+  const { cloneSceneCollection, createDefaultSceneCollection, createDefaultSceneSource, validateSceneCollection } =
+    await sharedTypes;
   const collection = cloneSceneCollection(createDefaultSceneCollection("2026-05-08T12:00:00.000Z"));
   const scene = collection.scenes[0];
   scene.sources.push(
@@ -143,12 +125,8 @@ test("scene validation accepts current video media source configs", async () => 
 });
 
 test("scene validation accepts current browser overlay source configs", async () => {
-  const {
-    cloneSceneCollection,
-    createDefaultSceneCollection,
-    createDefaultSceneSource,
-    validateSceneCollection,
-  } = await sharedTypes;
+  const { cloneSceneCollection, createDefaultSceneCollection, createDefaultSceneSource, validateSceneCollection } =
+    await sharedTypes;
   const collection = cloneSceneCollection(createDefaultSceneCollection("2026-05-08T12:00:00.000Z"));
   const scene = collection.scenes[0];
   scene.sources.push(
@@ -232,24 +210,9 @@ test("transition preview frames are deterministic for supported transition kinds
     collection.scenes.push(secondScene);
     collection.transitions = [transition];
     collection.active_transition_id = transition.id;
-    const plan = buildSceneTransitionPreviewPlan(
-      collection,
-      base.scenes[0].id,
-      secondScene.id,
-      60,
-    );
-    const midpoint = buildSceneTransitionPreviewFrame(
-      plan,
-      Math.floor(plan.frame_count / 2),
-      640,
-      360,
-    );
-    const repeated = buildSceneTransitionPreviewFrame(
-      plan,
-      Math.floor(plan.frame_count / 2),
-      640,
-      360,
-    );
+    const plan = buildSceneTransitionPreviewPlan(collection, base.scenes[0].id, secondScene.id, 60);
+    const midpoint = buildSceneTransitionPreviewFrame(plan, Math.floor(plan.frame_count / 2), 640, 360);
+    const repeated = buildSceneTransitionPreviewFrame(plan, Math.floor(plan.frame_count / 2), 640, 360);
 
     assert.equal(midpoint.transition_kind, transition.kind);
     assert.equal(midpoint.validation.ready, true);
@@ -265,18 +228,17 @@ test("transition preview frames are deterministic for supported transition kinds
       assert.notEqual(midpoint.layers[1].offset_x, 0);
     }
     if (transition.kind === "stinger") {
-      assert.equal(midpoint.layers.some((layer) => layer.role === "stinger"), true);
-      assert.match(
-        midpoint.layers.find((layer) => layer.role === "stinger").label,
-        /stinger\.webm/,
+      assert.equal(
+        midpoint.layers.some((layer) => layer.role === "stinger"),
+        true,
       );
+      assert.match(midpoint.layers.find((layer) => layer.role === "stinger").label, /stinger\.webm/);
     }
   }
 });
 
 test("scene collection validation catches duplicate ids and invalid transforms", async () => {
-  const { cloneSceneCollection, createDefaultSceneCollection, validateSceneCollection } =
-    await sharedTypes;
+  const { cloneSceneCollection, createDefaultSceneCollection, validateSceneCollection } = await sharedTypes;
   const collection = cloneSceneCollection(createDefaultSceneCollection());
   const scene = collection.scenes[0];
   scene.sources[1].id = scene.sources[0].id;
@@ -316,43 +278,18 @@ test("scene collection validation catches duplicate ids and invalid transforms",
   const result = validateSceneCollection(collection);
 
   assert.equal(result.ok, false);
-  assert.match(
-    result.issues.map((issue) => issue.message).join("\n"),
-    /Duplicate source id/,
-  );
-  assert.match(
-    result.issues.map((issue) => issue.path).join("\n"),
-    /active_scene_id/,
-  );
-  assert.match(
-    result.issues.map((issue) => issue.path).join("\n"),
-    /active_transition_id/,
-  );
-  assert.match(
-    result.issues.map((issue) => issue.message).join("\n"),
-    /Duplicate transition id|Cut transitions/,
-  );
-  assert.match(
-    result.issues.map((issue) => issue.path).join("\n"),
-    /size\.width/,
-  );
-  assert.match(
-    result.issues.map((issue) => issue.path).join("\n"),
-    /opacity/,
-  );
-  assert.match(
-    result.issues.map((issue) => issue.message).join("\n"),
-    /Duplicate source filter/,
-  );
-  assert.match(
-    result.issues.map((issue) => issue.message).join("\n"),
-    /gain_db/,
-  );
+  assert.match(result.issues.map((issue) => issue.message).join("\n"), /Duplicate source id/);
+  assert.match(result.issues.map((issue) => issue.path).join("\n"), /active_scene_id/);
+  assert.match(result.issues.map((issue) => issue.path).join("\n"), /active_transition_id/);
+  assert.match(result.issues.map((issue) => issue.message).join("\n"), /Duplicate transition id|Cut transitions/);
+  assert.match(result.issues.map((issue) => issue.path).join("\n"), /size\.width/);
+  assert.match(result.issues.map((issue) => issue.path).join("\n"), /opacity/);
+  assert.match(result.issues.map((issue) => issue.message).join("\n"), /Duplicate source filter/);
+  assert.match(result.issues.map((issue) => issue.message).join("\n"), /gain_db/);
 });
 
 test("scene filter validation accepts alpha mask blend and rejects malformed filter config", async () => {
-  const { cloneSceneCollection, createDefaultSceneCollection, validateSceneCollection } =
-    await sharedTypes;
+  const { cloneSceneCollection, createDefaultSceneCollection, validateSceneCollection } = await sharedTypes;
   const collection = cloneSceneCollection(createDefaultSceneCollection());
   const scene = collection.scenes[0];
   scene.sources[0].filters = [
@@ -381,14 +318,8 @@ test("scene filter validation accepts alpha mask blend and rejects malformed fil
   const invalid = validateSceneCollection(collection);
 
   assert.equal(invalid.ok, false);
-  assert.match(
-    invalid.issues.map((issue) => issue.message).join("\n"),
-    /blend_mode/,
-  );
-  assert.match(
-    invalid.issues.map((issue) => issue.message).join("\n"),
-    /strength/,
-  );
+  assert.match(invalid.issues.map((issue) => issue.message).join("\n"), /blend_mode/);
+  assert.match(invalid.issues.map((issue) => issue.message).join("\n"), /strength/);
 });
 
 test("scene groups validate children and apply parent transforms", async () => {
@@ -455,12 +386,8 @@ test("scene groups validate children and apply parent transforms", async () => {
 });
 
 test("source bounds modes are reflected in compositor frame evaluation", async () => {
-  const {
-    buildCompositorGraph,
-    buildCompositorRenderPlan,
-    createDefaultSceneCollection,
-    evaluateCompositorFrame,
-  } = await sharedTypes;
+  const { buildCompositorGraph, buildCompositorRenderPlan, createDefaultSceneCollection, evaluateCompositorFrame } =
+    await sharedTypes;
   const scene = createDefaultSceneCollection("2026-05-08T12:00:00.000Z").scenes[0];
   const camera = scene.sources.find((source) => source.id === "source-camera-placeholder");
   assert.ok(camera);
@@ -509,10 +436,7 @@ test("compositor graph builder preserves source order and warnings", async () =>
   } = await sharedTypes;
   const scene = createDefaultSceneCollection("2026-05-08T12:00:00.000Z").scenes[0];
   const graph = buildCompositorGraph(scene);
-  const renderPlan = buildCompositorRenderPlan(
-    graph,
-    buildDefaultCompositorRenderTargets("recording", graph, null),
-  );
+  const renderPlan = buildCompositorRenderPlan(graph, buildDefaultCompositorRenderTargets("recording", graph, null));
   const validation = validateCompositorGraph(graph);
   const renderValidation = validateCompositorRenderPlan(renderPlan);
   const frame = evaluateCompositorFrame(renderPlan, 2);
@@ -531,12 +455,7 @@ test("compositor graph builder preserves source order and warnings", async () =>
     created_at: "2026-05-08T12:00:00.000Z",
     updated_at: "2026-05-08T12:00:00.000Z",
   };
-  const outputPreflight = buildOutputPreflightPlan(
-    "recording",
-    scene,
-    renderPlan,
-    recordingProfile,
-  );
+  const outputPreflight = buildOutputPreflightPlan("recording", scene, renderPlan, recordingProfile);
   const outputValidation = validateOutputPreflightPlan(outputPreflight);
 
   assert.equal(graph.version, 1);
@@ -559,6 +478,10 @@ test("compositor graph builder preserves source order and warnings", async () =>
   assert.equal(renderValidation.ready, true);
   assert.equal(performanceValidation.ready, true);
   assert.equal(outputValidation.ready, true);
+  assert.equal(outputValidation.dry_run_render_targets_ready, true);
+  assert.equal(outputValidation.recording_path_ready, true);
+  assert.equal(outputValidation.encoder_preferences_ready, true);
+  assert.equal(outputValidation.stream_destinations_ready, true);
   assert.equal(outputPreflight.recording_target.render_target_id, "target-recording");
   assert.ok(outputPreflight.render_targets.some((target) => target.kind === "recording"));
   assert.deepEqual(
@@ -644,16 +567,11 @@ test("scene runtime contracts validate preview, render, binding, and transition 
     { requestId: "scene-state-test", requestedAt },
   );
   assert.equal(validateSceneRuntimeStateUpdateRequest(stateUpdate, collection).ready, true);
-  const stateUpdateResponse = createSceneRuntimeStateUpdateResponse(
-    stateUpdate,
-    collection,
-    { updatedAt: "2026-05-08T12:15:00.012Z" },
-  );
+  const stateUpdateResponse = createSceneRuntimeStateUpdateResponse(stateUpdate, collection, {
+    updatedAt: "2026-05-08T12:15:00.012Z",
+  });
   assert.equal(stateUpdateResponse.status, "active");
-  assert.equal(
-    validateSceneRuntimeStateUpdateResponse(stateUpdateResponse, collection).ready,
-    true,
-  );
+  assert.equal(validateSceneRuntimeStateUpdateResponse(stateUpdateResponse, collection).ready, true);
 
   const previewRequest = createPreviewFrameRequest(scene, {
     request_id: "preview-frame-test",
@@ -671,16 +589,10 @@ test("scene runtime contracts validate preview, render, binding, and transition 
     framerate: 60,
     requested_at: requestedAt,
   });
-  assert.equal(
-    validateProgramPreviewFrameRequest(programPreviewRequest, collection).ready,
-    true,
-  );
+  assert.equal(validateProgramPreviewFrameRequest(programPreviewRequest, collection).ready, true);
 
   const graph = buildCompositorGraph(scene);
-  const renderPlan = buildCompositorRenderPlan(
-    graph,
-    buildDefaultCompositorRenderTargets("recording", graph, null),
-  );
+  const renderPlan = buildCompositorRenderPlan(graph, buildDefaultCompositorRenderTargets("recording", graph, null));
   const renderRequest = createCompositorRenderRequest(renderPlan, {
     requestId: "compositor-render-test",
     requestedAt,
@@ -696,39 +608,23 @@ test("scene runtime contracts validate preview, render, binding, and transition 
     generatedAt: "2026-05-08T12:15:00.030Z",
     renderTimeMs: 2.5,
   });
-  const programPreviewResponse = createProgramPreviewFrameResponse(
-    programPreviewRequest,
-    renderedFrame,
-    {
-      activeTransitionId: collection.active_transition_id,
-      activeTransitionName: "Fade",
-      checksum: "sha256:program-test",
-      generatedAt: "2026-05-08T12:15:00.032Z",
-      programTargetId: "target-program",
-      renderTimeMs: 2.75,
-    },
-  );
+  const programPreviewResponse = createProgramPreviewFrameResponse(programPreviewRequest, renderedFrame, {
+    activeTransitionId: collection.active_transition_id,
+    activeTransitionName: "Fade",
+    checksum: "sha256:program-test",
+    generatedAt: "2026-05-08T12:15:00.032Z",
+    programTargetId: "target-program",
+    renderTimeMs: 2.75,
+  });
 
   assert.equal(validateCompositorRenderRequest(renderRequest).ready, true);
   assert.equal(validateCompositorRenderResponse(renderResponse).ready, true);
   assert.equal(validatePreviewFrameResponse(previewResponse).ready, true);
   assert.equal(validateProgramPreviewFrameResponse(programPreviewResponse).ready, true);
-  assert.equal(
-    validateDesignerRuntimeSessionSnapshot(previewResponse.runtime_session).ready,
-    true,
-  );
-  assert.equal(
-    previewResponse.runtime_session_id,
-    previewResponse.runtime_session.runtime_session_id,
-  );
-  assert.equal(
-    validateDesignerRuntimeSessionSnapshot(programPreviewResponse.runtime_session).ready,
-    true,
-  );
-  assert.equal(
-    programPreviewResponse.runtime_session_id,
-    programPreviewResponse.runtime_session.runtime_session_id,
-  );
+  assert.equal(validateDesignerRuntimeSessionSnapshot(previewResponse.runtime_session).ready, true);
+  assert.equal(previewResponse.runtime_session_id, previewResponse.runtime_session.runtime_session_id);
+  assert.equal(validateDesignerRuntimeSessionSnapshot(programPreviewResponse.runtime_session).ready, true);
+  assert.equal(programPreviewResponse.runtime_session_id, programPreviewResponse.runtime_session.runtime_session_id);
   assert.equal(programPreviewResponse.runtime_session.target, "program_preview");
   const readinessReport = {
     version: 1,
@@ -751,14 +647,27 @@ test("scene runtime contracts validate preview, render, binding, and transition 
         detail: previewResponse.provider_status,
       },
     ],
+    output_ready: {
+      version: 1,
+      ready: true,
+      state: "ready",
+      active_scene_id: scene.id,
+      active_scene_name: scene.name,
+      program_preview_frame_ready: true,
+      compositor_render_plan_ready: true,
+      output_preflight_ready: true,
+      media_pipeline_ready: true,
+      detail: "Scene is output-ready for dry-run handoff.",
+      blockers: [],
+      warnings: [],
+    },
     windows_handoff: ["Run npm run validate:windows on a Windows machine."],
   };
   assert.equal(validateDesignerReadinessReport(readinessReport).ready, true);
-  const programPreviewCommand = createSceneRuntimeCommand(
-    "request_program_preview_frame",
-    programPreviewRequest,
-    { commandId: "runtime-program-preview-command-test", requestedAt },
-  );
+  const programPreviewCommand = createSceneRuntimeCommand("request_program_preview_frame", programPreviewRequest, {
+    commandId: "runtime-program-preview-command-test",
+    requestedAt,
+  });
   assert.equal(validateSceneRuntimeCommand(programPreviewCommand).ready, true);
 
   const captureContract = buildRuntimeCaptureSourceBindingContract(scene);
@@ -813,31 +722,20 @@ test("scene runtime contracts validate preview, render, binding, and transition 
       },
     ],
   };
-  const transitionPreview = createTransitionPreviewFrameRequest(
-    stingerCollection,
-    scene.id,
-    toScene.id,
-    {
-      request_id: "transition-preview-test",
-      frame_index: 15,
-      requested_at: requestedAt,
-    },
-  );
-  const transitionPreviewCommand = createSceneRuntimeCommand(
-    "request_transition_preview_frame",
-    transitionPreview,
-    { commandId: "runtime-transition-preview-command-test", requestedAt },
-  );
-  assert.equal(
-    validateTransitionPreviewFrameRequest(transitionPreview, stingerCollection).ready,
-    true,
-  );
+  const transitionPreview = createTransitionPreviewFrameRequest(stingerCollection, scene.id, toScene.id, {
+    request_id: "transition-preview-test",
+    frame_index: 15,
+    requested_at: requestedAt,
+  });
+  const transitionPreviewCommand = createSceneRuntimeCommand("request_transition_preview_frame", transitionPreview, {
+    commandId: "runtime-transition-preview-command-test",
+    requestedAt,
+  });
+  assert.equal(validateTransitionPreviewFrameRequest(transitionPreview, stingerCollection).ready, true);
   assert.equal(validateSceneRuntimeCommand(transitionPreviewCommand).ready, true);
   assert.equal(
-    validateTransitionPreviewFrameRequest(
-      { ...transitionPreview, transition_id: "transition-fade" },
-      stingerCollection,
-    ).ready,
+    validateTransitionPreviewFrameRequest({ ...transitionPreview, transition_id: "transition-fade" }, stingerCollection)
+      .ready,
     true,
   );
 
@@ -849,11 +747,7 @@ test("scene runtime contracts validate preview, render, binding, and transition 
 });
 
 test("capture frame plan maps scene sources to video and audio bindings", async () => {
-  const {
-    buildCaptureFramePlan,
-    createDefaultSceneCollection,
-    validateCaptureFramePlan,
-  } = await sharedTypes;
+  const { buildCaptureFramePlan, createDefaultSceneCollection, validateCaptureFramePlan } = await sharedTypes;
   const scene = createDefaultSceneCollection("2026-05-08T12:00:00.000Z").scenes[0];
   const plan = buildCaptureFramePlan(scene);
   const validation = validateCaptureFramePlan(plan);
@@ -864,12 +758,8 @@ test("capture frame plan maps scene sources to video and audio bindings", async 
   assert.equal(validation.ready, true);
   assert.ok(validation.warnings.some((warning) => warning.includes("capture permission")));
 
-  const display = plan.bindings.find(
-    (binding) => binding.scene_source_id === "source-main-display",
-  );
-  const audio = plan.bindings.find(
-    (binding) => binding.scene_source_id === "source-mic-meter",
-  );
+  const display = plan.bindings.find((binding) => binding.scene_source_id === "source-main-display");
+  const audio = plan.bindings.find((binding) => binding.scene_source_id === "source-mic-meter");
 
   assert.equal(display.capture_kind, "display");
   assert.equal(display.media_kind, "video");
@@ -884,11 +774,8 @@ test("capture frame plan maps scene sources to video and audio bindings", async 
 });
 
 test("capture provider runtime snapshot mirrors capture bindings", async () => {
-  const {
-    buildCaptureProviderRuntimeSnapshot,
-    createDefaultSceneCollection,
-    validateCaptureProviderRuntimeSnapshot,
-  } = await sharedTypes;
+  const { buildCaptureProviderRuntimeSnapshot, createDefaultSceneCollection, validateCaptureProviderRuntimeSnapshot } =
+    await sharedTypes;
   const scene = createDefaultSceneCollection("2026-05-08T12:00:00.000Z").scenes[0];
   const snapshot = buildCaptureProviderRuntimeSnapshot(scene);
   const validation = validateCaptureProviderRuntimeSnapshot(snapshot);
@@ -900,9 +787,7 @@ test("capture provider runtime snapshot mirrors capture bindings", async () => {
   assert.ok(snapshot.providers.some((provider) => provider.media_kind === "video"));
   assert.ok(snapshot.providers.some((provider) => provider.media_kind === "audio"));
 
-  const display = snapshot.providers.find(
-    (provider) => provider.scene_source_id === "source-main-display",
-  );
+  const display = snapshot.providers.find((provider) => provider.scene_source_id === "source-main-display");
   assert.equal(display.provider_id, "provider:source-main-display");
   assert.equal(display.lifecycle, "idle");
   assert.equal(display.binding_status, "permission_required");
@@ -910,11 +795,7 @@ test("capture provider runtime snapshot mirrors capture bindings", async () => {
 });
 
 test("audio mixer plan maps audio meter sources to buses", async () => {
-  const {
-    buildAudioMixerPlan,
-    createDefaultSceneCollection,
-    validateAudioMixerPlan,
-  } = await sharedTypes;
+  const { buildAudioMixerPlan, createDefaultSceneCollection, validateAudioMixerPlan } = await sharedTypes;
   const scene = createDefaultSceneCollection("2026-05-08T12:00:00.000Z").scenes[0];
   const plan = buildAudioMixerPlan(scene);
   const validation = validateAudioMixerPlan(plan);
@@ -995,11 +876,7 @@ test("audio graph runtime reports ordered audio filter diagnostics", async () =>
   const sceneValidation = validateSceneCollection(collection);
   assert.equal(sceneValidation.ok, true);
 
-  const snapshot = buildAudioGraphRuntimeSnapshot(
-    scene,
-    3,
-    "2026-05-08T12:00:00.000Z",
-  );
+  const snapshot = buildAudioGraphRuntimeSnapshot(scene, 3, "2026-05-08T12:00:00.000Z");
   const validation = validateAudioGraphRuntimeSnapshot(snapshot);
   const runtimeSource = snapshot.sources[0];
 
@@ -1040,11 +917,7 @@ test("audio graph runtime reports malformed filters without mutating levels", as
     },
   ];
 
-  const snapshot = buildAudioGraphRuntimeSnapshot(
-    scene,
-    2,
-    "2026-05-08T12:00:00.000Z",
-  );
+  const snapshot = buildAudioGraphRuntimeSnapshot(scene, 2, "2026-05-08T12:00:00.000Z");
   const runtimeSource = snapshot.sources[0];
 
   assert.equal(runtimeSource.filters[0].status, "error");
@@ -1054,15 +927,10 @@ test("audio graph runtime reports malformed filters without mutating levels", as
 });
 
 test("capture inventory binding updates scene source availability", async () => {
-  const {
-    bindSceneCollectionCaptureInventory,
-    createDefaultSceneCollection,
-  } = await sharedTypes;
+  const { bindSceneCollectionCaptureInventory, createDefaultSceneCollection } = await sharedTypes;
   const collection = createDefaultSceneCollection("2026-05-08T12:00:00.000Z");
   const camera = collection.scenes[0].sources.find((source) => source.kind === "camera");
-  const microphone = collection.scenes[0].sources.find(
-    (source) => source.kind === "audio_meter",
-  );
+  const microphone = collection.scenes[0].sources.find((source) => source.kind === "audio_meter");
   assert.ok(camera);
   assert.ok(microphone);
   camera.config.device_id = "camera:facecam";
@@ -1105,9 +973,7 @@ test("capture inventory binding updates scene source availability", async () => 
 
   const display = bound.scenes[0].sources.find((source) => source.kind === "display");
   const boundCamera = bound.scenes[0].sources.find((source) => source.kind === "camera");
-  const boundMicrophone = bound.scenes[0].sources.find(
-    (source) => source.kind === "audio_meter",
-  );
+  const boundMicrophone = bound.scenes[0].sources.find((source) => source.kind === "audio_meter");
 
   assert.equal(display.config.availability.state, "available");
   assert.equal(boundCamera.config.availability.state, "available");

@@ -123,10 +123,12 @@ pacing and hardware-readiness reporting; it does not start runtime profiling.
 
 The Designer readiness panel rolls the current scene model, runtime preview,
 program preview, capture, browser, media, audio, transitions, filters,
-performance, desktop permissions, and output handoff contracts into one operator
-view. It is the Scene Designer runtime V1 milestone surface; it does not start
-recording, streaming, encoder execution, or cross-platform hardware capture
-validation.
+performance, desktop permissions, output handoff contracts, and a scene
+output-ready diagnostic into one operator view. The diagnostic is derived from
+the active scene, a generated program preview frame, compositor render plan,
+output preflight categories, and media pipeline validation. It is the Scene
+Designer runtime V1 milestone surface; it does not start recording, streaming,
+encoder execution, or cross-platform hardware capture validation.
 
 The Designer Completion Candidate adds managed runtime-session metadata around
 that surface. Preview, program-preview, and transition-preview frames now expose

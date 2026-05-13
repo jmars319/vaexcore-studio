@@ -281,8 +281,11 @@ Designer preview and does not mutate scene data.
 
 Returns an exportable `DesignerReadinessReport` covering scene model, runtime
 preview, program preview, capture, camera, audio, browser, media, transitions,
-filters, performance, permissions, output handoff, and Windows validation
-handoff. Item states are `ready`, `degraded`, `blocked`, or `not_applicable`.
+filters, performance, permissions, output handoff, scene output readiness, and
+Windows validation handoff. Item states are `ready`, `degraded`, `blocked`, or
+`not_applicable`. The report includes `output_ready`, a redacted diagnostic
+derived from the active scene, generated program preview frame, compositor
+render plan, output preflight plan, and media pipeline validation.
 
 ### `POST /scene-runtime/validate-graph`
 
@@ -304,7 +307,7 @@ Returns the active scene audio graph runtime snapshot with pre-filter and post-f
 
 Returns the current dry-run pipeline plan using the saved capture sources, first recording profile, active scene, and enabled stream destinations.
 
-Also refreshes `pipeline-plan.json` and `pipeline-config.json` in the app data directory. The generated config includes compositor render targets, performance telemetry, and an `output_preflight_plan` with recording/streaming target contracts for dry-run readiness checks.
+Also refreshes `pipeline-plan.json` and `pipeline-config.json` in the app data directory. The generated config includes compositor render targets, performance telemetry, and an `output_preflight_plan` with recording/streaming target contracts for dry-run readiness checks. `output_preflight_plan.validation` now breaks readiness into render target, recording path, encoder preference, and stream destination booleans while still avoiding real encoder or live stream startup.
 
 ### `POST /media/plan`
 

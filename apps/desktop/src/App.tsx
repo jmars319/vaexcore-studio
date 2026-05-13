@@ -118,6 +118,7 @@ import type {
   SceneSourceKind,
   SceneRuntimeBindingsSnapshot,
   SceneRuntimeSnapshot,
+  SceneOutputReadyDiagnostic,
   SceneTransition,
   SceneTransitionPreviewFrame,
   StudioEvent,
@@ -185,14 +186,7 @@ import {
 } from "./api";
 import logoUrl from "./assets/brand/vaexcore-studio-logo.jpg";
 
-type Section =
-  | "dashboard"
-  | "designer"
-  | "destinations"
-  | "profiles"
-  | "controls"
-  | "apps"
-  | "logs";
+type Section = "dashboard" | "designer" | "destinations" | "profiles" | "controls" | "apps" | "logs";
 
 type PreviewQuality = "draft" | "balanced" | "full";
 
@@ -218,14 +212,7 @@ type SuiteTimelineItem = {
 type SceneSourcePatch = Partial<
   Pick<
     SceneSource,
-    | "name"
-    | "opacity"
-    | "rotation_degrees"
-    | "visible"
-    | "locked"
-    | "z_index"
-    | "bounds_mode"
-    | "filters"
+    "name" | "opacity" | "rotation_degrees" | "visible" | "locked" | "z_index" | "bounds_mode" | "filters"
   >
 > & {
   position?: Partial<ScenePoint>;
@@ -234,9 +221,7 @@ type SceneSourcePatch = Partial<
   config?: Record<string, unknown>;
 };
 
-type SceneTransitionPatch = Partial<
-  Pick<SceneTransition, "name" | "kind" | "duration_ms" | "easing" | "config">
->;
+type SceneTransitionPatch = Partial<Pick<SceneTransition, "name" | "kind" | "duration_ms" | "easing" | "config">>;
 
 type SelectedRuntimeBinding =
   | {
@@ -684,21 +669,11 @@ const sceneFilterKindLabels: Record<SceneSourceFilterKind, string> = {
   compressor: "Compressor",
 };
 
-const sceneBundleDialogFilters = [
-  { name: "Scene collection JSON", extensions: ["json"] },
-];
-const imageAssetDialogFilters = [
-  { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] },
-];
-const mediaAssetDialogFilters = [
-  { name: "Media", extensions: ["mp4", "mov", "webm", "mkv"] },
-];
-const lutAssetDialogFilters = [
-  { name: "LUT", extensions: ["cube"] },
-];
-const fontAssetDialogFilters = [
-  { name: "Fonts", extensions: ["ttf", "otf"] },
-];
+const sceneBundleDialogFilters = [{ name: "Scene collection JSON", extensions: ["json"] }];
+const imageAssetDialogFilters = [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }];
+const mediaAssetDialogFilters = [{ name: "Media", extensions: ["mp4", "mov", "webm", "mkv"] }];
+const lutAssetDialogFilters = [{ name: "LUT", extensions: ["cube"] }];
+const fontAssetDialogFilters = [{ name: "Fonts", extensions: ["ttf", "otf"] }];
 
 function pickedDialogPath(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
@@ -725,9 +700,7 @@ async function pickSceneBundleImportPath(): Promise<string | null> {
   );
 }
 
-async function pickLocalAssetPath(
-  kind: "image" | "media" | "lut" | "font",
-): Promise<string | null> {
+async function pickLocalAssetPath(kind: "image" | "media" | "lut" | "font"): Promise<string | null> {
   const { open } = await import("@tauri-apps/plugin-dialog");
   return pickedDialogPath(
     await open({
@@ -758,9 +731,21 @@ const sectionIds: readonly Section[] = [
 const navItems: Array<{ id: Section; label: string; icon: ReactNode }> = [
   { id: "dashboard", label: "Control Room", icon: <Activity size={17} /> },
   { id: "designer", label: "Designer", icon: <Layers size={17} /> },
-  { id: "destinations", label: "Broadcast Destinations", icon: <Radio size={17} /> },
-  { id: "profiles", label: "Recording Profiles", icon: <FileVideo size={17} /> },
-  { id: "controls", label: "Broadcast Setup", icon: <SlidersHorizontal size={17} /> },
+  {
+    id: "destinations",
+    label: "Broadcast Destinations",
+    icon: <Radio size={17} />,
+  },
+  {
+    id: "profiles",
+    label: "Recording Profiles",
+    icon: <FileVideo size={17} />,
+  },
+  {
+    id: "controls",
+    label: "Broadcast Setup",
+    icon: <SlidersHorizontal size={17} />,
+  },
   { id: "apps", label: "Suite", icon: <Cable size={17} /> },
   { id: "logs", label: "Event Log", icon: <ScrollText size={17} /> },
 ];
@@ -827,9 +812,7 @@ function loadDesignerShortcutMap(): DesignerShortcutMap {
     return designerShortcutDefinitions.reduce(
       (shortcuts, definition) => ({
         ...shortcuts,
-        [definition.action]:
-          normalizeDesignerShortcutCombo(parsed[definition.action]) ??
-          definition.defaultCombo,
+        [definition.action]: normalizeDesignerShortcutCombo(parsed[definition.action]) ?? definition.defaultCombo,
       }),
       {} as DesignerShortcutMap,
     );
@@ -840,19 +823,16 @@ function loadDesignerShortcutMap(): DesignerShortcutMap {
 
 function saveDesignerShortcutMap(shortcuts: DesignerShortcutMap) {
   try {
-    window.localStorage.setItem(
-      designerShortcutStorageKey,
-      JSON.stringify(shortcuts),
-    );
+    window.localStorage.setItem(designerShortcutStorageKey, JSON.stringify(shortcuts));
   } catch {
     // Local shortcut persistence is best-effort and should never block editing.
   }
 }
 
 function loadDesignerSourcePresets(): DesignerStoredSourcePreset[] {
-  return loadDesignerPresetList<DesignerStoredSourcePreset>(
-    designerSourcePresetStorageKey,
-  ).filter((preset) => preset.id && preset.name && preset.kind && preset.defaults);
+  return loadDesignerPresetList<DesignerStoredSourcePreset>(designerSourcePresetStorageKey).filter(
+    (preset) => preset.id && preset.name && preset.kind && preset.defaults,
+  );
 }
 
 function saveDesignerSourcePresets(presets: DesignerStoredSourcePreset[]) {
@@ -860,9 +840,9 @@ function saveDesignerSourcePresets(presets: DesignerStoredSourcePreset[]) {
 }
 
 function loadDesignerFilterPresets(): DesignerStoredFilterPreset[] {
-  return loadDesignerPresetList<DesignerStoredFilterPreset>(
-    designerFilterPresetStorageKey,
-  ).filter((preset) => preset.id && preset.name && Array.isArray(preset.filters));
+  return loadDesignerPresetList<DesignerStoredFilterPreset>(designerFilterPresetStorageKey).filter(
+    (preset) => preset.id && preset.name && Array.isArray(preset.filters),
+  );
 }
 
 function saveDesignerFilterPresets(presets: DesignerStoredFilterPreset[]) {
@@ -893,9 +873,7 @@ function cloneDesignerJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function buildSceneAssetDependencyReport(
-  collection: SceneCollection,
-): SceneAssetDependencyReport {
+function buildSceneAssetDependencyReport(collection: SceneCollection): SceneAssetDependencyReport {
   const dependencies: SceneAssetDependencyReport["dependencies"] = [];
   collection.scenes.forEach((scene) => {
     scene.sources.forEach((source) => {
@@ -977,10 +955,7 @@ function buildSceneAssetDependencyReport(
   };
 }
 
-function buildFallbackDesignerReadinessReport(
-  collection: SceneCollection,
-  scene: Scene,
-): DesignerReadinessReport {
+function buildFallbackDesignerReadinessReport(collection: SceneCollection, scene: Scene): DesignerReadinessReport {
   return {
     version: 1,
     collection_id: collection.id,
@@ -996,6 +971,20 @@ function buildFallbackDesignerReadinessReport(
         detail: "Backend readiness report was not available; this is a local fallback.",
       },
     ],
+    output_ready: {
+      version: 1,
+      ready: false,
+      state: "degraded",
+      active_scene_id: scene.id,
+      active_scene_name: scene.name,
+      program_preview_frame_ready: false,
+      compositor_render_plan_ready: false,
+      output_preflight_ready: false,
+      media_pipeline_ready: false,
+      detail: "Backend output-ready diagnostic was not available.",
+      blockers: [],
+      warnings: ["Backend readiness report was not available."],
+    },
     windows_handoff: [
       "Run npm run validate:windows from the Windows checkout.",
       "Open Studio on Windows and validate live capture/readiness panels.",
@@ -1013,24 +1002,15 @@ function normalizeDesignerShortcutCombo(combo: unknown) {
   const key = parts.at(-1);
   if (!key || ["mod", "shift", "alt"].includes(key)) return null;
 
-  const modifiers = ["mod", "alt", "shift"].filter((modifier) =>
-    parts.includes(modifier),
-  );
+  const modifiers = ["mod", "alt", "shift"].filter((modifier) => parts.includes(modifier));
   return [...modifiers, key].join("+");
 }
 
-function designerShortcutComboFromEvent(
-  event: KeyboardEvent | ReactKeyboardEvent,
-) {
+function designerShortcutComboFromEvent(event: KeyboardEvent | ReactKeyboardEvent) {
   const key = normalizeDesignerShortcutKey(event.key);
   if (!key || ["meta", "control", "shift", "alt"].includes(key)) return null;
 
-  return [
-    event.metaKey || event.ctrlKey ? "mod" : "",
-    event.altKey ? "alt" : "",
-    event.shiftKey ? "shift" : "",
-    key,
-  ]
+  return [event.metaKey || event.ctrlKey ? "mod" : "", event.altKey ? "alt" : "", event.shiftKey ? "shift" : "", key]
     .filter(Boolean)
     .join("+");
 }
@@ -1070,11 +1050,7 @@ function designerShortcutDefinition(action: DesignerShortcutAction) {
   return designerShortcutDefinitions.find((definition) => definition.action === action);
 }
 
-function designerShortcutMatches(
-  event: KeyboardEvent,
-  action: DesignerShortcutAction,
-  shortcuts: DesignerShortcutMap,
-) {
+function designerShortcutMatches(event: KeyboardEvent, action: DesignerShortcutAction, shortcuts: DesignerShortcutMap) {
   const combo = designerShortcutComboFromEvent(event);
   if (!combo) return false;
   const definition = designerShortcutDefinition(action);
@@ -1097,8 +1073,7 @@ function previewFrameRequestForScene(scene: Scene, quality: PreviewQuality) {
 }
 
 function previewRequestSize(scene: Scene, quality: PreviewQuality) {
-  const maxWidth =
-    quality === "draft" ? 640 : quality === "balanced" ? 960 : scene.canvas.width;
+  const maxWidth = quality === "draft" ? 640 : quality === "balanced" ? 960 : scene.canvas.width;
   const scale = Math.min(1, maxWidth / Math.max(1, scene.canvas.width));
   return {
     width: Math.max(1, Math.round(scene.canvas.width * scale)),
@@ -1128,9 +1103,7 @@ function updatePreviewStats(
   quality: PreviewQuality,
 ): PreviewStats {
   const skippedFrames =
-    current.lastFrameIndex === null
-      ? 0
-      : Math.max(0, response.frame_index - current.lastFrameIndex - 1);
+    current.lastFrameIndex === null ? 0 : Math.max(0, response.frame_index - current.lastFrameIndex - 1);
   const renderedFrames = current.renderedFrames + 1;
   const averageRenderTimeMs =
     current.averageRenderTimeMs === 0
@@ -1207,9 +1180,7 @@ function captureConfigPatchForCandidate(
   source: SceneSource,
   candidate: CaptureSourceCandidate | null,
 ): Record<string, unknown> {
-  const availability = candidate
-    ? captureAvailabilityForCandidate(candidate)
-    : unassignedCaptureAvailability(source);
+  const availability = candidate ? captureAvailabilityForCandidate(candidate) : unassignedCaptureAvailability(source);
 
   switch (source.kind) {
     case "display":
@@ -1232,12 +1203,7 @@ function captureConfigPatchForCandidate(
     case "audio_meter":
       return {
         device_id: candidate?.id ?? null,
-        channel:
-          candidate?.kind === "system_audio"
-            ? "system"
-            : candidate
-              ? "microphone"
-              : source.config.channel,
+        channel: candidate?.kind === "system_audio" ? "system" : candidate ? "microphone" : source.config.channel,
         availability,
       };
     default:
@@ -1249,16 +1215,12 @@ function runtimeBindingForSource(
   bindings: SceneRuntimeBindingsSnapshot | null,
   source: SceneSource,
 ): SelectedRuntimeBinding | null {
-  const audioBinding = bindings?.audio.bindings.find(
-    (binding) => binding.scene_source_id === source.id,
-  );
+  const audioBinding = bindings?.audio.bindings.find((binding) => binding.scene_source_id === source.id);
   if (source.kind === "audio_meter" && audioBinding) {
     return { kind: "audio", binding: audioBinding };
   }
 
-  const captureBinding = bindings?.capture.bindings.find(
-    (binding) => binding.scene_source_id === source.id,
-  );
+  const captureBinding = bindings?.capture.bindings.find((binding) => binding.scene_source_id === source.id);
   if (captureBinding) {
     return { kind: "capture", binding: captureBinding };
   }
@@ -1270,9 +1232,7 @@ function runtimeBindingForSource(
   return null;
 }
 
-function runtimeBindingTone(
-  status: string | null | undefined,
-): "green" | "red" | "amber" | "muted" {
+function runtimeBindingTone(status: string | null | undefined): "green" | "red" | "amber" | "muted" {
   switch (status) {
     case "ready":
       return "green";
@@ -1286,9 +1246,7 @@ function runtimeBindingTone(
   }
 }
 
-function imageAssetStatusTone(
-  status: string | null | undefined,
-): "green" | "red" | "amber" | "muted" {
+function imageAssetStatusTone(status: string | null | undefined): "green" | "red" | "amber" | "muted" {
   switch (status) {
     case "decoded":
       return "green";
@@ -1308,9 +1266,7 @@ function imageAssetStatusLabel(status: string | null | undefined): string {
   return (status ?? "pending").replaceAll("_", " ");
 }
 
-function textRuntimeStatusTone(
-  status: string | null | undefined,
-): "green" | "red" | "amber" | "muted" {
+function textRuntimeStatusTone(status: string | null | undefined): "green" | "red" | "amber" | "muted" {
   switch (status) {
     case "rendered":
       return "green";
@@ -1327,9 +1283,7 @@ function textRuntimeStatusLabel(status: string | null | undefined): string {
   return (status ?? "pending").replaceAll("_", " ");
 }
 
-function browserRuntimeStatusTone(
-  status: string | null | undefined,
-): "green" | "red" | "amber" | "muted" {
+function browserRuntimeStatusTone(status: string | null | undefined): "green" | "red" | "amber" | "muted" {
   switch (status) {
     case "rendered":
       return "green";
@@ -1349,9 +1303,7 @@ function browserRuntimeStatusLabel(status: string | null | undefined): string {
   return (status ?? "pending").replaceAll("_", " ");
 }
 
-function captureRuntimeStatusTone(
-  status: string | null | undefined,
-): "green" | "red" | "amber" | "muted" {
+function captureRuntimeStatusTone(status: string | null | undefined): "green" | "red" | "amber" | "muted" {
   switch (status) {
     case "rendered":
       return "green";
@@ -1372,9 +1324,7 @@ function captureRuntimeStatusLabel(status: string | null | undefined): string {
   return (status ?? "pending").replaceAll("_", " ");
 }
 
-function stingerRuntimeStatusTone(
-  status: string | null | undefined,
-): "green" | "red" | "amber" | "muted" {
+function stingerRuntimeStatusTone(status: string | null | undefined): "green" | "red" | "amber" | "muted" {
   switch (status) {
     case "rendered":
       return "green";
@@ -1394,9 +1344,7 @@ function stingerRuntimeStatusLabel(status: string | null | undefined): string {
   return (status ?? "pending").replaceAll("_", " ");
 }
 
-function filterRuntimeStatusTone(
-  status: string | null | undefined,
-): "green" | "red" | "amber" | "muted" {
+function filterRuntimeStatusTone(status: string | null | undefined): "green" | "red" | "amber" | "muted" {
   switch (status) {
     case "applied":
       return "green";
@@ -1420,9 +1368,10 @@ function isAudioSourceFilterKind(kind: SceneSourceFilterKind): boolean {
   return kind === "audio_gain" || kind === "noise_gate" || kind === "compressor";
 }
 
-function filterRuntimeSummary(
-  filters: Array<{ status?: string | null }>,
-): { label: string; tone: "green" | "red" | "amber" | "muted" } {
+function filterRuntimeSummary(filters: Array<{ status?: string | null }>): {
+  label: string;
+  tone: "green" | "red" | "amber" | "muted";
+} {
   if (filters.length === 0) {
     return { label: "no filters", tone: "muted" };
   }
@@ -1440,13 +1389,13 @@ function filterRuntimeSummary(
   if (counts.applied === filters.length) {
     return { label: `${filters.length} applied`, tone: "green" };
   }
-  return { label: `${counts.applied ?? 0}/${filters.length} applied`, tone: "muted" };
+  return {
+    label: `${counts.applied ?? 0}/${filters.length} applied`,
+    tone: "muted",
+  };
 }
 
-function runtimeNodeForSource(
-  frame: PreviewFrameResponse | null,
-  sourceId: string,
-): CompositorEvaluatedNode | null {
+function runtimeNodeForSource(frame: PreviewFrameResponse | null, sourceId: string): CompositorEvaluatedNode | null {
   for (const target of frame?.rendered_frame?.targets ?? []) {
     const node = target.nodes.find((candidate) => candidate.source_id === sourceId);
     if (node) return node;
@@ -1478,9 +1427,7 @@ function runtimeBindingShape(binding: SelectedRuntimeBinding | null): string {
   if (!binding) return "Pending";
   if (binding.kind === "capture") {
     if (binding.binding.media_kind === "audio") {
-      return `${binding.binding.sample_rate ?? "auto"} Hz / ${
-        binding.binding.channels ?? "auto"
-      } ch`;
+      return `${binding.binding.sample_rate ?? "auto"} Hz / ${binding.binding.channels ?? "auto"} ch`;
     }
     return `${binding.binding.width ?? "auto"}x${
       binding.binding.height ?? "auto"
@@ -1493,24 +1440,17 @@ function audioGraphSourceForSource(
   audioGraph: AudioGraphRuntimeSnapshot | null,
   sourceId: string,
 ): AudioGraphRuntimeSource | null {
-  return (
-    audioGraph?.sources.find((source) => source.scene_source_id === sourceId) ?? null
-  );
+  return audioGraph?.sources.find((source) => source.scene_source_id === sourceId) ?? null;
 }
 
 function captureProviderForSource(
   snapshot: CaptureProviderRuntimeSnapshot | null,
   sourceId: string,
 ): CaptureProviderStatus | null {
-  return (
-    snapshot?.providers.find((provider) => provider.scene_source_id === sourceId) ??
-    null
-  );
+  return snapshot?.providers.find((provider) => provider.scene_source_id === sourceId) ?? null;
 }
 
-function captureProviderTone(
-  provider: CaptureProviderStatus | null,
-): "green" | "red" | "amber" | "muted" {
+function captureProviderTone(provider: CaptureProviderStatus | null): "green" | "red" | "amber" | "muted" {
   if (!provider) return "muted";
   switch (provider.lifecycle) {
     case "running":
@@ -1531,9 +1471,7 @@ function captureProviderShape(provider: CaptureProviderStatus | null): string {
   if (provider.media_kind === "audio") {
     return `${provider.sample_rate ?? "auto"} Hz / ${provider.channels ?? "auto"} ch`;
   }
-  return `${provider.width ?? "auto"}x${provider.height ?? "auto"} @ ${
-    provider.framerate ?? "auto"
-  } fps`;
+  return `${provider.width ?? "auto"}x${provider.height ?? "auto"} @ ${provider.framerate ?? "auto"} fps`;
 }
 
 function formatAudioLevel(value: number | null | undefined): string {
@@ -1551,10 +1489,7 @@ function formatAudioDelta(value: number | null | undefined): string {
 }
 
 function audioFilterAdjustmentLabel(
-  filter: Pick<
-    AudioFilterRuntimeMetadata,
-    "attenuation_db" | "gain_reduction_db" | "level_change_db"
-  > | null,
+  filter: Pick<AudioFilterRuntimeMetadata, "attenuation_db" | "gain_reduction_db" | "level_change_db"> | null,
 ): string {
   if (!filter) return "pending";
   if (filter.gain_reduction_db && filter.gain_reduction_db > 0) {
@@ -1567,10 +1502,7 @@ function audioFilterAdjustmentLabel(
 }
 
 function App() {
-  const isSettingsWindow = useMemo(
-    () => new URLSearchParams(window.location.search).get("window") === "settings",
-    [],
-  );
+  const isSettingsWindow = useMemo(() => new URLSearchParams(window.location.search).get("window") === "settings", []);
   const [section, setSection] = useState<Section>(() => initialSection());
   const [config, setConfig] = useState<RuntimeApiConfig | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
@@ -1585,87 +1517,64 @@ function App() {
   const [selectedProfileId, setSelectedProfileId] = useState<string | undefined>();
   const [selectedDestinationId, setSelectedDestinationId] = useState<string | undefined>();
   const [profileForm, setProfileForm] = useState<MediaProfileInput>(defaultProfileForm);
-  const [destinationForm, setDestinationForm] =
-    useState<StreamDestinationInput>(defaultDestinationForm);
+  const [destinationForm, setDestinationForm] = useState<StreamDestinationInput>(defaultDestinationForm);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [editingDestinationId, setEditingDestinationId] = useState<string | null>(null);
   const [markerLabel, setMarkerLabel] = useState("manual-marker");
-  const [settingsSnapshot, setSettingsSnapshot] =
-    useState<LocalAppSettingsSnapshot | null>(null);
-  const [settingsForm, setSettingsForm] =
-    useState<AppSettings>(defaultAppSettings);
+  const [settingsSnapshot, setSettingsSnapshot] = useState<LocalAppSettingsSnapshot | null>(null);
+  const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [captureSourceSaving, setCaptureSourceSaving] = useState(false);
-  const [mediaRunnerInfo, setMediaRunnerInfo] =
-    useState<MediaRunnerInfo | null>(null);
+  const [mediaRunnerInfo, setMediaRunnerInfo] = useState<MediaRunnerInfo | null>(null);
   const [preflight, setPreflight] = useState<PreflightSnapshot | null>(null);
-  const [captureInventory, setCaptureInventory] =
-    useState<CaptureSourceInventory | null>(null);
+  const [captureInventory, setCaptureInventory] = useState<CaptureSourceInventory | null>(null);
   const [permissionStatuses, setPermissionStatuses] = useState<{
     camera: PermissionStatus | null;
     microphone: PermissionStatus | null;
   }>({ camera: null, microphone: null });
   const [pipelinePlan, setPipelinePlan] = useState<MediaPipelinePlan | null>(null);
   const [sceneRuntime, setSceneRuntime] = useState<SceneRuntimeSnapshot | null>(null);
-  const [sceneRuntimeBindings, setSceneRuntimeBindings] =
-    useState<SceneRuntimeBindingsSnapshot | null>(null);
-  const [captureProviderRuntime, setCaptureProviderRuntime] =
-    useState<CaptureProviderRuntimeSnapshot | null>(null);
-  const [audioGraphRuntime, setAudioGraphRuntime] =
-    useState<AudioGraphRuntimeSnapshot | null>(null);
-  const [designerRuntimeSession, setDesignerRuntimeSession] =
-    useState<DesignerRuntimeSessionSnapshot | null>(null);
-  const [designerReadinessReport, setDesignerReadinessReport] =
-    useState<DesignerReadinessReport | null>(null);
-  const [designerRuntimeMessage, setDesignerRuntimeMessage] =
-    useState<string | null>(null);
+  const [sceneRuntimeBindings, setSceneRuntimeBindings] = useState<SceneRuntimeBindingsSnapshot | null>(null);
+  const [captureProviderRuntime, setCaptureProviderRuntime] = useState<CaptureProviderRuntimeSnapshot | null>(null);
+  const [audioGraphRuntime, setAudioGraphRuntime] = useState<AudioGraphRuntimeSnapshot | null>(null);
+  const [designerRuntimeSession, setDesignerRuntimeSession] = useState<DesignerRuntimeSessionSnapshot | null>(null);
+  const [designerReadinessReport, setDesignerReadinessReport] = useState<DesignerReadinessReport | null>(null);
+  const [designerRuntimeMessage, setDesignerRuntimeMessage] = useState<string | null>(null);
   const [previewFrame, setPreviewFrame] = useState<PreviewFrameResponse | null>(null);
   const [previewPolling, setPreviewPolling] = useState(true);
-  const [previewQuality, setPreviewQuality] =
-    useState<PreviewQuality>("balanced");
-  const [previewStats, setPreviewStats] =
-    useState<PreviewStats>(initialPreviewStats);
+  const [previewQuality, setPreviewQuality] = useState<PreviewQuality>("balanced");
+  const [previewStats, setPreviewStats] = useState<PreviewStats>(initialPreviewStats);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
-  const [programPreviewFrame, setProgramPreviewFrame] =
-    useState<ProgramPreviewFrameResponse | null>(null);
+  const [programPreviewFrame, setProgramPreviewFrame] = useState<ProgramPreviewFrameResponse | null>(null);
   const [programPreviewLoading, setProgramPreviewLoading] = useState(false);
   const [programPreviewError, setProgramPreviewError] = useState<string | null>(null);
   const [captureBindingRefreshing, setCaptureBindingRefreshing] = useState(false);
   const [suiteLaunchStatus, setSuiteLaunchStatus] = useState<string | null>(null);
   const [suiteStatus, setSuiteStatus] = useState<SuiteAppStatus[]>([]);
   const [suiteSession, setSuiteSession] = useState<SuiteSession | null>(null);
-  const [persistedSuiteTimeline, setPersistedSuiteTimeline] = useState<
-    SuiteTimelineEvent[]
-  >([]);
-  const [twitchReadiness, setTwitchReadiness] =
-    useState<TwitchBroadcastReadiness | null>(null);
+  const [persistedSuiteTimeline, setPersistedSuiteTimeline] = useState<SuiteTimelineEvent[]>([]);
+  const [twitchReadiness, setTwitchReadiness] = useState<TwitchBroadcastReadiness | null>(null);
   const [streamBandwidthTest, setStreamBandwidthTest] = useState(false);
-  const [sceneCollection, setSceneCollection] = useState<SceneCollection>(() =>
-    createDefaultSceneCollection(),
-  );
-  const [selectedSceneSourceId, setSelectedSceneSourceId] = useState(
-    "source-main-display",
-  );
-  const [selectedSceneSourceIds, setSelectedSceneSourceIds] = useState<string[]>([
-    "source-main-display",
-  ]);
+  const [sceneCollection, setSceneCollection] = useState<SceneCollection>(() => createDefaultSceneCollection());
+  const [selectedSceneSourceId, setSelectedSceneSourceId] = useState("source-main-display");
+  const [selectedSceneSourceIds, setSelectedSceneSourceIds] = useState<string[]>(["source-main-display"]);
   const [sceneSaveStatus, setSceneSaveStatus] = useState<string | null>(null);
   const [sceneDirty, setSceneDirty] = useState(false);
   const [sceneHistory, setSceneHistory] = useState<SceneHistory>({
     past: [],
     future: [],
   });
-  const [designerSourceClipboard, setDesignerSourceClipboard] = useState<
-    SceneSource[]
-  >([]);
+  const [designerSourceClipboard, setDesignerSourceClipboard] = useState<SceneSource[]>([]);
   const designerHistoryGroupRef = useRef<string | null>(null);
   const previewRequestInFlightRef = useRef(false);
 
   useEffect(() => {
-    loadRuntimeConfig().then(setConfig).catch((error: Error) => {
-      setError(error.message);
-    });
+    loadRuntimeConfig()
+      .then(setConfig)
+      .catch((error: Error) => {
+        setError(error.message);
+      });
   }, []);
 
   useEffect(() => {
@@ -1782,21 +1691,15 @@ function App() {
             if (!cancelled) setPreflight(snapshot);
           })
           .catch(() => undefined);
-        setEvents((current) =>
-          mergeEvents([...nextStatus.recent_events, ...current]),
-        );
+        setEvents((current) => mergeEvents([...nextStatus.recent_events, ...current]));
         setError(null);
         setSelectedProfileId((current) =>
-          current &&
-          nextProfiles.recording_profiles.some((profile) => profile.id === current)
+          current && nextProfiles.recording_profiles.some((profile) => profile.id === current)
             ? current
             : nextProfiles.recording_profiles[0]?.id,
         );
         setSelectedDestinationId((current) =>
-          current &&
-          nextProfiles.stream_destinations.some(
-            (destination) => destination.id === current,
-          )
+          current && nextProfiles.stream_destinations.some((destination) => destination.id === current)
             ? current
             : nextProfiles.stream_destinations[0]?.id,
         );
@@ -1822,10 +1725,7 @@ function App() {
       .then((collection) => {
         if (cancelled) return;
         setSceneCollection(collection);
-        const scene =
-          collection.scenes.find(
-            (item) => item.id === collection.active_scene_id,
-          ) ?? collection.scenes[0];
+        const scene = collection.scenes.find((item) => item.id === collection.active_scene_id) ?? collection.scenes[0];
         const sourceId = scene?.sources[0]?.id ?? "";
         setSelectedSceneSourceId(sourceId);
         setSelectedSceneSourceIds(sourceId ? [sourceId] : []);
@@ -1858,7 +1758,9 @@ function App() {
         event.type === "stream.started" ||
         event.type === "stream.stopped"
       ) {
-        StudioApi.status(config).then(setStatus).catch(() => undefined);
+        StudioApi.status(config)
+          .then(setStatus)
+          .catch(() => undefined);
         recordStudioMediaEvent(event);
       }
       if (event.type === "recording.stopped") {
@@ -1884,14 +1786,7 @@ function App() {
     (destination) => destination.id === selectedDestinationId,
   );
   const suiteTimeline = useMemo(
-    () =>
-      buildSuiteTimeline(
-        suiteStatus,
-        recentRecordings,
-        recentMarkers,
-        events,
-        persistedSuiteTimeline,
-    ),
+    () => buildSuiteTimeline(suiteStatus, recentRecordings, recentMarkers, events, persistedSuiteTimeline),
     [events, persistedSuiteTimeline, recentMarkers, recentRecordings, suiteStatus],
   );
   const designerSceneCollection = useMemo(
@@ -1899,23 +1794,15 @@ function App() {
     [captureInventory, sceneCollection],
   );
   const activeDesignerScene =
-    designerSceneCollection.scenes.find(
-      (scene) => scene.id === designerSceneCollection.active_scene_id,
-    ) ?? designerSceneCollection.scenes[0];
-  const activeCompositorGraph = useMemo(
-    () => buildCompositorGraph(activeDesignerScene),
-    [activeDesignerScene],
-  );
+    designerSceneCollection.scenes.find((scene) => scene.id === designerSceneCollection.active_scene_id) ??
+    designerSceneCollection.scenes[0];
+  const activeCompositorGraph = useMemo(() => buildCompositorGraph(activeDesignerScene), [activeDesignerScene]);
   const selectedDesignerSource =
-    activeDesignerScene?.sources.find(
-      (source) => source.id === selectedSceneSourceId,
-    ) ??
+    activeDesignerScene?.sources.find((source) => source.id === selectedSceneSourceId) ??
     activeDesignerScene?.sources[0] ??
     null;
   const selectedDesignerSources = activeDesignerScene
-    ? activeDesignerScene.sources.filter((source) =>
-        selectedSceneSourceIds.includes(source.id),
-      )
+    ? activeDesignerScene.sources.filter((source) => selectedSceneSourceIds.includes(source.id))
     : [];
 
   async function fetchDesignerPreviewFrame() {
@@ -1938,22 +1825,13 @@ function App() {
       setPreviewFrame(response);
       setDesignerRuntimeSession(response.runtime_session);
       setPreviewStats((current) =>
-        updatePreviewStats(
-          current,
-          response,
-          performance.now() - startedAt,
-          previewQuality,
-        ),
+        updatePreviewStats(current, response, performance.now() - startedAt, previewQuality),
       );
       setPreviewError(
-        response.validation.ready
-          ? null
-          : response.validation.errors.join("; ") || "Runtime preview not ready",
+        response.validation.ready ? null : response.validation.errors.join("; ") || "Runtime preview not ready",
       );
     } catch (error) {
-      setPreviewError(
-        error instanceof Error ? error.message : "Runtime preview unavailable",
-      );
+      setPreviewError(error instanceof Error ? error.message : "Runtime preview unavailable");
     } finally {
       previewRequestInFlightRef.current = false;
       setPreviewLoading(false);
@@ -1981,14 +1859,10 @@ function App() {
       setProgramPreviewFrame(response);
       setDesignerRuntimeSession(response.runtime_session);
       setProgramPreviewError(
-        response.validation.ready
-          ? null
-          : response.validation.errors.join("; ") || "Program preview not ready",
+        response.validation.ready ? null : response.validation.errors.join("; ") || "Program preview not ready",
       );
     } catch (error) {
-      setProgramPreviewError(
-        error instanceof Error ? error.message : "Program preview unavailable",
-      );
+      setProgramPreviewError(error instanceof Error ? error.message : "Program preview unavailable");
     } finally {
       setProgramPreviewLoading(false);
     }
@@ -2007,18 +1881,9 @@ function App() {
     }
 
     void fetchDesignerPreviewFrame();
-    const interval = window.setInterval(
-      () => void fetchDesignerPreviewFrame(),
-      previewPollIntervalMs(previewQuality),
-    );
+    const interval = window.setInterval(() => void fetchDesignerPreviewFrame(), previewPollIntervalMs(previewQuality));
     return () => window.clearInterval(interval);
-  }, [
-    activeDesignerScene,
-    config,
-    previewPolling,
-    previewQuality,
-    section,
-  ]);
+  }, [activeDesignerScene, config, previewPolling, previewQuality, section]);
 
   useEffect(() => {
     if (!config || section !== "designer") return;
@@ -2066,16 +1931,12 @@ function App() {
     try {
       const result = await StudioApi.pauseDesignerRuntimeSession(config, {
         paused,
-        reason: paused
-          ? "Paused from Scene Designer."
-          : "Resumed from Scene Designer.",
+        reason: paused ? "Paused from Scene Designer." : "Resumed from Scene Designer.",
       });
       setDesignerRuntimeSession(result.snapshot);
       setDesignerRuntimeMessage(result.detail);
     } catch (error) {
-      setDesignerRuntimeMessage(
-        error instanceof Error ? error.message : "Designer runtime control failed",
-      );
+      setDesignerRuntimeMessage(error instanceof Error ? error.message : "Designer runtime control failed");
     }
   }
 
@@ -2088,9 +1949,7 @@ function App() {
       setDesignerRuntimeSession(result.snapshot);
       setDesignerRuntimeMessage(result.detail);
     } catch (error) {
-      setDesignerRuntimeMessage(
-        error instanceof Error ? error.message : "Designer runtime restart failed",
-      );
+      setDesignerRuntimeMessage(error instanceof Error ? error.message : "Designer runtime restart failed");
     }
   }
 
@@ -2101,9 +1960,7 @@ function App() {
       setDesignerRuntimeSession(result.snapshot);
       setDesignerRuntimeMessage(result.detail);
     } catch (error) {
-      setDesignerRuntimeMessage(
-        error instanceof Error ? error.message : "Designer runtime cleanup failed",
-      );
+      setDesignerRuntimeMessage(error instanceof Error ? error.message : "Designer runtime cleanup failed");
     }
   }
 
@@ -2114,9 +1971,7 @@ function App() {
       setDesignerReadinessReport(report);
       setDesignerRuntimeMessage("Scene Designer readiness report refreshed.");
     } catch (error) {
-      setDesignerRuntimeMessage(
-        error instanceof Error ? error.message : "Readiness report unavailable",
-      );
+      setDesignerRuntimeMessage(error instanceof Error ? error.message : "Readiness report unavailable");
     }
   }
 
@@ -2125,32 +1980,20 @@ function App() {
     const nextProfiles = await StudioApi.profiles(config);
     setProfiles(nextProfiles);
     setSelectedProfileId((current) =>
-      current &&
-      nextProfiles.recording_profiles.some((profile) => profile.id === current)
+      current && nextProfiles.recording_profiles.some((profile) => profile.id === current)
         ? current
         : nextProfiles.recording_profiles[0]?.id,
     );
     setSelectedDestinationId((current) =>
-      current &&
-      nextProfiles.stream_destinations.some(
-        (destination) => destination.id === current,
-      )
+      current && nextProfiles.stream_destinations.some((destination) => destination.id === current)
         ? current
         : nextProfiles.stream_destinations[0]?.id,
     );
     setEditingProfileId((current) =>
-      current &&
-      nextProfiles.recording_profiles.some((profile) => profile.id === current)
-        ? current
-        : null,
+      current && nextProfiles.recording_profiles.some((profile) => profile.id === current) ? current : null,
     );
     setEditingDestinationId((current) =>
-      current &&
-      nextProfiles.stream_destinations.some(
-        (destination) => destination.id === current,
-      )
-        ? current
-        : null,
+      current && nextProfiles.stream_destinations.some((destination) => destination.id === current) ? current : null,
     );
   }
 
@@ -2183,9 +2026,7 @@ function App() {
       setSceneSaveStatus("Capture bindings refreshed");
       setError(null);
     } catch (error) {
-      setSceneSaveStatus(
-        error instanceof Error ? error.message : "Capture binding refresh failed",
-      );
+      setSceneSaveStatus(error instanceof Error ? error.message : "Capture binding refresh failed");
     } finally {
       setCaptureBindingRefreshing(false);
     }
@@ -2196,9 +2037,8 @@ function App() {
     const source = scene?.sources.find((source) => source.id === sourceId);
     if (!source || !captureInventory) return;
     const candidate =
-      captureCandidatesForSource(source, captureInventory).find(
-        (candidate) => candidate.available,
-      ) ?? captureCandidatesForSource(source, captureInventory)[0];
+      captureCandidatesForSource(source, captureInventory).find((candidate) => candidate.available) ??
+      captureCandidatesForSource(source, captureInventory)[0];
     if (!candidate) {
       setSceneSaveStatus("No compatible capture candidate found.");
       return;
@@ -2262,9 +2102,7 @@ function App() {
       setEditingDestinationId(null);
       setError(null);
     } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Destination save failed",
-      );
+      setError(error instanceof Error ? error.message : "Destination save failed");
     }
   }
 
@@ -2337,10 +2175,7 @@ function App() {
       setDestinationForm((current) => ({
         ...current,
         name:
-          current.name ||
-          (imported.broadcasterLogin
-            ? `Twitch - ${imported.broadcasterLogin}`
-            : "Twitch Manual RTMP"),
+          current.name || (imported.broadcasterLogin ? `Twitch - ${imported.broadcasterLogin}` : "Twitch Manual RTMP"),
         platform: "twitch",
         ingest_url: current.ingest_url || "rtmp://live.twitch.tv/app",
         stream_key: imported.streamKey,
@@ -2348,11 +2183,7 @@ function App() {
       }));
       setError(null);
     } catch (error) {
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Could not import the Twitch stream key from Console",
-      );
+      setError(error instanceof Error ? error.message : "Could not import the Twitch stream key from Console");
     }
   }
 
@@ -2362,11 +2193,7 @@ function App() {
       await invoke<void>("open_settings_window");
       setError(null);
     } catch (error) {
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Configuration settings unavailable",
-      );
+      setError(error instanceof Error ? error.message : "Configuration settings unavailable");
     }
   }
 
@@ -2378,14 +2205,8 @@ function App() {
       wsUrl: snapshot.wsUrl,
       configuredApiUrl: snapshot.configuredApiUrl,
       configuredWsUrl: snapshot.configuredWsUrl,
-      bindAddr: hostFromUrl(
-        snapshot.apiUrl,
-        current?.bindAddr ?? "127.0.0.1:51287",
-      ),
-      configuredBindAddr: hostFromUrl(
-        snapshot.configuredApiUrl,
-        current?.configuredBindAddr ?? "127.0.0.1:51287",
-      ),
+      bindAddr: hostFromUrl(snapshot.apiUrl, current?.bindAddr ?? "127.0.0.1:51287"),
+      configuredBindAddr: hostFromUrl(snapshot.configuredApiUrl, current?.configuredBindAddr ?? "127.0.0.1:51287"),
       portFallbackActive: snapshot.portFallbackActive,
       discoveryFile: snapshot.discoveryFile,
       token: snapshot.settings.api_token,
@@ -2400,12 +2221,10 @@ function App() {
       applySettingsSnapshot(snapshot);
       setProfileForm(snapshot.settings.default_recording_profile);
       await refreshCaptureContext();
-      loadPreflightSnapshot().then(setPreflight).catch(() => undefined);
-      setSettingsMessage(
-        snapshot.restartRequired
-          ? "Saved. Host or port changes apply after restart."
-          : "Saved.",
-      );
+      loadPreflightSnapshot()
+        .then(setPreflight)
+        .catch(() => undefined);
+      setSettingsMessage(snapshot.restartRequired ? "Saved. Host or port changes apply after restart." : "Saved.");
       setError(null);
     } catch (error) {
       setSettingsMessage(null);
@@ -2413,27 +2232,20 @@ function App() {
     }
   }
 
-  async function handleCaptureSourceToggle(
-    candidate: CaptureSourceCandidate,
-    enabled: boolean,
-  ) {
-    const nextSettings = updateSettingsCaptureSource(
-      settingsSnapshot?.settings ?? settingsForm,
-      candidate,
-      enabled,
-    );
+  async function handleCaptureSourceToggle(candidate: CaptureSourceCandidate, enabled: boolean) {
+    const nextSettings = updateSettingsCaptureSource(settingsSnapshot?.settings ?? settingsForm, candidate, enabled);
     setSettingsForm(nextSettings);
     setCaptureSourceSaving(true);
     try {
       const snapshot = await saveAppSettings(nextSettings);
       applySettingsSnapshot(snapshot);
       await refreshCaptureContext();
-      loadPreflightSnapshot().then(setPreflight).catch(() => undefined);
+      loadPreflightSnapshot()
+        .then(setPreflight)
+        .catch(() => undefined);
       setError(null);
     } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Capture source save failed",
-      );
+      setError(error instanceof Error ? error.message : "Capture source save failed");
     } finally {
       setCaptureSourceSaving(false);
     }
@@ -2455,9 +2267,7 @@ function App() {
     try {
       await openDataDirectory();
     } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Could not open data directory",
-      );
+      setError(error instanceof Error ? error.message : "Could not open data directory");
     }
   }
 
@@ -2468,7 +2278,9 @@ function App() {
 
     if (failed.length > 0) {
       setSuiteLaunchStatus(formatSuiteLaunchFailure(failed));
-      loadSuiteStatus().then(setSuiteStatus).catch(() => undefined);
+      loadSuiteStatus()
+        .then(setSuiteStatus)
+        .catch(() => undefined);
       return;
     }
 
@@ -2495,9 +2307,7 @@ function App() {
       setSuiteLaunchStatus(`Suite session active: ${nextSession.title}`);
       setError(null);
     } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Could not start suite session",
-      );
+      setError(error instanceof Error ? error.message : "Could not start suite session");
     }
   }
 
@@ -2514,9 +2324,7 @@ function App() {
       setSuiteLaunchStatus(`${command} sent to ${targetApp}.`);
       setError(null);
     } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Could not send suite command",
-      );
+      setError(error instanceof Error ? error.message : "Could not send suite command");
     }
   }
 
@@ -2538,7 +2346,9 @@ function App() {
 
     setSuiteLaunchStatus("Pulse handoff written. Opening Pulse review workspace.");
     window.setTimeout(() => {
-      loadSuiteStatus().then(setSuiteStatus).catch(() => undefined);
+      loadSuiteStatus()
+        .then(setSuiteStatus)
+        .catch(() => undefined);
     }, 1800);
     setError(null);
   }
@@ -2579,18 +2389,12 @@ function App() {
     const collection = await StudioApi.sceneCollection(config);
     const validation = validateSceneCollection(collection);
     if (!validation.ok) {
-      setSceneSaveStatus(
-        `Import validation failed: ${formatSceneValidationSummary(
-          validation.issues,
-        )}`,
-      );
+      setSceneSaveStatus(`Import validation failed: ${formatSceneValidationSummary(validation.issues)}`);
       setError("Imported scene collection did not pass validation.");
       return false;
     }
     setSceneCollection(collection);
-    const scene =
-      collection.scenes.find((item) => item.id === collection.active_scene_id) ??
-      collection.scenes[0];
+    const scene = collection.scenes.find((item) => item.id === collection.active_scene_id) ?? collection.scenes[0];
     selectDesignerSources([scene?.sources[0]?.id ?? ""]);
     Promise.all([
       StudioApi.mediaPlan(config),
@@ -2620,9 +2424,7 @@ function App() {
       );
       setError(null);
     } catch (error) {
-      setSceneSaveStatus(
-        error instanceof Error ? error.message : "Scene export failed",
-      );
+      setSceneSaveStatus(error instanceof Error ? error.message : "Scene export failed");
     }
   }
 
@@ -2649,9 +2451,7 @@ function App() {
       );
       setError(null);
     } catch (error) {
-      setSceneSaveStatus(
-        error instanceof Error ? error.message : "Scene import failed",
-      );
+      setSceneSaveStatus(error instanceof Error ? error.message : "Scene import failed");
     }
   }
 
@@ -2663,9 +2463,7 @@ function App() {
       );
       setError(null);
     } catch (error) {
-      setSceneSaveStatus(
-        error instanceof Error ? error.message : "Scene export failed",
-      );
+      setSceneSaveStatus(error instanceof Error ? error.message : "Scene export failed");
     }
   }
 
@@ -2691,27 +2489,22 @@ function App() {
       );
       setError(null);
     } catch (error) {
-      setSceneSaveStatus(
-        error instanceof Error ? error.message : "Scene import failed",
-      );
+      setSceneSaveStatus(error instanceof Error ? error.message : "Scene import failed");
     }
   }
 
   function handleResetDesignerCollection() {
-    if (
-      !window.confirm(
-        "Reset the scene collection to the default valid starter collection?",
-      )
-    ) {
+    if (!window.confirm("Reset the scene collection to the default valid starter collection?")) {
       return;
     }
     const collection = createDefaultSceneCollection();
     updateDesignerCollection(() => collection);
-    const scene =
-      collection.scenes.find((item) => item.id === collection.active_scene_id) ??
-      collection.scenes[0];
+    const scene = collection.scenes.find((item) => item.id === collection.active_scene_id) ?? collection.scenes[0];
     selectDesignerSources([scene?.sources[0]?.id ?? ""]);
-    setSceneHistory({ past: [sceneCollection].slice(-designerHistoryLimit), future: [] });
+    setSceneHistory({
+      past: [sceneCollection].slice(-designerHistoryLimit),
+      future: [],
+    });
     setSceneSaveStatus("Reset to the default valid scene collection.");
     setError(null);
   }
@@ -2734,13 +2527,9 @@ function App() {
 
     setSelectedSceneSourceIds((current) => {
       const selected = current.includes(sourceId);
-      const next = selected
-        ? current.filter((id) => id !== sourceId)
-        : [...current, sourceId];
+      const next = selected ? current.filter((id) => id !== sourceId) : [...current, sourceId];
       const normalized = next.length > 0 ? next : [sourceId];
-      const fallback = normalized.includes(selectedSceneSourceId)
-        ? selectedSceneSourceId
-        : normalized[0];
+      const fallback = normalized.includes(selectedSceneSourceId) ? selectedSceneSourceId : normalized[0];
       setSelectedSceneSourceId(selected ? fallback : sourceId);
       return normalized;
     });
@@ -2761,9 +2550,7 @@ function App() {
         ...updater(current),
         updated_at: new Date().toISOString(),
       };
-      const shouldRecordHistory =
-        !options.historyGroup ||
-        designerHistoryGroupRef.current !== options.historyGroup;
+      const shouldRecordHistory = !options.historyGroup || designerHistoryGroupRef.current !== options.historyGroup;
       if (shouldRecordHistory) {
         setSceneHistory((history) => ({
           past: [...history.past, current].slice(-designerHistoryLimit),
@@ -2793,9 +2580,7 @@ function App() {
       return previous;
     });
     setSelectedSceneSourceId((current) => {
-      const next = sceneCollectionContainsSource(previous, current)
-        ? current
-        : firstSceneSourceId(previous);
+      const next = sceneCollectionContainsSource(previous, current) ? current : firstSceneSourceId(previous);
       setSelectedSceneSourceIds(next ? [next] : []);
       return next;
     });
@@ -2815,9 +2600,7 @@ function App() {
       return next;
     });
     setSelectedSceneSourceId((current) => {
-      const sourceId = sceneCollectionContainsSource(next, current)
-        ? current
-        : firstSceneSourceId(next);
+      const sourceId = sceneCollectionContainsSource(next, current) ? current : firstSceneSourceId(next);
       setSelectedSceneSourceIds(sourceId ? [sourceId] : []);
       return sourceId;
     });
@@ -2853,18 +2636,12 @@ function App() {
     );
   }
 
-  function handleReorderDesignerSource(
-    sceneId: string,
-    sourceId: string,
-    direction: "up" | "down",
-  ) {
+  function handleReorderDesignerSource(sceneId: string, sourceId: string, direction: "up" | "down") {
     updateDesignerCollection((current) => ({
       ...current,
       scenes: current.scenes.map((scene) => {
         if (scene.id !== sceneId) return scene;
-        const ordered = [...scene.sources].sort(
-          (left, right) => left.z_index - right.z_index,
-        );
+        const ordered = [...scene.sources].sort((left, right) => left.z_index - right.z_index);
         const index = ordered.findIndex((source) => source.id === sourceId);
         const swapIndex = direction === "up" ? index + 1 : index - 1;
         if (index < 0 || swapIndex < 0 || swapIndex >= ordered.length) {
@@ -2886,11 +2663,7 @@ function App() {
     }));
   }
 
-  function handleDropReorderDesignerSource(
-    sceneId: string,
-    sourceId: string,
-    targetSourceId: string,
-  ) {
+  function handleDropReorderDesignerSource(sceneId: string, sourceId: string, targetSourceId: string) {
     if (sourceId === targetSourceId) return;
     updateDesignerCollection((current) => ({
       ...current,
@@ -2898,20 +2671,11 @@ function App() {
         if (scene.id !== sceneId) return scene;
         const dragged = scene.sources.find((source) => source.id === sourceId);
         if (!dragged || dragged.locked) return scene;
-        const ordered = sortedSceneSources(scene).filter(
-          (source) => source.id !== sourceId,
-        );
-        const targetIndex = ordered.findIndex(
-          (source) => source.id === targetSourceId,
-        );
+        const ordered = sortedSceneSources(scene).filter((source) => source.id !== sourceId);
+        const targetIndex = ordered.findIndex((source) => source.id === targetSourceId);
         if (targetIndex < 0) return scene;
         ordered.splice(targetIndex, 0, dragged);
-        const zIndexById = new Map(
-          ordered.map((source, index) => [
-            source.id,
-            (ordered.length - index) * 10,
-          ]),
-        );
+        const zIndexById = new Map(ordered.map((source, index) => [source.id, (ordered.length - index) * 10]));
 
         return {
           ...scene,
@@ -2924,19 +2688,13 @@ function App() {
     }));
   }
 
-  function handleSetDesignerSourceParent(
-    sceneId: string,
-    sourceId: string,
-    parentGroupId: string | null,
-  ) {
+  function handleSetDesignerSourceParent(sceneId: string, sourceId: string, parentGroupId: string | null) {
     updateDesignerCollection((current) => ({
       ...current,
       scenes: current.scenes.map((scene) => {
         if (scene.id !== sceneId) return scene;
         const source = scene.sources.find((item) => item.id === sourceId);
-        const nextParent = parentGroupId
-          ? scene.sources.find((item) => item.id === parentGroupId)
-          : null;
+        const nextParent = parentGroupId ? scene.sources.find((item) => item.id === parentGroupId) : null;
         if (!source || source.locked) return scene;
         if (parentGroupId && (!nextParent || nextParent.kind !== "group" || nextParent.locked)) {
           return scene;
@@ -2945,9 +2703,7 @@ function App() {
           return scene;
         }
         const worldPosition = sceneSourceWorldPosition(scene, sourceId);
-        const parentWorldPosition = parentGroupId
-          ? sceneSourceWorldPosition(scene, parentGroupId)
-          : { x: 0, y: 0 };
+        const parentWorldPosition = parentGroupId ? sceneSourceWorldPosition(scene, parentGroupId) : { x: 0, y: 0 };
 
         return {
           ...scene,
@@ -2967,10 +2723,7 @@ function App() {
                 ...withoutPreviousParent,
                 config: {
                   ...withoutPreviousParent.config,
-                  child_source_ids: uniqueSourceIds([
-                    ...withoutPreviousParent.config.child_source_ids,
-                    sourceId,
-                  ]),
+                  child_source_ids: uniqueSourceIds([...withoutPreviousParent.config.child_source_ids, sourceId]),
                 },
               };
             }
@@ -2981,11 +2734,7 @@ function App() {
     }));
   }
 
-  function handleSetDesignerSourceZOrder(
-    sceneId: string,
-    sourceId: string,
-    mode: "front" | "back",
-  ) {
+  function handleSetDesignerSourceZOrder(sceneId: string, sourceId: string, mode: "front" | "back") {
     updateDesignerCollection((current) => ({
       ...current,
       scenes: current.scenes.map((scene) => {
@@ -2994,14 +2743,10 @@ function App() {
         if (!source || source.locked) return scene;
         const zIndexes = scene.sources.map((item) => item.z_index);
         const z_index =
-          mode === "front"
-            ? Math.max(...zIndexes, source.z_index) + 10
-            : Math.min(...zIndexes, source.z_index) - 10;
+          mode === "front" ? Math.max(...zIndexes, source.z_index) + 10 : Math.min(...zIndexes, source.z_index) - 10;
         return {
           ...scene,
-          sources: scene.sources.map((item) =>
-            item.id === sourceId ? { ...item, z_index } : item,
-          ),
+          sources: scene.sources.map((item) => (item.id === sourceId ? { ...item, z_index } : item)),
         };
       }),
     }));
@@ -3037,9 +2782,7 @@ function App() {
   function handleDuplicateDesignerScene(sceneId: string) {
     const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
     if (!scene) return;
-    const sourceIdMap = new Map(
-      scene.sources.map((source) => [source.id, designerId("source")]),
-    );
+    const sourceIdMap = new Map(scene.sources.map((source) => [source.id, designerId("source")]));
     const nextScene = {
       ...scene,
       id: designerId("scene"),
@@ -3073,8 +2816,7 @@ function App() {
     if (sceneCollection.scenes.length <= 1) return;
     updateDesignerCollection((current) => {
       const scenes = current.scenes.filter((scene) => scene.id !== sceneId);
-      const active_scene_id =
-        current.active_scene_id === sceneId ? scenes[0].id : current.active_scene_id;
+      const active_scene_id = current.active_scene_id === sceneId ? scenes[0].id : current.active_scene_id;
       return {
         ...current,
         active_scene_id,
@@ -3088,9 +2830,7 @@ function App() {
   function handleRenameDesignerScene(sceneId: string, name: string) {
     updateDesignerCollection((current) => ({
       ...current,
-      scenes: current.scenes.map((scene) =>
-        scene.id === sceneId ? { ...scene, name } : scene,
-      ),
+      scenes: current.scenes.map((scene) => (scene.id === sceneId ? { ...scene, name } : scene)),
     }));
   }
 
@@ -3104,25 +2844,16 @@ function App() {
     }));
   }
 
-  function handleUpdateDesignerTransition(
-    transitionId: string,
-    patch: SceneTransitionPatch,
-  ) {
+  function handleUpdateDesignerTransition(transitionId: string, patch: SceneTransitionPatch) {
     updateDesignerCollection((current) => ({
       ...current,
       transitions: current.transitions.map((transition) =>
-        transition.id === transitionId
-          ? mergeSceneTransitionPatch(transition, patch)
-          : transition,
+        transition.id === transitionId ? mergeSceneTransitionPatch(transition, patch) : transition,
       ),
     }));
   }
 
-  async function handlePickDesignerSourceAsset(
-    sceneId: string,
-    sourceId: string,
-    mediaType: "image" | "video",
-  ) {
+  async function handlePickDesignerSourceAsset(sceneId: string, sourceId: string, mediaType: "image" | "video") {
     try {
       const path = await pickLocalAssetPath(mediaType === "image" ? "image" : "media");
       if (!path) return;
@@ -3135,9 +2866,7 @@ function App() {
       setSceneSaveStatus("Local media asset selected. Save to update runtime.");
       setError(null);
     } catch (error) {
-      setSceneSaveStatus(
-        error instanceof Error ? error.message : "Asset picker failed",
-      );
+      setSceneSaveStatus(error instanceof Error ? error.message : "Asset picker failed");
     }
   }
 
@@ -3153,9 +2882,7 @@ function App() {
       setSceneSaveStatus("Local font file selected. Save to update runtime.");
       setError(null);
     } catch (error) {
-      setSceneSaveStatus(
-        error instanceof Error ? error.message : "Font picker failed",
-      );
+      setSceneSaveStatus(error instanceof Error ? error.message : "Font picker failed");
     }
   }
 
@@ -3171,9 +2898,7 @@ function App() {
       setSceneSaveStatus("Stinger asset selected. Save to update runtime.");
       setError(null);
     } catch (error) {
-      setSceneSaveStatus(
-        error instanceof Error ? error.message : "Stinger asset picker failed",
-      );
+      setSceneSaveStatus(error instanceof Error ? error.message : "Stinger asset picker failed");
     }
   }
 
@@ -3187,9 +2912,7 @@ function App() {
   }
 
   function handleDuplicateDesignerTransition(transitionId: string) {
-    const transition = sceneCollection.transitions.find(
-      (item) => item.id === transitionId,
-    );
+    const transition = sceneCollection.transitions.find((item) => item.id === transitionId);
     if (!transition) return;
     const duplicate = {
       ...JSON.parse(JSON.stringify(transition)),
@@ -3206,9 +2929,7 @@ function App() {
   function handleDeleteDesignerTransition(transitionId: string) {
     if (sceneCollection.transitions.length <= 1) return;
     updateDesignerCollection((current) => {
-      const transitions = current.transitions.filter(
-        (transition) => transition.id !== transitionId,
-      );
+      const transitions = current.transitions.filter((transition) => transition.id !== transitionId);
       const active_transition_id =
         current.active_transition_id === transitionId
           ? (transitions[0]?.id ?? current.active_transition_id)
@@ -3221,14 +2942,8 @@ function App() {
     });
   }
 
-  function handleCreateDesignerSource(
-    sceneId: string,
-    kind: SceneSourceKind,
-    defaults: SceneSourceDefaults = {},
-  ) {
-    const scene =
-      sceneCollection.scenes.find((item) => item.id === sceneId) ??
-      activeDesignerScene;
+  function handleCreateDesignerSource(sceneId: string, kind: SceneSourceKind, defaults: SceneSourceDefaults = {}) {
+    const scene = sceneCollection.scenes.find((item) => item.id === sceneId) ?? activeDesignerScene;
     const source = createDefaultSceneSource(kind, {
       ...defaults,
       id: designerId(`source-${kind}`),
@@ -3240,9 +2955,7 @@ function App() {
     updateDesignerCollection((current) => ({
       ...current,
       scenes: current.scenes.map((scene) =>
-        scene.id === sceneId
-          ? { ...scene, sources: [...scene.sources, source] }
-          : scene,
+        scene.id === sceneId ? { ...scene, sources: [...scene.sources, source] } : scene,
       ),
     }));
     selectDesignerSources([source.id]);
@@ -3256,17 +2969,13 @@ function App() {
     const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
     if (!scene) return;
     const sourceIdSet = new Set(sourceIds);
-    const sources = sortedSceneSources(scene, "asc").filter(
-      (source) => sourceIdSet.has(source.id) && !source.locked,
-    );
+    const sources = sortedSceneSources(scene, "asc").filter((source) => sourceIdSet.has(source.id) && !source.locked);
     if (sources.length === 0) return;
     const duplicates = cloneDesignerSourcesForInsert(sources, scene, "Copy");
     updateDesignerCollection((current) => ({
       ...current,
       scenes: current.scenes.map((scene) =>
-        scene.id === sceneId
-          ? { ...scene, sources: [...scene.sources, ...duplicates] }
-          : scene,
+        scene.id === sceneId ? { ...scene, sources: [...scene.sources, ...duplicates] } : scene,
       ),
     }));
     selectDesignerSources(duplicates.map((source) => source.id));
@@ -3276,33 +2985,21 @@ function App() {
     const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
     if (!scene) return;
     const sourceIdSet = new Set(sourceIds);
-    const sources = sortedSceneSources(scene, "asc").filter((source) =>
-      sourceIdSet.has(source.id),
-    );
+    const sources = sortedSceneSources(scene, "asc").filter((source) => sourceIdSet.has(source.id));
     if (sources.length === 0) return;
     setDesignerSourceClipboard(sources.map(cloneSceneSource));
-    setSceneSaveStatus(
-      sources.length === 1
-        ? `Copied ${sources[0].name}`
-        : `Copied ${sources.length} sources`,
-    );
+    setSceneSaveStatus(sources.length === 1 ? `Copied ${sources[0].name}` : `Copied ${sources.length} sources`);
   }
 
   function handlePasteDesignerSource(sceneId: string) {
     if (designerSourceClipboard.length === 0) return;
     const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
     if (!scene) return;
-    const pasted = cloneDesignerSourcesForInsert(
-      designerSourceClipboard,
-      scene,
-      "Pasted",
-    );
+    const pasted = cloneDesignerSourcesForInsert(designerSourceClipboard, scene, "Pasted");
     updateDesignerCollection((current) => ({
       ...current,
       scenes: current.scenes.map((scene) =>
-        scene.id === sceneId
-          ? { ...scene, sources: [...scene.sources, ...pasted] }
-          : scene,
+        scene.id === sceneId ? { ...scene, sources: [...scene.sources, ...pasted] } : scene,
       ),
     }));
     selectDesignerSources(pasted.map((source) => source.id));
@@ -3327,9 +3024,7 @@ function App() {
           : scene,
       ),
     }));
-    const nextSource = activeDesignerScene.sources.find(
-      (source) => !sourceIdSet.has(source.id) || source.locked,
-    );
+    const nextSource = activeDesignerScene.sources.find((source) => !sourceIdSet.has(source.id) || source.locked);
     selectDesignerSources([nextSource?.id ?? ""]);
   }
 
@@ -3337,9 +3032,7 @@ function App() {
     const scene = sceneCollection.scenes.find((item) => item.id === sceneId);
     if (!scene) return;
     const selectedIds = new Set(sourceIds);
-    const children = scene.sources.filter(
-      (source) => selectedIds.has(source.id) && !source.locked,
-    );
+    const children = scene.sources.filter((source) => selectedIds.has(source.id) && !source.locked);
     if (children.length < 2) return;
     const childWorldRects = children.map((source) => ({
       ...sceneSourceWorldPosition(scene, source.id),
@@ -3408,9 +3101,7 @@ function App() {
       });
     });
     const groupIds = new Set(groups.map((group) => group.id));
-    const childIds = uniqueSourceIds(
-      groups.flatMap((group) => group.config.child_source_ids),
-    );
+    const childIds = uniqueSourceIds(groups.flatMap((group) => group.config.child_source_ids));
 
     updateDesignerCollection((current) => ({
       ...current,
@@ -3432,14 +3123,8 @@ function App() {
                       ? {
                           ...source,
                           position: {
-                            x: Math.round(
-                              (childWorldPosition?.x ?? source.position.x) -
-                                targetParentWorldPosition.x,
-                            ),
-                            y: Math.round(
-                              (childWorldPosition?.y ?? source.position.y) -
-                                targetParentWorldPosition.y,
-                            ),
+                            x: Math.round((childWorldPosition?.x ?? source.position.x) - targetParentWorldPosition.x),
+                            y: Math.round((childWorldPosition?.y ?? source.position.y) - targetParentWorldPosition.y),
                           },
                         }
                       : source;
@@ -3470,29 +3155,20 @@ function App() {
     selectDesignerSources(childIds);
   }
 
-  function handleAlignDesignerSelection(
-    sceneId: string,
-    sourceIds: string[],
-    alignment: SourceCanvasAlignment,
-  ) {
+  function handleAlignDesignerSelection(sceneId: string, sourceIds: string[], alignment: SourceCanvasAlignment) {
     const selectedIds = new Set(sourceIds);
     updateDesignerCollection((current) => ({
       ...current,
       scenes: current.scenes.map((scene) => {
         if (scene.id !== sceneId) return scene;
-        const targets = scene.sources.filter(
-          (source) => selectedIds.has(source.id) && !source.locked,
-        );
+        const targets = scene.sources.filter((source) => selectedIds.has(source.id) && !source.locked);
         if (targets.length < 2) return scene;
         const bounds = sceneSourceBounds(targets);
         return {
           ...scene,
           sources: scene.sources.map((source) =>
             selectedIds.has(source.id) && !source.locked
-              ? mergeSceneSourcePatch(
-                  source,
-                  alignSourceToSelectionBounds(bounds, source, alignment),
-                )
+              ? mergeSceneSourcePatch(source, alignSourceToSelectionBounds(bounds, source, alignment))
               : source,
           ),
         };
@@ -3500,19 +3176,13 @@ function App() {
     }));
   }
 
-  function handleDistributeDesignerSelection(
-    sceneId: string,
-    sourceIds: string[],
-    axis: "horizontal" | "vertical",
-  ) {
+  function handleDistributeDesignerSelection(sceneId: string, sourceIds: string[], axis: "horizontal" | "vertical") {
     const selectedIds = new Set(sourceIds);
     updateDesignerCollection((current) => ({
       ...current,
       scenes: current.scenes.map((scene) => {
         if (scene.id !== sceneId) return scene;
-        const targets = scene.sources.filter(
-          (source) => selectedIds.has(source.id) && !source.locked,
-        );
+        const targets = scene.sources.filter((source) => selectedIds.has(source.id) && !source.locked);
         if (targets.length < 3) return scene;
         const positions = distributeSourcePositions(targets, axis);
         return {
@@ -3533,11 +3203,7 @@ function App() {
     }));
   }
 
-  function handleRotateDesignerSelection(
-    sceneId: string,
-    sourceIds: string[],
-    deltaDegrees: number,
-  ) {
+  function handleRotateDesignerSelection(sceneId: string, sourceIds: string[], deltaDegrees: number) {
     const selectedIds = new Set(sourceIds);
     updateDesignerCollection((current) => ({
       ...current,
@@ -3549,9 +3215,7 @@ function App() {
                 selectedIds.has(source.id) && !source.locked
                   ? {
                       ...source,
-                      rotation_degrees: Math.round(
-                        source.rotation_degrees + deltaDegrees,
-                      ),
+                      rotation_degrees: Math.round(source.rotation_degrees + deltaDegrees),
                     }
                   : source,
               ),
@@ -3565,21 +3229,15 @@ function App() {
     if (!config) return;
     const validation = validateSceneCollection(sceneCollection);
     if (!validation.ok) {
-      setSceneSaveStatus(
-        `Save blocked: ${formatSceneValidationSummary(validation.issues)}`,
-      );
+      setSceneSaveStatus(`Save blocked: ${formatSceneValidationSummary(validation.issues)}`);
       return;
     }
     try {
       const saved = await StudioApi.saveSceneCollection(config, sceneCollection);
       setSceneCollection(saved);
-      const scene =
-        saved.scenes.find((item) => item.id === saved.active_scene_id) ??
-        saved.scenes[0];
+      const scene = saved.scenes.find((item) => item.id === saved.active_scene_id) ?? saved.scenes[0];
       setSelectedSceneSourceId((current) => {
-        const sourceId = scene.sources.some((source) => source.id === current)
-          ? current
-          : (scene.sources[0]?.id ?? "");
+        const sourceId = scene.sources.some((source) => source.id === current) ? current : (scene.sources[0]?.id ?? "");
         setSelectedSceneSourceIds(sourceId ? [sourceId] : []);
         return sourceId;
       });
@@ -3595,16 +3253,7 @@ function App() {
         StudioApi.designerRuntimeSession(config),
         StudioApi.designerReadinessReport(config),
       ])
-        .then(
-          ([
-            plan,
-            runtime,
-            bindings,
-            captureProviders,
-            audioGraph,
-            designerSession,
-            readinessReport,
-          ]) => {
+        .then(([plan, runtime, bindings, captureProviders, audioGraph, designerSession, readinessReport]) => {
           setPipelinePlan(plan);
           setSceneRuntime(runtime);
           setSceneRuntimeBindings(bindings);
@@ -3615,9 +3264,7 @@ function App() {
         })
         .catch(() => undefined);
     } catch (error) {
-      setSceneSaveStatus(
-        error instanceof Error ? error.message : "Scene save failed",
-      );
+      setSceneSaveStatus(error instanceof Error ? error.message : "Scene save failed");
     }
   }
 
@@ -3769,31 +3416,14 @@ function App() {
             markerLabel={markerLabel}
             onMarkerLabelChange={setMarkerLabel}
             onCaptureSourceToggle={handleCaptureSourceToggle}
-            onStartRecording={() =>
-              config &&
-              runCommand(() => StudioApi.startRecording(config, selectedProfileId))
-            }
+            onStartRecording={() => config && runCommand(() => StudioApi.startRecording(config, selectedProfileId))}
             onStartStream={() =>
-              config &&
-              runCommand(() =>
-                StudioApi.startStream(
-                  config,
-                  selectedDestinationId,
-                  streamBandwidthTest,
-                ),
-              )
+              config && runCommand(() => StudioApi.startStream(config, selectedDestinationId, streamBandwidthTest))
             }
-            onStopRecording={() =>
-              config && runCommand(() => StudioApi.stopRecording(config))
-            }
-            onStopStream={() =>
-              config && runCommand(() => StudioApi.stopStream(config))
-            }
+            onStopRecording={() => config && runCommand(() => StudioApi.stopRecording(config))}
+            onStopStream={() => config && runCommand(() => StudioApi.stopStream(config))}
             onCreateMarker={() =>
-              config &&
-              StudioApi.createMarker(config, markerLabel).catch((error: Error) =>
-                setError(error.message),
-              )
+              config && StudioApi.createMarker(config, markerLabel).catch((error: Error) => setError(error.message))
             }
             profiles={profiles}
             preflight={preflight}
@@ -3996,11 +3626,7 @@ function App() {
             <h2>{sectionHeading(section)}</h2>
           </div>
           <div className="topbar-status">
-            <button
-              className="secondary-button compact"
-              onClick={handleLaunchSuite}
-              type="button"
-            >
+            <button className="secondary-button compact" onClick={handleLaunchSuite} type="button">
               <Play size={14} />
               Launch & Verify
             </button>
@@ -4057,21 +3683,13 @@ function DesignerPage(props: {
   runtimeBindings: SceneRuntimeBindingsSnapshot | null;
   onCopySources: (sceneId: string, sourceIds: string[]) => void;
   onCreateScene: () => void;
-  onCreateSource: (
-    sceneId: string,
-    kind: SceneSourceKind,
-    defaults?: SceneSourceDefaults,
-  ) => void;
+  onCreateSource: (sceneId: string, kind: SceneSourceKind, defaults?: SceneSourceDefaults) => void;
   onCreateTransition: (kind: SceneTransition["kind"]) => void;
   onDeleteScene: (sceneId: string) => void;
   onDeleteSource: (sceneId: string, sourceId: string) => void;
   onDeleteSources: (sceneId: string, sourceIds: string[]) => void;
   onDeleteTransition: (transitionId: string) => void;
-  onDropReorderSource: (
-    sceneId: string,
-    sourceId: string,
-    targetSourceId: string,
-  ) => void;
+  onDropReorderSource: (sceneId: string, sourceId: string, targetSourceId: string) => void;
   onDuplicateScene: (sceneId: string) => void;
   onDuplicateSource: (sceneId: string, sourceId: string) => void;
   onDuplicateSources: (sceneId: string, sourceIds: string[]) => void;
@@ -4083,11 +3701,7 @@ function DesignerPage(props: {
   onImportCollection: () => void;
   onImportCollectionDefault: () => void;
   onPasteSource: (sceneId: string) => void;
-  onPickSourceAsset: (
-    sceneId: string,
-    sourceId: string,
-    mediaType: "image" | "video",
-  ) => void;
+  onPickSourceAsset: (sceneId: string, sourceId: string, mediaType: "image" | "video") => void;
   onPickSourceFont: (sceneId: string, sourceId: string) => void;
   onPickTransitionAsset: (transitionId: string) => void;
   onPreviewPollingChange: (enabled: boolean) => void;
@@ -4102,16 +3716,8 @@ function DesignerPage(props: {
   onRestartDesignerRuntimeSource: (sourceId?: string) => void;
   onRenameScene: (sceneId: string, name: string) => void;
   onResetCollection: () => void;
-  onAlignSelection: (
-    sceneId: string,
-    sourceIds: string[],
-    alignment: SourceCanvasAlignment,
-  ) => void;
-  onDistributeSelection: (
-    sceneId: string,
-    sourceIds: string[],
-    axis: "horizontal" | "vertical",
-  ) => void;
+  onAlignSelection: (sceneId: string, sourceIds: string[], alignment: SourceCanvasAlignment) => void;
+  onDistributeSelection: (sceneId: string, sourceIds: string[], axis: "horizontal" | "vertical") => void;
   graph: CompositorGraph;
   scene: Scene;
   saveStatus: string | null;
@@ -4119,69 +3725,40 @@ function DesignerPage(props: {
   selectedSourceId: string;
   selectedSourceIds: string[];
   selectedSources: SceneSource[];
-  onReorderSource: (
-    sceneId: string,
-    sourceId: string,
-    direction: "up" | "down",
-  ) => void;
+  onReorderSource: (sceneId: string, sourceId: string, direction: "up" | "down") => void;
   onRedo: () => void;
-  onRotateSelection: (
-    sceneId: string,
-    sourceIds: string[],
-    deltaDegrees: number,
-  ) => void;
+  onRotateSelection: (sceneId: string, sourceIds: string[], deltaDegrees: number) => void;
   onSelectScene: (sceneId: string) => void;
   onSelectSource: (sourceId: string, additive?: boolean) => void;
   onSelectSources: (sourceIds: string[]) => void;
-  onSetSourceParent: (
-    sceneId: string,
-    sourceId: string,
-    parentGroupId: string | null,
-  ) => void;
-  onSetSourceZOrder: (
-    sceneId: string,
-    sourceId: string,
-    mode: "front" | "back",
-  ) => void;
+  onSetSourceParent: (sceneId: string, sourceId: string, parentGroupId: string | null) => void;
+  onSetSourceZOrder: (sceneId: string, sourceId: string, mode: "front" | "back") => void;
   onSave: () => void;
   onUndo: () => void;
   onSelectTransition: (transitionId: string) => void;
   onUngroupSources: (sceneId: string, sourceIds: string[]) => void;
-  onUpdateSource: (
-    sceneId: string,
-    sourceId: string,
-    patch: SceneSourcePatch,
-    options?: SceneUpdateOptions,
-  ) => void;
-  onUpdateTransition: (
-    transitionId: string,
-    patch: SceneTransitionPatch,
-  ) => void;
+  onUpdateSource: (sceneId: string, sourceId: string, patch: SceneSourcePatch, options?: SceneUpdateOptions) => void;
+  onUpdateTransition: (transitionId: string, patch: SceneTransitionPatch) => void;
 }) {
   const validation = validateSceneCollection(props.collection);
   const graphValidation = validateCompositorGraph(props.graph);
   const sourceStack = sortedSceneSources(props.scene);
   const activeTransition =
-    props.collection.transitions.find(
-      (transition) => transition.id === props.collection.active_transition_id,
-    ) ?? props.collection.transitions[0];
+    props.collection.transitions.find((transition) => transition.id === props.collection.active_transition_id) ??
+    props.collection.transitions[0];
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const renderCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const suppressSourceClickRef = useRef(false);
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<string[]>([]);
   const [isolatedGroupId, setIsolatedGroupId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DesignerDragState | null>(null);
-  const [marqueeState, setMarqueeState] = useState<DesignerMarqueeState | null>(
-    null,
-  );
+  const [marqueeState, setMarqueeState] = useState<DesignerMarqueeState | null>(null);
   const [snapGuides, setSnapGuides] = useState<DesignerSnapGuide[]>([]);
   const [newSourceKind, setNewSourceKind] = useState<SceneSourceKind>("display");
-  const [newTransitionKind, setNewTransitionKind] =
-    useState<SceneTransition["kind"]>("fade");
-  const [transitionPreviewFromSceneId, setTransitionPreviewFromSceneId] =
-    useState(props.scene.id);
-  const [transitionPreviewToSceneId, setTransitionPreviewToSceneId] = useState(
-    () => previewFallbackToSceneId(props.collection, props.scene.id),
+  const [newTransitionKind, setNewTransitionKind] = useState<SceneTransition["kind"]>("fade");
+  const [transitionPreviewFromSceneId, setTransitionPreviewFromSceneId] = useState(props.scene.id);
+  const [transitionPreviewToSceneId, setTransitionPreviewToSceneId] = useState(() =>
+    previewFallbackToSceneId(props.collection, props.scene.id),
   );
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [snapStrength, setSnapStrength] = useState(designerSnapThreshold);
@@ -4189,30 +3766,18 @@ function DesignerPage(props: {
   const [showPreviewGrid, setShowPreviewGrid] = useState(true);
   const [showSafeAreas, setShowSafeAreas] = useState(true);
   const [aspectRatioLocked, setAspectRatioLocked] = useState(false);
-  const [transformPivot, setTransformPivot] = useState<"selection" | "individual">(
-    "selection",
-  );
-  const [transitionPreviewPlaying, setTransitionPreviewPlaying] =
-    useState(false);
+  const [transformPivot, setTransformPivot] = useState<"selection" | "individual">("selection");
+  const [transitionPreviewPlaying, setTransitionPreviewPlaying] = useState(false);
   const [transitionPreviewProgress, setTransitionPreviewProgress] = useState(0);
-  const [transitionRuntimeFrame, setTransitionRuntimeFrame] =
-    useState<TransitionPreviewFrameResponse | null>(null);
-  const [transitionRuntimeError, setTransitionRuntimeError] = useState<string | null>(
-    null,
-  );
-  const [shortcutBindings, setShortcutBindings] =
-    useState<DesignerShortcutMap>(() => loadDesignerShortcutMap());
-  const [listeningShortcutAction, setListeningShortcutAction] =
-    useState<DesignerShortcutAction | null>(null);
+  const [transitionRuntimeFrame, setTransitionRuntimeFrame] = useState<TransitionPreviewFrameResponse | null>(null);
+  const [transitionRuntimeError, setTransitionRuntimeError] = useState<string | null>(null);
+  const [shortcutBindings, setShortcutBindings] = useState<DesignerShortcutMap>(() => loadDesignerShortcutMap());
+  const [listeningShortcutAction, setListeningShortcutAction] = useState<DesignerShortcutAction | null>(null);
   const [shortcutMessage, setShortcutMessage] = useState<string | null>(null);
   const [renamingSourceId, setRenamingSourceId] = useState<string | null>(null);
   const [sourceRenameDraft, setSourceRenameDraft] = useState("");
-  const [sourcePresets, setSourcePresets] = useState<DesignerStoredSourcePreset[]>(
-    () => loadDesignerSourcePresets(),
-  );
-  const [filterPresets, setFilterPresets] = useState<DesignerStoredFilterPreset[]>(
-    () => loadDesignerFilterPresets(),
-  );
+  const [sourcePresets, setSourcePresets] = useState<DesignerStoredSourcePreset[]>(() => loadDesignerSourcePresets());
+  const [filterPresets, setFilterPresets] = useState<DesignerStoredFilterPreset[]>(() => loadDesignerFilterPresets());
   const [selectedSourcePresetId, setSelectedSourcePresetId] = useState("");
   const [selectedFilterPresetId, setSelectedFilterPresetId] = useState("");
   const [presetMessage, setPresetMessage] = useState<string | null>(null);
@@ -4224,9 +3789,7 @@ function DesignerPage(props: {
   );
   const transitionPreviewFrame = buildSceneTransitionPreviewFrame(
     transitionPreviewPlan,
-    Math.round(
-      transitionPreviewProgress * Math.max(0, transitionPreviewPlan.frame_count - 1),
-    ),
+    Math.round(transitionPreviewProgress * Math.max(0, transitionPreviewPlan.frame_count - 1)),
     640,
     360,
   );
@@ -4234,9 +3797,7 @@ function DesignerPage(props: {
   const selectedSourceIds = props.selectedSourceIds.filter((sourceId) =>
     props.scene.sources.some((source) => source.id === sourceId),
   );
-  const selectedSceneSources = props.scene.sources.filter((source) =>
-    selectedSourceIds.includes(source.id),
-  );
+  const selectedSceneSources = props.scene.sources.filter((source) => selectedSourceIds.includes(source.id));
   const selectedEffectiveState = props.selectedSource
     ? sourceEffectiveState(props.scene, props.selectedSource.id)
     : null;
@@ -4258,26 +3819,15 @@ function DesignerPage(props: {
   const unlockedSelectedSources = selectedSceneSources.filter(
     (source) => !sourceEffectiveState(props.scene, source.id).locked,
   );
-  const selectionBounds =
-    selectedSceneSources.length > 1 ? sceneSourceBounds(selectedSceneSources) : null;
-  const hasGroupSelection = props.selectedSources.some(
-    (source) => source.kind === "group",
-  );
+  const selectionBounds = selectedSceneSources.length > 1 ? sceneSourceBounds(selectedSceneSources) : null;
+  const hasGroupSelection = props.selectedSources.some((source) => source.kind === "group");
   const canGroupSelection =
     props.selectedSources.filter(
-      (source) =>
-        !sourceEffectiveState(props.scene, source.id).locked &&
-        source.kind !== "group",
+      (source) => !sourceEffectiveState(props.scene, source.id).locked && source.kind !== "group",
     ).length >= 2;
-  const sourceTree = buildSourceStackTree(
-    props.scene,
-    collapsedGroupIds,
-    isolatedGroupId,
-  );
+  const sourceTree = buildSourceStackTree(props.scene, collapsedGroupIds, isolatedGroupId);
   const isolatedGroup = isolatedGroupId
-    ? props.scene.sources.find(
-        (source) => source.id === isolatedGroupId && source.kind === "group",
-      )
+    ? props.scene.sources.find((source) => source.id === isolatedGroupId && source.kind === "group")
     : null;
 
   useEffect(() => {
@@ -4305,10 +3855,7 @@ function DesignerPage(props: {
         return;
       }
 
-      if (
-        designerShortcutMatches(event, "copy", shortcutBindings) &&
-        selectedSourceIds.length > 0
-      ) {
+      if (designerShortcutMatches(event, "copy", shortcutBindings) && selectedSourceIds.length > 0) {
         event.preventDefault();
         props.onCopySources(props.scene.id, selectedSourceIds);
         return;
@@ -4326,75 +3873,49 @@ function DesignerPage(props: {
         return;
       }
 
-      if (
-        designerShortcutMatches(event, "duplicate", shortcutBindings) &&
-        selectedSourceIds.length > 0
-      ) {
+      if (designerShortcutMatches(event, "duplicate", shortcutBindings) && selectedSourceIds.length > 0) {
         event.preventDefault();
         props.onDuplicateSources(props.scene.id, selectedSourceIds);
         return;
       }
 
-      if (
-        designerShortcutMatches(event, "group", shortcutBindings) &&
-        canGroupSelection
-      ) {
+      if (designerShortcutMatches(event, "group", shortcutBindings) && canGroupSelection) {
         event.preventDefault();
         props.onGroupSources(props.scene.id, selectedSourceIds);
         return;
       }
 
-      if (
-        designerShortcutMatches(event, "ungroup", shortcutBindings) &&
-        hasGroupSelection
-      ) {
+      if (designerShortcutMatches(event, "ungroup", shortcutBindings) && hasGroupSelection) {
         event.preventDefault();
         props.onUngroupSources(props.scene.id, selectedSourceIds);
         return;
       }
 
-      if (
-        designerShortcutMatches(event, "clearSelection", shortcutBindings) &&
-        selectedSourceIds.length > 0
-      ) {
+      if (designerShortcutMatches(event, "clearSelection", shortcutBindings) && selectedSourceIds.length > 0) {
         event.preventDefault();
         props.onSelectSources([]);
         return;
       }
 
-      if (
-        selectedSourceIds.length > 0 &&
-        designerShortcutMatches(event, "toggleVisible", shortcutBindings)
-      ) {
+      if (selectedSourceIds.length > 0 && designerShortcutMatches(event, "toggleVisible", shortcutBindings)) {
         event.preventDefault();
-        setSelectionVisibility(
-          selectedSceneSources.some((source) => !source.visible),
-        );
+        setSelectionVisibility(selectedSceneSources.some((source) => !source.visible));
         return;
       }
 
-      if (
-        selectedSourceIds.length > 0 &&
-        designerShortcutMatches(event, "toggleLocked", shortcutBindings)
-      ) {
+      if (selectedSourceIds.length > 0 && designerShortcutMatches(event, "toggleLocked", shortcutBindings)) {
         event.preventDefault();
         setSelectionLock(selectedSceneSources.some((source) => !source.locked));
         return;
       }
 
-      if (
-        selectedSourceIds.length > 0 &&
-        designerShortcutMatches(event, "bringToFront", shortcutBindings)
-      ) {
+      if (selectedSourceIds.length > 0 && designerShortcutMatches(event, "bringToFront", shortcutBindings)) {
         event.preventDefault();
         setSelectionZOrder("front");
         return;
       }
 
-      if (
-        selectedSourceIds.length > 0 &&
-        designerShortcutMatches(event, "sendToBack", shortcutBindings)
-      ) {
+      if (selectedSourceIds.length > 0 && designerShortcutMatches(event, "sendToBack", shortcutBindings)) {
         event.preventDefault();
         setSelectionZOrder("back");
         return;
@@ -4415,36 +3936,23 @@ function DesignerPage(props: {
       );
       if (selectedSourceIds.length > 0 && nudgeAction) {
         event.preventDefault();
-        nudgeDesignerSelection(
-          nudgeAction[1],
-          nudgeAction[2],
-          `keyboard:nudge:${event.timeStamp}`,
-        );
+        nudgeDesignerSelection(nudgeAction[1], nudgeAction[2], `keyboard:nudge:${event.timeStamp}`);
         return;
       }
 
-      if (
-        selectedSourceIds.length > 0 &&
-        designerShortcutMatches(event, "rotateLeft", shortcutBindings)
-      ) {
+      if (selectedSourceIds.length > 0 && designerShortcutMatches(event, "rotateLeft", shortcutBindings)) {
         event.preventDefault();
         props.onRotateSelection(props.scene.id, selectedSourceIds, -1);
         return;
       }
 
-      if (
-        selectedSourceIds.length > 0 &&
-        designerShortcutMatches(event, "rotateRight", shortcutBindings)
-      ) {
+      if (selectedSourceIds.length > 0 && designerShortcutMatches(event, "rotateRight", shortcutBindings)) {
         event.preventDefault();
         props.onRotateSelection(props.scene.id, selectedSourceIds, 1);
         return;
       }
 
-      if (
-        selectedSourceIds.length > 0 &&
-        designerShortcutMatches(event, "delete", shortcutBindings)
-      ) {
+      if (selectedSourceIds.length > 0 && designerShortcutMatches(event, "delete", shortcutBindings)) {
         event.preventDefault();
         props.onDeleteSources(props.scene.id, selectedSourceIds);
       }
@@ -4485,11 +3993,7 @@ function DesignerPage(props: {
       return;
     }
     if (props.previewFrame?.rendered_frame) {
-      drawRuntimePreviewFrame(
-        renderCanvasRef.current,
-        props.previewFrame.rendered_frame,
-        props.selectedSourceId,
-      );
+      drawRuntimePreviewFrame(renderCanvasRef.current, props.previewFrame.rendered_frame, props.selectedSourceId);
       return;
     }
     drawCompositorPreview(renderCanvasRef.current, props.graph, props.selectedSourceId);
@@ -4579,32 +4083,20 @@ function DesignerPage(props: {
       setTransitionPreviewFromSceneId(props.scene.id);
     }
     if (!sceneIds.has(transitionPreviewToSceneId)) {
-      setTransitionPreviewToSceneId(
-        previewFallbackToSceneId(props.collection, props.scene.id),
-      );
+      setTransitionPreviewToSceneId(previewFallbackToSceneId(props.collection, props.scene.id));
     }
-  }, [
-    props.collection,
-    props.scene.id,
-    transitionPreviewFromSceneId,
-    transitionPreviewToSceneId,
-  ]);
+  }, [props.collection, props.scene.id, transitionPreviewFromSceneId, transitionPreviewToSceneId]);
 
   useEffect(() => {
     if (
       isolatedGroupId &&
-      !props.scene.sources.some(
-        (source) => source.id === isolatedGroupId && source.kind === "group",
-      )
+      !props.scene.sources.some((source) => source.id === isolatedGroupId && source.kind === "group")
     ) {
       setIsolatedGroupId(null);
     }
   }, [isolatedGroupId, props.scene.sources]);
 
-  function handleShortcutRebindKeyDown(
-    event: ReactKeyboardEvent,
-    action: DesignerShortcutAction,
-  ) {
+  function handleShortcutRebindKeyDown(event: ReactKeyboardEvent, action: DesignerShortcutAction) {
     if (listeningShortcutAction !== action) return;
     event.preventDefault();
     event.stopPropagation();
@@ -4622,15 +4114,11 @@ function DesignerPage(props: {
     }
 
     const conflict = designerShortcutDefinitions.find(
-      (definition) =>
-        definition.action !== action &&
-        shortcutBindings[definition.action] === combo,
+      (definition) => definition.action !== action && shortcutBindings[definition.action] === combo,
     );
 
     if (conflict) {
-      setShortcutMessage(
-        `${formatDesignerShortcutCombo(combo)} is already assigned to ${conflict.label}.`,
-      );
+      setShortcutMessage(`${formatDesignerShortcutCombo(combo)} is already assigned to ${conflict.label}.`);
       return;
     }
 
@@ -4722,15 +4210,11 @@ function DesignerPage(props: {
   async function copyAssetDependencyReport() {
     const report = buildSceneAssetDependencyReport(props.collection);
     await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
-    setPresetMessage(
-      `Copied asset dependency report with ${report.dependencies.length} item(s).`,
-    );
+    setPresetMessage(`Copied asset dependency report with ${report.dependencies.length} item(s).`);
   }
 
   async function copyDesignerReadinessReport() {
-    const report =
-      props.designerReadinessReport ??
-      buildFallbackDesignerReadinessReport(props.collection, props.scene);
+    const report = props.designerReadinessReport ?? buildFallbackDesignerReadinessReport(props.collection, props.scene);
     await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
     setPresetMessage("Copied Scene Designer readiness report.");
   }
@@ -4749,9 +4233,7 @@ function DesignerPage(props: {
 
   function toggleGroupCollapse(groupId: string) {
     setCollapsedGroupIds((current) =>
-      current.includes(groupId)
-        ? current.filter((id) => id !== groupId)
-        : [...current, groupId],
+      current.includes(groupId) ? current.filter((id) => id !== groupId) : [...current, groupId],
     );
   }
 
@@ -4764,17 +4246,10 @@ function DesignerPage(props: {
     });
   }
 
-  function nudgeDesignerSelection(
-    deltaX: number,
-    deltaY: number,
-    historyGroup: string,
-    sourceIds = selectedSourceIds,
-  ) {
+  function nudgeDesignerSelection(deltaX: number, deltaY: number, historyGroup: string, sourceIds = selectedSourceIds) {
     const selectedIds = new Set(sourceIds);
     const targets = props.scene.sources.filter(
-      (source) =>
-        selectedIds.has(source.id) &&
-        !sourceEffectiveState(props.scene, source.id).locked,
+      (source) => selectedIds.has(source.id) && !sourceEffectiveState(props.scene, source.id).locked,
     );
     applyDesignerSourcePatches(
       targets.map((source) => ({
@@ -4790,10 +4265,7 @@ function DesignerPage(props: {
     );
   }
 
-  function setSelectionVisibility(
-    visible: boolean,
-    historyGroup = `selection:visibility:${visible}`,
-  ) {
+  function setSelectionVisibility(visible: boolean, historyGroup = `selection:visibility:${visible}`) {
     applyDesignerSourcePatches(
       selectedSceneSources.map((source) => ({
         sourceId: source.id,
@@ -4803,10 +4275,7 @@ function DesignerPage(props: {
     );
   }
 
-  function setSelectionLock(
-    locked: boolean,
-    historyGroup = `selection:lock:${locked}`,
-  ) {
+  function setSelectionLock(locked: boolean, historyGroup = `selection:lock:${locked}`) {
     applyDesignerSourcePatches(
       selectedSceneSources.map((source) => ({
         sourceId: source.id,
@@ -4819,22 +4288,12 @@ function DesignerPage(props: {
   function setSelectionZOrder(mode: "front" | "back") {
     if (selectedSceneSources.length === 0) return;
     const selectedIds = new Set(selectedSceneSources.map((source) => source.id));
-    const selectedOrdered = sortedSceneSources(props.scene, "asc").filter((source) =>
-      selectedIds.has(source.id),
-    );
+    const selectedOrdered = sortedSceneSources(props.scene, "asc").filter((source) => selectedIds.has(source.id));
     const unselected = props.scene.sources.filter((source) => !selectedIds.has(source.id));
     const base =
       mode === "front"
-        ? unselected.reduce(
-            (highest, source) => Math.max(highest, source.z_index),
-            0,
-          )
-        : unselected.reduce(
-            (lowest, source) => Math.min(lowest, source.z_index),
-            0,
-          ) -
-          selectedOrdered.length * 10 -
-          10;
+        ? unselected.reduce((highest, source) => Math.max(highest, source.z_index), 0)
+        : unselected.reduce((lowest, source) => Math.min(lowest, source.z_index), 0) - selectedOrdered.length * 10 - 10;
     applyDesignerSourcePatches(
       selectedOrdered.map((source, index) => ({
         sourceId: source.id,
@@ -4852,15 +4311,9 @@ function DesignerPage(props: {
       ...patch,
     };
     if (aspectRatioLocked && patch.width && !patch.height) {
-      nextBounds.height = Math.max(
-        16,
-        Math.round(patch.width / (selectionBounds.width / selectionBounds.height)),
-      );
+      nextBounds.height = Math.max(16, Math.round(patch.width / (selectionBounds.width / selectionBounds.height)));
     } else if (aspectRatioLocked && patch.height && !patch.width) {
-      nextBounds.width = Math.max(
-        16,
-        Math.round(patch.height * (selectionBounds.width / selectionBounds.height)),
-      );
+      nextBounds.width = Math.max(16, Math.round(patch.height * (selectionBounds.width / selectionBounds.height)));
     }
     const scaleX = nextBounds.width / selectionBounds.width;
     const scaleY = nextBounds.height / selectionBounds.height;
@@ -4885,10 +4338,7 @@ function DesignerPage(props: {
     );
   }
 
-  function beginSelectionTransform(
-    event: ReactPointerEvent,
-    mode: "resize" | "rotate",
-  ) {
+  function beginSelectionTransform(event: ReactPointerEvent, mode: "resize" | "rotate") {
     if (!selectionBounds || unlockedSelectedSources.length === 0 || event.button !== 0) {
       return;
     }
@@ -4897,11 +4347,7 @@ function DesignerPage(props: {
     startDesignerDrag(event, mode, unlockedSelectedSources, selectionBounds);
   }
 
-  function beginCropDrag(
-    event: ReactPointerEvent,
-    source: SceneSource,
-    edge: DesignerCropEdge,
-  ) {
+  function beginCropDrag(event: ReactPointerEvent, source: SceneSource, edge: DesignerCropEdge) {
     const effectiveState = sourceEffectiveState(props.scene, source.id);
     if (effectiveState.locked || event.button !== 0) return;
     event.preventDefault();
@@ -4921,11 +4367,7 @@ function DesignerPage(props: {
     );
   }
 
-  function beginSourceDrag(
-    event: ReactPointerEvent,
-    source: SceneSource,
-    mode: "move" | "resize" | "rotate",
-  ) {
+  function beginSourceDrag(event: ReactPointerEvent, source: SceneSource, mode: "move" | "resize" | "rotate") {
     const effectiveState = sourceEffectiveState(props.scene, source.id);
     if (effectiveState.locked || event.button !== 0) return;
     event.preventDefault();
@@ -4935,9 +4377,7 @@ function DesignerPage(props: {
       props.onSelectSource(source.id, additive);
     }
     const dragSources =
-      !additive &&
-      selectedSourceIds.includes(source.id) &&
-      unlockedSelectedSources.length > 1
+      !additive && selectedSourceIds.includes(source.id) && unlockedSelectedSources.length > 1
         ? unlockedSelectedSources
         : [source];
     startDesignerDrag(event, mode, dragSources, sceneSourceBounds(dragSources));
@@ -4953,16 +4393,9 @@ function DesignerPage(props: {
     suppressSourceClickRef.current = false;
     const rect = canvasRef.current?.getBoundingClientRect();
     const centerPoint = sceneRectCenter(bounds);
-    const centerClient = rect
-      ? scenePointToClientPoint(centerPoint, props.scene, rect)
-      : null;
+    const centerClient = rect ? scenePointToClientPoint(centerPoint, props.scene, rect) : null;
     const startAngleDegrees = centerClient
-      ? pointerAngleDegrees(
-          event.clientX,
-          event.clientY,
-          centerClient.x,
-          centerClient.y,
-        )
+      ? pointerAngleDegrees(event.clientX, event.clientY, centerClient.x, centerClient.y)
       : undefined;
     canvasRef.current?.setPointerCapture(event.pointerId);
     setSnapGuides([]);
@@ -4995,16 +4428,10 @@ function DesignerPage(props: {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
     suppressSourceClickRef.current = true;
-    const deltaX =
-      ((event.clientX - dragState.startClientX) / rect.width) *
-      props.scene.canvas.width;
-    const deltaY =
-      ((event.clientY - dragState.startClientY) / rect.height) *
-      props.scene.canvas.height;
+    const deltaX = ((event.clientX - dragState.startClientX) / rect.width) * props.scene.canvas.width;
+    const deltaY = ((event.clientY - dragState.startClientY) / rect.height) * props.scene.canvas.height;
     const options = { historyGroup: `drag:${dragState.sourceId}` };
-    const ignoredSourceIds = new Set(
-      dragState.startSources.map((source) => source.id),
-    );
+    const ignoredSourceIds = new Set(dragState.startSources.map((source) => source.id));
     const snapThreshold = snapEnabled ? snapStrength : -1;
 
     if (dragState.mode === "crop") {
@@ -5021,12 +4448,7 @@ function DesignerPage(props: {
         nextCrop.left = Math.max(0, Math.round(source.crop.left + deltaX));
       }
       setSnapGuides([]);
-      props.onUpdateSource(
-        props.scene.id,
-        source.id,
-        { crop: nextCrop },
-        options,
-      );
+      props.onUpdateSource(props.scene.id, source.id, { crop: nextCrop }, options);
       return;
     }
 
@@ -5038,12 +4460,7 @@ function DesignerPage(props: {
       ) {
         return;
       }
-      const angle = pointerAngleDegrees(
-        event.clientX,
-        event.clientY,
-        dragState.centerClientX,
-        dragState.centerClientY,
-      );
+      const angle = pointerAngleDegrees(event.clientX, event.clientY, dragState.centerClientX, dragState.centerClientY);
       const rotationDelta = angle - dragState.startAngleDegrees;
       const center = sceneRectCenter(dragState.startSelectionBounds);
       setSnapGuides([]);
@@ -5064,9 +4481,7 @@ function DesignerPage(props: {
                 x: Math.round(rotatedCenter.x - source.size.width / 2),
                 y: Math.round(rotatedCenter.y - source.size.height / 2),
               },
-              rotation_degrees: Math.round(
-                source.rotation_degrees + rotationDelta,
-              ),
+              rotation_degrees: Math.round(source.rotation_degrees + rotationDelta),
             },
           };
         }),
@@ -5166,17 +4581,18 @@ function DesignerPage(props: {
   function beginMarquee(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
     const target = event.target;
-    if (
-      target instanceof HTMLElement &&
-      target.closest(".designer-source-box")
-    ) {
+    if (target instanceof HTMLElement && target.closest(".designer-source-box")) {
       return;
     }
     const point = canvasPointFromPointerEvent(event, props.scene, canvasRef.current);
     if (!point) return;
     event.preventDefault();
     canvasRef.current?.setPointerCapture(event.pointerId);
-    setMarqueeState({ pointerId: event.pointerId, start: point, current: point });
+    setMarqueeState({
+      pointerId: event.pointerId,
+      start: point,
+      current: point,
+    });
   }
 
   function updateMarquee(event: ReactPointerEvent<HTMLDivElement>) {
@@ -5188,12 +4604,8 @@ function DesignerPage(props: {
 
   function endMarquee(event: ReactPointerEvent<HTMLDivElement>) {
     if (!marqueeState || marqueeState.pointerId !== event.pointerId) return;
-    const selectionBounds = sceneRectFromPoints(
-      marqueeState.start,
-      marqueeState.current,
-    );
-    const isClick =
-      selectionBounds.width < 4 && selectionBounds.height < 4;
+    const selectionBounds = sceneRectFromPoints(marqueeState.start, marqueeState.current);
+    const isClick = selectionBounds.width < 4 && selectionBounds.height < 4;
     const selectedIds = isClick
       ? []
       : sortedSceneSources(props.scene, "asc")
@@ -5209,11 +4621,7 @@ function DesignerPage(props: {
         <section className="panel">
           <PanelTitle
             action={
-              <button
-                className="secondary-button compact"
-                onClick={props.onCreateScene}
-                type="button"
-              >
+              <button className="secondary-button compact" onClick={props.onCreateScene} type="button">
                 <Plus size={14} />
                 Scene
               </button>
@@ -5223,11 +4631,7 @@ function DesignerPage(props: {
           <div className="designer-list">
             {props.collection.scenes.map((scene) => (
               <div
-                className={
-                  scene.id === props.scene.id
-                    ? "designer-list-item selected"
-                    : "designer-list-item"
-                }
+                className={scene.id === props.scene.id ? "designer-list-item selected" : "designer-list-item"}
                 key={scene.id}
               >
                 <button
@@ -5278,9 +4682,7 @@ function DesignerPage(props: {
                 <select
                   aria-label="New transition kind"
                   data-testid="designer-new-transition-kind"
-                  onChange={(event) =>
-                    setNewTransitionKind(event.target.value as SceneTransition["kind"])
-                  }
+                  onChange={(event) => setNewTransitionKind(event.target.value as SceneTransition["kind"])}
                   value={newTransitionKind}
                 >
                   {Object.entries(sceneTransitionKindLabels).map(([kind, label]) => (
@@ -5324,16 +4726,8 @@ function DesignerPage(props: {
                     </span>
                   </div>
                 </button>
-                <Pill
-                  tone={
-                    transition.id === props.collection.active_transition_id
-                      ? "green"
-                      : "muted"
-                  }
-                >
-                  {transition.id === props.collection.active_transition_id
-                    ? "Active"
-                    : "Ready"}
+                <Pill tone={transition.id === props.collection.active_transition_id ? "green" : "muted"}>
+                  {transition.id === props.collection.active_transition_id ? "Active" : "Ready"}
                 </Pill>
                 <div className="source-stack-actions">
                   <button
@@ -5363,9 +4757,7 @@ function DesignerPage(props: {
             <div className="transition-editor">
               <TextInput
                 label="Name"
-                onChange={(name) =>
-                  props.onUpdateTransition(activeTransition.id, { name })
-                }
+                onChange={(name) => props.onUpdateTransition(activeTransition.id, { name })}
                 value={activeTransition.name}
               />
               <div className="form-grid">
@@ -5444,14 +4836,12 @@ function DesignerPage(props: {
                   value={
                     transitionRuntimeFrame
                       ? `${Math.round(transitionRuntimeFrame.eased_progress * 100)}% / ${transitionRuntimeFrame.checksum ?? "pending"}`
-                      : transitionRuntimeError ?? "pending"
+                      : (transitionRuntimeError ?? "pending")
                   }
                 />
                 <KeyValue
                   label="Midpoint"
-                  value={`${Math.round(
-                    (transitionPreviewPlan.sample_frames[1]?.eased_progress ?? 1) * 100,
-                  )}% eased`}
+                  value={`${Math.round((transitionPreviewPlan.sample_frames[1]?.eased_progress ?? 1) * 100)}% eased`}
                 />
               </div>
               <div className="form-grid">
@@ -5524,7 +4914,9 @@ function DesignerPage(props: {
                   aria-valuenow={Math.round(transitionPreviewProgress * 100)}
                 >
                   <span
-                    style={{ width: `${Math.round(transitionPreviewProgress * 100)}%` }}
+                    style={{
+                      width: `${Math.round(transitionPreviewProgress * 100)}%`,
+                    }}
                   />
                 </div>
                 <Pill tone={transitionPreviewPlaying ? "green" : "muted"}>
@@ -5568,9 +4960,7 @@ function DesignerPage(props: {
                   onClick={() => props.onPasteSource(props.scene.id)}
                   title={
                     props.clipboardSources.length > 0
-                      ? `Paste ${props.clipboardSources.length} source${
-                          props.clipboardSources.length === 1 ? "" : "s"
-                        }`
+                      ? `Paste ${props.clipboardSources.length} source${props.clipboardSources.length === 1 ? "" : "s"}`
                       : "No copied sources"
                   }
                   type="button"
@@ -5585,9 +4975,7 @@ function DesignerPage(props: {
           <SourceCreationPanel
             captureInventory={props.captureInventory}
             newSourceKind={newSourceKind}
-            onCreateSource={(kind, defaults) =>
-              props.onCreateSource(props.scene.id, kind, defaults)
-            }
+            onCreateSource={(kind, defaults) => props.onCreateSource(props.scene.id, kind, defaults)}
             onNewSourceKindChange={setNewSourceKind}
           />
           <div className="designer-list source-stack">
@@ -5598,22 +4986,14 @@ function DesignerPage(props: {
               onDrop={(event: ReactDragEvent<HTMLDivElement>) => {
                 const draggedSourceId = event.dataTransfer.getData("text/plain");
                 if (draggedSourceId) {
-                  props.onSetSourceParent(
-                    props.scene.id,
-                    draggedSourceId,
-                    isolatedGroup?.id ?? null,
-                  );
+                  props.onSetSourceParent(props.scene.id, draggedSourceId, isolatedGroup?.id ?? null);
                 }
               }}
             >
               <Layers size={14} />
               <span>{isolatedGroup ? `Editing ${isolatedGroup.name}` : "Scene Root"}</span>
               {isolatedGroup && (
-                <button
-                  className="secondary-button compact"
-                  onClick={() => setIsolatedGroupId(null)}
-                  type="button"
-                >
+                <button className="secondary-button compact" onClick={() => setIsolatedGroupId(null)} type="button">
                   Exit
                 </button>
               )}
@@ -5621,9 +5001,7 @@ function DesignerPage(props: {
             {sourceTree.map((item) => {
               const source = item.source;
               const effectiveState = sourceEffectiveState(props.scene, source.id);
-              const stackIndex = sourceStack.findIndex(
-                (candidate) => candidate.id === source.id,
-              );
+              const stackIndex = sourceStack.findIndex((candidate) => candidate.id === source.id);
               const groupCollapsed = collapsedGroupIds.includes(source.id);
               return (
                 <div
@@ -5650,26 +5028,16 @@ function DesignerPage(props: {
                     const draggedSourceId = event.dataTransfer.getData("text/plain");
                     if (!draggedSourceId || draggedSourceId === source.id) return;
                     if (source.kind === "group") {
-                      props.onSetSourceParent(
-                        props.scene.id,
-                        draggedSourceId,
-                        source.id,
-                      );
+                      props.onSetSourceParent(props.scene.id, draggedSourceId, source.id);
                       return;
                     }
-                    props.onDropReorderSource(
-                      props.scene.id,
-                      draggedSourceId,
-                      source.id,
-                    );
+                    props.onDropReorderSource(props.scene.id, draggedSourceId, source.id);
                   }}
                   style={{ paddingLeft: 10 + item.depth * 18 }}
                 >
                   <button
                     aria-label={
-                      source.kind === "group"
-                        ? `${groupCollapsed ? "Expand" : "Collapse"} ${source.name}`
-                        : undefined
+                      source.kind === "group" ? `${groupCollapsed ? "Expand" : "Collapse"} ${source.name}` : undefined
                     }
                     className="icon-button compact source-stack-tree-toggle"
                     disabled={source.kind !== "group"}
@@ -5677,9 +5045,7 @@ function DesignerPage(props: {
                       if (source.kind === "group") toggleGroupCollapse(source.id);
                     }}
                     title={
-                      source.kind === "group"
-                        ? `${groupCollapsed ? "Expand" : "Collapse"} ${source.name}`
-                        : undefined
+                      source.kind === "group" ? `${groupCollapsed ? "Expand" : "Collapse"} ${source.name}` : undefined
                     }
                     type="button"
                   >
@@ -5707,9 +5073,7 @@ function DesignerPage(props: {
                             autoFocus
                             className="source-stack-rename-input"
                             onBlur={() => commitInlineSourceRename(source)}
-                            onChange={(event) =>
-                              setSourceRenameDraft(event.target.value)
-                            }
+                            onChange={(event) => setSourceRenameDraft(event.target.value)}
                             onKeyDown={(event) => {
                               if (event.key === "Enter") {
                                 event.preventDefault();
@@ -5736,25 +5100,22 @@ function DesignerPage(props: {
                       data-source-id={source.id}
                       data-testid="designer-source-select"
                       onClick={(event) =>
-                        props.onSelectSource(
-                          source.id,
-                          event.shiftKey || event.metaKey || event.ctrlKey,
-                        )
+                        props.onSelectSource(source.id, event.shiftKey || event.metaKey || event.ctrlKey)
                       }
                       type="button"
                     >
-                    <div className="source-stack-main">
-                      <SourceKindIcon kind={source.kind} />
-                      <div>
-                        <strong>{source.name}</strong>
-                        <span>
-                          {sceneSourceKindLabels[source.kind]} - z {source.z_index}
-                          {effectiveState.parentId ? " - grouped" : ""}
-                          {effectiveState.inheritedHidden ? " - hidden by parent" : ""}
-                          {effectiveState.inheritedLocked ? " - locked by parent" : ""}
-                        </span>
+                      <div className="source-stack-main">
+                        <SourceKindIcon kind={source.kind} />
+                        <div>
+                          <strong>{source.name}</strong>
+                          <span>
+                            {sceneSourceKindLabels[source.kind]} - z {source.z_index}
+                            {effectiveState.parentId ? " - grouped" : ""}
+                            {effectiveState.inheritedHidden ? " - hidden by parent" : ""}
+                            {effectiveState.inheritedLocked ? " - locked by parent" : ""}
+                          </span>
+                        </div>
                       </div>
-                    </div>
                     </button>
                   )}
                   <div className="source-stack-actions">
@@ -5762,11 +5123,7 @@ function DesignerPage(props: {
                       <button
                         aria-label={`Edit ${source.name} group`}
                         className="icon-button compact"
-                        onClick={() =>
-                          setIsolatedGroupId(
-                            isolatedGroupId === source.id ? null : source.id,
-                          )
-                        }
+                        onClick={() => setIsolatedGroupId(isolatedGroupId === source.id ? null : source.id)}
                         title={`Edit ${source.name} group`}
                         type="button"
                       >
@@ -5778,9 +5135,7 @@ function DesignerPage(props: {
                         aria-label={`Move ${source.name} to scene root`}
                         className="icon-button compact"
                         disabled={effectiveState.locked}
-                        onClick={() =>
-                          props.onSetSourceParent(props.scene.id, source.id, null)
-                        }
+                        onClick={() => props.onSetSourceParent(props.scene.id, source.id, null)}
                         title={`Move ${source.name} to scene root`}
                         type="button"
                       >
@@ -5830,9 +5185,7 @@ function DesignerPage(props: {
                     <button
                       aria-label={`Move ${source.name} backward`}
                       className="icon-button compact"
-                      disabled={
-                        effectiveState.locked || stackIndex === sourceStack.length - 1
-                      }
+                      disabled={effectiveState.locked || stackIndex === sourceStack.length - 1}
                       onClick={() => {
                         props.onReorderSource(props.scene.id, source.id, "down");
                       }}
@@ -5845,9 +5198,7 @@ function DesignerPage(props: {
                       aria-label={`Send ${source.name} to front`}
                       className="icon-button compact"
                       disabled={effectiveState.locked}
-                      onClick={() =>
-                        props.onSetSourceZOrder(props.scene.id, source.id, "front")
-                      }
+                      onClick={() => props.onSetSourceZOrder(props.scene.id, source.id, "front")}
                       title={`Send ${source.name} to front`}
                       type="button"
                     >
@@ -5857,9 +5208,7 @@ function DesignerPage(props: {
                       aria-label={`Send ${source.name} to back`}
                       className="icon-button compact"
                       disabled={effectiveState.locked}
-                      onClick={() =>
-                        props.onSetSourceZOrder(props.scene.id, source.id, "back")
-                      }
+                      onClick={() => props.onSetSourceZOrder(props.scene.id, source.id, "back")}
                       title={`Send ${source.name} to back`}
                       type="button"
                     >
@@ -5887,9 +5236,7 @@ function DesignerPage(props: {
                       aria-label={`Duplicate ${source.name}`}
                       className="icon-button compact"
                       disabled={effectiveState.locked}
-                      onClick={() =>
-                        props.onDuplicateSource(props.scene.id, source.id)
-                      }
+                      onClick={() => props.onDuplicateSource(props.scene.id, source.id)}
                       title={`Duplicate ${source.name}`}
                       type="button"
                     >
@@ -5909,9 +5256,7 @@ function DesignerPage(props: {
                 </div>
               );
             })}
-            {sourceTree.length === 0 && (
-              <div className="empty compact-empty">No sources in this group</div>
-            )}
+            {sourceTree.length === 0 && <div className="empty compact-empty">No sources in this group</div>}
           </div>
         </section>
 
@@ -5936,15 +5281,9 @@ function DesignerPage(props: {
                 {validation.ok ? "Valid" : `${validation.issues.length} issues`}
               </Pill>
               <Pill tone={graphValidation.ready ? "green" : "red"}>
-                {graphValidation.ready
-                  ? `${props.graph.nodes.length} graph nodes`
-                  : "Graph blocked"}
+                {graphValidation.ready ? `${props.graph.nodes.length} graph nodes` : "Graph blocked"}
               </Pill>
-              {props.saveStatus && (
-                <Pill tone={props.dirty ? "amber" : "green"}>
-                  {props.saveStatus}
-                </Pill>
-              )}
+              {props.saveStatus && <Pill tone={props.dirty ? "amber" : "green"}>{props.saveStatus}</Pill>}
               <button
                 aria-label="Undo scene edit"
                 className="icon-button compact"
@@ -6014,13 +5353,7 @@ function DesignerPage(props: {
           }
           title="Preview"
         />
-        <div
-          className={
-            showPreviewGrid
-              ? "designer-preview-shell"
-              : "designer-preview-shell grid-disabled"
-          }
-        >
+        <div className={showPreviewGrid ? "designer-preview-shell" : "designer-preview-shell grid-disabled"}>
           <div className="designer-preview-toolbar">
             <button
               aria-label="Zoom preview out"
@@ -6041,11 +5374,7 @@ function DesignerPage(props: {
             >
               <Plus size={14} />
             </button>
-            <button
-              className="secondary-button compact"
-              onClick={() => updatePreviewZoom(1)}
-              type="button"
-            >
+            <button className="secondary-button compact" onClick={() => updatePreviewZoom(1)} type="button">
               <Maximize2 size={14} />
               Fit
             </button>
@@ -6075,29 +5404,17 @@ function DesignerPage(props: {
             </button>
             <button
               className="secondary-button compact"
-              onClick={() =>
-                props.onPauseDesignerRuntime(
-                  props.designerRuntimeSession?.session_state !== "paused",
-                )
-              }
+              onClick={() => props.onPauseDesignerRuntime(props.designerRuntimeSession?.session_state !== "paused")}
               type="button"
             >
-              {props.designerRuntimeSession?.session_state === "paused" ? (
-                <Play size={14} />
-              ) : (
-                <Pause size={14} />
-              )}
-              {props.designerRuntimeSession?.session_state === "paused"
-                ? "Resume Runtime"
-                : "Pause Runtime"}
+              {props.designerRuntimeSession?.session_state === "paused" ? <Play size={14} /> : <Pause size={14} />}
+              {props.designerRuntimeSession?.session_state === "paused" ? "Resume Runtime" : "Pause Runtime"}
             </button>
             <button
               aria-label="Restart selected runtime source"
               className="icon-button compact"
               disabled={selectedSourceIds.length === 0}
-              onClick={() =>
-                props.onRestartDesignerRuntimeSource(selectedSourceIds[0])
-              }
+              onClick={() => props.onRestartDesignerRuntimeSource(selectedSourceIds[0])}
               title="Restart selected runtime source session"
               type="button"
             >
@@ -6116,9 +5433,7 @@ function DesignerPage(props: {
               Quality
               <select
                 value={props.previewQuality}
-                onChange={(event) =>
-                  props.onPreviewQualityChange(event.target.value as PreviewQuality)
-                }
+                onChange={(event) => props.onPreviewQualityChange(event.target.value as PreviewQuality)}
               >
                 {Object.entries(previewQualityLabels).map(([quality, label]) => (
                   <option key={quality} value={quality}>
@@ -6150,287 +5465,227 @@ function DesignerPage(props: {
             </button>
             {props.previewLoading && <Pill tone="amber">Loading</Pill>}
             {props.programPreviewLoading && <Pill tone="amber">Program</Pill>}
-            <Pill tone={props.previewFrame?.image_data ? "green" : "muted"}>
-              {props.previewStats.fpsLimit} fps cap
-            </Pill>
+            <Pill tone={props.previewFrame?.image_data ? "green" : "muted"}>{props.previewStats.fpsLimit} fps cap</Pill>
           </div>
           <div className="designer-preview-viewport">
-          <div
-            className="designer-preview-canvas"
-            onPointerDown={beginMarquee}
-            onPointerMove={(event) => {
-              updateDrag(event);
-              updateMarquee(event);
-            }}
-            onPointerUp={(event) => {
-              endDrag(event);
-              endMarquee(event);
-            }}
-            onPointerCancel={(event) => {
-              endDrag(event);
-              setMarqueeState(null);
-            }}
-            ref={canvasRef}
-            style={{
-              aspectRatio: `${props.scene.canvas.width} / ${props.scene.canvas.height}`,
-              backgroundColor: props.scene.canvas.background_color,
-              minWidth: `${previewZoom * 100}%`,
-              width: `${previewZoom * 100}%`,
-            }}
-          >
-            {showSafeAreas && (
-              <>
+            <div
+              className="designer-preview-canvas"
+              onPointerDown={beginMarquee}
+              onPointerMove={(event) => {
+                updateDrag(event);
+                updateMarquee(event);
+              }}
+              onPointerUp={(event) => {
+                endDrag(event);
+                endMarquee(event);
+              }}
+              onPointerCancel={(event) => {
+                endDrag(event);
+                setMarqueeState(null);
+              }}
+              ref={canvasRef}
+              style={{
+                aspectRatio: `${props.scene.canvas.width} / ${props.scene.canvas.height}`,
+                backgroundColor: props.scene.canvas.background_color,
+                minWidth: `${previewZoom * 100}%`,
+                width: `${previewZoom * 100}%`,
+              }}
+            >
+              {showSafeAreas && (
+                <>
+                  <div aria-hidden="true" className="designer-safe-area action-safe" />
+                  <div aria-hidden="true" className="designer-safe-area title-safe" />
+                </>
+              )}
+              <canvas
+                aria-label="Compositor preview render"
+                className="designer-preview-render-canvas"
+                height={props.graph.output.height}
+                ref={renderCanvasRef}
+                width={props.graph.output.width}
+              />
+              {snapGuides.map((guide) => (
                 <div
                   aria-hidden="true"
-                  className="designer-safe-area action-safe"
+                  className={`designer-snap-guide ${guide.axis}`}
+                  key={`${guide.axis}-${guide.position}`}
+                  style={snapGuideStyle(guide, props.scene)}
                 />
-                <div
-                  aria-hidden="true"
-                  className="designer-safe-area title-safe"
-                />
-              </>
-            )}
-            <canvas
-              aria-label="Compositor preview render"
-              className="designer-preview-render-canvas"
-              height={props.graph.output.height}
-              ref={renderCanvasRef}
-              width={props.graph.output.width}
-            />
-            {snapGuides.map((guide) => (
-              <div
-                aria-hidden="true"
-                className={`designer-snap-guide ${guide.axis}`}
-                key={`${guide.axis}-${guide.position}`}
-                style={snapGuideStyle(guide, props.scene)}
-              />
-            ))}
-            {marqueeState && (
-              <div
-                aria-hidden="true"
-                className="designer-marquee"
-                style={marqueeStyle(marqueeState, props.scene)}
-              />
-            )}
-            {sortedSceneSources(props.scene, "asc").map((source) => {
-              const effectiveState = sourceEffectiveState(props.scene, source.id);
-              const audioGraphSource =
-                source.kind === "audio_meter"
-                  ? audioGraphSourceForSource(props.audioGraphRuntime, source.id)
-                  : null;
-              return (
-                <div
-                  className={[
-                    "designer-source-box",
-                    `source-${source.kind}`,
-                    selectedSourceIds.includes(source.id) ? "selected" : "",
-                    effectiveState.visible ? "" : "hidden-source",
-                    effectiveState.locked ? "locked-source" : "",
-                    effectiveState.inheritedHidden ? "inherited-hidden" : "",
-                    effectiveState.inheritedLocked ? "inherited-locked" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  data-source-id={source.id}
-                  data-source-kind={source.kind}
-                  data-testid="designer-preview-source"
-                  key={source.id}
-                  onClick={(event) => {
-                    if (suppressSourceClickRef.current) {
-                      suppressSourceClickRef.current = false;
-                      return;
-                    }
-                    props.onSelectSource(
-                      source.id,
-                      event.shiftKey || event.metaKey || event.ctrlKey,
-                    );
-                  }}
-                  onKeyDown={(event) => {
-                    if (effectiveState.locked) return;
-                    const nudge = event.shiftKey ? 10 : 1;
-                    const keyboardSourceIds = selectedSourceIds.includes(source.id)
-                      ? selectedSourceIds
-                      : [source.id];
-                    if (event.key === "ArrowLeft") {
-                      nudgeDesignerSelection(
-                        -nudge,
-                        0,
-                        `keyboard:nudge:${event.timeStamp}`,
-                        keyboardSourceIds,
-                      );
-                    } else if (event.key === "ArrowRight") {
-                      nudgeDesignerSelection(
-                        nudge,
-                        0,
-                        `keyboard:nudge:${event.timeStamp}`,
-                        keyboardSourceIds,
-                      );
-                    } else if (event.key === "ArrowUp") {
-                      nudgeDesignerSelection(
-                        0,
-                        -nudge,
-                        `keyboard:nudge:${event.timeStamp}`,
-                        keyboardSourceIds,
-                      );
-                    } else if (event.key === "ArrowDown") {
-                      nudgeDesignerSelection(
-                        0,
-                        nudge,
-                        `keyboard:nudge:${event.timeStamp}`,
-                        keyboardSourceIds,
-                      );
-                    } else if (event.key === "[" || event.key === "]") {
-                      props.onRotateSelection(
-                        props.scene.id,
-                        keyboardSourceIds,
-                        event.key === "]" ? (event.shiftKey ? 15 : 1) : event.shiftKey ? -15 : -1,
-                      );
-                    } else {
-                      return;
-                    }
-                    event.preventDefault();
-                    event.stopPropagation();
-                  }}
-                  onPointerDown={(event) => beginSourceDrag(event, source, "move")}
-                  role="button"
-                  style={{
-                    ...sceneSourcePreviewStyle(source, props.scene),
-                    opacity: effectiveState.visible ? source.opacity : 0.18,
-                  }}
-                  tabIndex={0}
-                >
-                  <div className="designer-source-label">
-                    <SourceKindIcon kind={source.kind} />
-                    <strong>{source.name}</strong>
-                  </div>
-                  <span>{sourceConfigSummary(source)}</span>
-                  {sceneSourceAvailability(source) && (
-                    <small>{sceneSourceAvailability(source)?.detail}</small>
-                  )}
-                  {audioGraphSource && (
-                    <div className="designer-audio-meter">
-                      <span
-                        style={{
-                          width: `${Math.round(audioGraphSource.linear_level * 100)}%`,
-                        }}
-                      />
+              ))}
+              {marqueeState && (
+                <div aria-hidden="true" className="designer-marquee" style={marqueeStyle(marqueeState, props.scene)} />
+              )}
+              {sortedSceneSources(props.scene, "asc").map((source) => {
+                const effectiveState = sourceEffectiveState(props.scene, source.id);
+                const audioGraphSource =
+                  source.kind === "audio_meter" ? audioGraphSourceForSource(props.audioGraphRuntime, source.id) : null;
+                return (
+                  <div
+                    className={[
+                      "designer-source-box",
+                      `source-${source.kind}`,
+                      selectedSourceIds.includes(source.id) ? "selected" : "",
+                      effectiveState.visible ? "" : "hidden-source",
+                      effectiveState.locked ? "locked-source" : "",
+                      effectiveState.inheritedHidden ? "inherited-hidden" : "",
+                      effectiveState.inheritedLocked ? "inherited-locked" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    data-source-id={source.id}
+                    data-source-kind={source.kind}
+                    data-testid="designer-preview-source"
+                    key={source.id}
+                    onClick={(event) => {
+                      if (suppressSourceClickRef.current) {
+                        suppressSourceClickRef.current = false;
+                        return;
+                      }
+                      props.onSelectSource(source.id, event.shiftKey || event.metaKey || event.ctrlKey);
+                    }}
+                    onKeyDown={(event) => {
+                      if (effectiveState.locked) return;
+                      const nudge = event.shiftKey ? 10 : 1;
+                      const keyboardSourceIds = selectedSourceIds.includes(source.id) ? selectedSourceIds : [source.id];
+                      if (event.key === "ArrowLeft") {
+                        nudgeDesignerSelection(-nudge, 0, `keyboard:nudge:${event.timeStamp}`, keyboardSourceIds);
+                      } else if (event.key === "ArrowRight") {
+                        nudgeDesignerSelection(nudge, 0, `keyboard:nudge:${event.timeStamp}`, keyboardSourceIds);
+                      } else if (event.key === "ArrowUp") {
+                        nudgeDesignerSelection(0, -nudge, `keyboard:nudge:${event.timeStamp}`, keyboardSourceIds);
+                      } else if (event.key === "ArrowDown") {
+                        nudgeDesignerSelection(0, nudge, `keyboard:nudge:${event.timeStamp}`, keyboardSourceIds);
+                      } else if (event.key === "[" || event.key === "]") {
+                        props.onRotateSelection(
+                          props.scene.id,
+                          keyboardSourceIds,
+                          event.key === "]" ? (event.shiftKey ? 15 : 1) : event.shiftKey ? -15 : -1,
+                        );
+                      } else {
+                        return;
+                      }
+                      event.preventDefault();
+                      event.stopPropagation();
+                    }}
+                    onPointerDown={(event) => beginSourceDrag(event, source, "move")}
+                    role="button"
+                    style={{
+                      ...sceneSourcePreviewStyle(source, props.scene),
+                      opacity: effectiveState.visible ? source.opacity : 0.18,
+                    }}
+                    tabIndex={0}
+                  >
+                    <div className="designer-source-label">
+                      <SourceKindIcon kind={source.kind} />
+                      <strong>{source.name}</strong>
                     </div>
-                  )}
-                  {!effectiveState.locked && (
-                    <>
-                      <button
-                        aria-label={`Rotate ${source.name}`}
-                        className="designer-rotate-handle"
-                        onClick={(event) => event.stopPropagation()}
-                        onPointerDown={(event) =>
-                          beginSourceDrag(event, source, "rotate")
-                        }
-                        title={`Rotate ${source.name}`}
-                        type="button"
-                      >
-                        <RotateCcw size={11} />
-                      </button>
-                      <button
-                        aria-label={`Resize ${source.name}`}
-                        className="designer-resize-handle"
-                        onClick={(event) => event.stopPropagation()}
-                        onPointerDown={(event) =>
-                          beginSourceDrag(event, source, "resize")
-                        }
-                        title={`Resize ${source.name}`}
-                        type="button"
-                      />
-                      {selectedSourceIds.includes(source.id) &&
-                        (["top", "right", "bottom", "left"] as DesignerCropEdge[]).map(
-                          (edge) => (
+                    <span>{sourceConfigSummary(source)}</span>
+                    {sceneSourceAvailability(source) && <small>{sceneSourceAvailability(source)?.detail}</small>}
+                    {audioGraphSource && (
+                      <div className="designer-audio-meter">
+                        <span
+                          style={{
+                            width: `${Math.round(audioGraphSource.linear_level * 100)}%`,
+                          }}
+                        />
+                      </div>
+                    )}
+                    {!effectiveState.locked && (
+                      <>
+                        <button
+                          aria-label={`Rotate ${source.name}`}
+                          className="designer-rotate-handle"
+                          onClick={(event) => event.stopPropagation()}
+                          onPointerDown={(event) => beginSourceDrag(event, source, "rotate")}
+                          title={`Rotate ${source.name}`}
+                          type="button"
+                        >
+                          <RotateCcw size={11} />
+                        </button>
+                        <button
+                          aria-label={`Resize ${source.name}`}
+                          className="designer-resize-handle"
+                          onClick={(event) => event.stopPropagation()}
+                          onPointerDown={(event) => beginSourceDrag(event, source, "resize")}
+                          title={`Resize ${source.name}`}
+                          type="button"
+                        />
+                        {selectedSourceIds.includes(source.id) &&
+                          (["top", "right", "bottom", "left"] as DesignerCropEdge[]).map((edge) => (
                             <button
                               aria-label={`Crop ${source.name} ${edge}`}
                               className={`designer-crop-handle ${edge}`}
                               key={edge}
                               onClick={(event) => event.stopPropagation()}
-                              onPointerDown={(event) =>
-                                beginCropDrag(event, source, edge)
-                              }
+                              onPointerDown={(event) => beginCropDrag(event, source, edge)}
                               title={`Crop ${source.name} ${edge}`}
                               type="button"
                             />
-                          ),
-                        )}
-                    </>
-                  )}
-                </div>
-              );
-            })}
-            {selectionBounds && (
-              <div
-                aria-label={`${selectedSourceIds.length} selected sources`}
-                className="designer-selection-bounds"
-                data-testid="designer-selection-bounds"
-                role="group"
-                style={selectionBoundsStyle(selectionBounds, props.scene)}
-              >
-                <button
-                  aria-label="Rotate selected sources"
-                  className="designer-selection-rotate-handle"
-                  data-testid="designer-selection-rotate-handle"
-                  disabled={unlockedSelectedSources.length === 0}
-                  onClick={(event) => event.stopPropagation()}
-                  onPointerDown={(event) =>
-                    beginSelectionTransform(event, "rotate")
-                  }
-                  title="Rotate selected sources"
-                  type="button"
+                          ))}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+              {selectionBounds && (
+                <div
+                  aria-label={`${selectedSourceIds.length} selected sources`}
+                  className="designer-selection-bounds"
+                  data-testid="designer-selection-bounds"
+                  role="group"
+                  style={selectionBoundsStyle(selectionBounds, props.scene)}
                 >
-                  <RotateCcw size={12} />
-                </button>
-                <button
-                  aria-label="Resize selected sources"
-                  className="designer-selection-resize-handle"
-                  data-testid="designer-selection-resize-handle"
-                  disabled={unlockedSelectedSources.length === 0}
-                  onClick={(event) => event.stopPropagation()}
-                  onPointerDown={(event) =>
-                    beginSelectionTransform(event, "resize")
+                  <button
+                    aria-label="Rotate selected sources"
+                    className="designer-selection-rotate-handle"
+                    data-testid="designer-selection-rotate-handle"
+                    disabled={unlockedSelectedSources.length === 0}
+                    onClick={(event) => event.stopPropagation()}
+                    onPointerDown={(event) => beginSelectionTransform(event, "rotate")}
+                    title="Rotate selected sources"
+                    type="button"
+                  >
+                    <RotateCcw size={12} />
+                  </button>
+                  <button
+                    aria-label="Resize selected sources"
+                    className="designer-selection-resize-handle"
+                    data-testid="designer-selection-resize-handle"
+                    disabled={unlockedSelectedSources.length === 0}
+                    onClick={(event) => event.stopPropagation()}
+                    onPointerDown={(event) => beginSelectionTransform(event, "resize")}
+                    title="Resize selected sources"
+                    type="button"
+                  />
+                </div>
+              )}
+              <div className="designer-preview-status">
+                <Pill tone={props.previewFrame?.validation.ready ? "green" : "amber"}>
+                  {props.previewFrame ? "Runtime frame" : "Preview shell"}
+                </Pill>
+                <Pill
+                  tone={
+                    props.runtime?.status === "active" ? "green" : props.runtime?.status === "error" ? "red" : "amber"
                   }
-                  title="Resize selected sources"
-                  type="button"
-                />
+                >
+                  {props.runtime?.status ?? "runtime pending"}
+                </Pill>
+                <Pill tone={props.programPreviewFrame?.validation.ready ? "green" : "muted"}>
+                  {props.programPreviewFrame ? "Program frame" : "Program pending"}
+                </Pill>
+                <span>
+                  {props.previewFrame
+                    ? `${props.previewFrame.width}x${props.previewFrame.height} frame ${props.previewFrame.frame_index}`
+                    : `${props.graph.nodes.filter((node) => node.visible).length} visible / ${props.graph.nodes.length} source nodes`}
+                </span>
+                {props.previewError && <span>{props.previewError}</span>}
+                {props.programPreviewError && <span>{props.programPreviewError}</span>}
               </div>
-            )}
-            <div className="designer-preview-status">
-              <Pill tone={props.previewFrame?.validation.ready ? "green" : "amber"}>
-                {props.previewFrame ? "Runtime frame" : "Preview shell"}
-              </Pill>
-              <Pill
-                tone={
-                  props.runtime?.status === "active"
-                    ? "green"
-                    : props.runtime?.status === "error"
-                      ? "red"
-                      : "amber"
-                }
-              >
-                {props.runtime?.status ?? "runtime pending"}
-              </Pill>
-              <Pill tone={props.programPreviewFrame?.validation.ready ? "green" : "muted"}>
-                {props.programPreviewFrame ? "Program frame" : "Program pending"}
-              </Pill>
-              <span>
-                {props.previewFrame
-                  ? `${props.previewFrame.width}x${props.previewFrame.height} frame ${props.previewFrame.frame_index}`
-                  : `${props.graph.nodes.filter((node) => node.visible).length} visible / ${props.graph.nodes.length} source nodes`}
-              </span>
-              {props.previewError && <span>{props.previewError}</span>}
-              {props.programPreviewError && <span>{props.programPreviewError}</span>}
             </div>
-          </div>
           </div>
         </div>
         <div className="designer-preview-meta">
-          <KeyValue
-            label="Canvas"
-            value={`${props.scene.canvas.width}x${props.scene.canvas.height}`}
-          />
+          <KeyValue label="Canvas" value={`${props.scene.canvas.width}x${props.scene.canvas.height}`} />
           <KeyValue label="Collection" value={props.collection.name} />
           <KeyValue label="Updated" value={formatSuiteTimestamp(props.collection.updated_at)} />
           <KeyValue
@@ -6449,19 +5704,13 @@ function DesignerPage(props: {
           />
           <KeyValue
             label="Runtime"
-            value={
-              props.runtime
-                ? `${props.runtime.status} - ${props.runtime.active_scene_name}`
-                : "pending"
-            }
+            value={props.runtime ? `${props.runtime.status} - ${props.runtime.active_scene_name}` : "pending"}
           />
           <KeyValue
             label="Preview Frame"
             value={
               props.previewFrame
-                ? `${props.previewFrame.frame_index} / ${
-                    props.previewFrame.image_data ? "image" : "metadata"
-                  }`
+                ? `${props.previewFrame.frame_index} / ${props.previewFrame.image_data ? "image" : "metadata"}`
                 : props.previewPolling
                   ? "polling"
                   : "paused"
@@ -6604,42 +5853,27 @@ function DesignerPage(props: {
         </div>
         <div
           className={
-            validation.ok && graphValidation.ready
-              ? "designer-validation-panel valid"
-              : "designer-validation-panel"
+            validation.ok && graphValidation.ready ? "designer-validation-panel valid" : "designer-validation-panel"
           }
           data-testid="designer-validation-panel"
         >
           <div className="designer-validation-header">
-            {validation.ok && graphValidation.ready ? (
-              <CheckCircle2 size={16} />
-            ) : (
-              <AlertTriangle size={16} />
-            )}
+            {validation.ok && graphValidation.ready ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
             <div>
               <strong>
-                {validation.ok && graphValidation.ready
-                  ? "Scene validation ready"
-                  : "Scene validation needs attention"}
+                {validation.ok && graphValidation.ready ? "Scene validation ready" : "Scene validation needs attention"}
               </strong>
               <span>
-                {validation.issues.length} collection issue(s),{" "}
-                {graphValidation.errors.length} graph error(s),{" "}
+                {validation.issues.length} collection issue(s), {graphValidation.errors.length} graph error(s),{" "}
                 {graphValidation.warnings.length} graph warning(s)
               </span>
             </div>
-            <button
-              className="secondary-button compact"
-              onClick={props.onResetCollection}
-              type="button"
-            >
+            <button className="secondary-button compact" onClick={props.onResetCollection} type="button">
               <RotateCcw size={14} />
               Reset
             </button>
           </div>
-          {(!validation.ok ||
-            graphValidation.errors.length > 0 ||
-            graphValidation.warnings.length > 0) && (
+          {(!validation.ok || graphValidation.errors.length > 0 || graphValidation.warnings.length > 0) && (
             <div className="designer-validation-list">
               {validation.issues.slice(0, 5).map((issue) => (
                 <div className="validation-issue" key={`${issue.path}-${issue.message}`}>
@@ -6681,18 +5915,9 @@ function DesignerPage(props: {
           </div>
           {props.previewFrame ? (
             <div className="designer-preview-meta">
-              <KeyValue
-                label="Generated"
-                value={formatSuiteTimestamp(props.previewFrame.generated_at)}
-              />
-              <KeyValue
-                label="Checksum"
-                value={props.previewFrame.checksum ?? "none"}
-              />
-              <KeyValue
-                label="Format"
-                value={`${props.previewFrame.frame_format} / ${props.previewFrame.encoding}`}
-              />
+              <KeyValue label="Generated" value={formatSuiteTimestamp(props.previewFrame.generated_at)} />
+              <KeyValue label="Checksum" value={props.previewFrame.checksum ?? "none"} />
+              <KeyValue label="Format" value={`${props.previewFrame.frame_format} / ${props.previewFrame.encoding}`} />
               <KeyValue
                 label="Render"
                 value={`${props.previewFrame.render_time_ms.toFixed(2)} ms server / ${props.previewStats.lastRequestMs.toFixed(1)} ms request`}
@@ -6709,10 +5934,7 @@ function DesignerPage(props: {
                 label="Limiter"
                 value={`${previewQualityLabels[props.previewQuality]} / ${props.previewStats.fpsLimit} fps cap`}
               />
-              <KeyValue
-                label="Dropped"
-                value={`${props.previewStats.droppedFrames} skipped frame(s)`}
-              />
+              <KeyValue label="Dropped" value={`${props.previewStats.droppedFrames} skipped frame(s)`} />
               <KeyValue
                 label="Targets"
                 value={
@@ -6736,8 +5958,7 @@ function DesignerPage(props: {
             <div className="empty compact-empty">No runtime preview frame yet</div>
           )}
           {props.previewFrame &&
-            (props.previewFrame.validation.errors.length > 0 ||
-              props.previewFrame.validation.warnings.length > 0) && (
+            (props.previewFrame.validation.errors.length > 0 || props.previewFrame.validation.warnings.length > 0) && (
               <div className="designer-validation-list">
                 {props.previewFrame.validation.errors.map((message) => (
                   <div className="validation-issue" key={`preview-error-${message}`}>
@@ -6746,10 +5967,7 @@ function DesignerPage(props: {
                   </div>
                 ))}
                 {props.previewFrame.validation.warnings.map((message) => (
-                  <div
-                    className="validation-issue warning"
-                    key={`preview-warning-${message}`}
-                  >
+                  <div className="validation-issue warning" key={`preview-warning-${message}`}>
                     <code>preview</code>
                     <span>{message}</span>
                   </div>
@@ -6757,10 +5975,7 @@ function DesignerPage(props: {
               </div>
             )}
         </div>
-        <div
-          className="designer-preview-diagnostics"
-          data-testid="designer-program-preview-runtime"
-        >
+        <div className="designer-preview-diagnostics" data-testid="designer-program-preview-runtime">
           <div className="designer-validation-header">
             <Radio size={16} />
             <div>
@@ -6779,10 +5994,7 @@ function DesignerPage(props: {
           </div>
           {props.programPreviewFrame ? (
             <div className="designer-preview-meta">
-              <KeyValue
-                label="Generated"
-                value={formatSuiteTimestamp(props.programPreviewFrame.generated_at)}
-              />
+              <KeyValue label="Generated" value={formatSuiteTimestamp(props.programPreviewFrame.generated_at)} />
               <KeyValue
                 label="Scene"
                 value={`${props.programPreviewFrame.scene_name} (${props.programPreviewFrame.scene_id})`}
@@ -6803,14 +6015,8 @@ function DesignerPage(props: {
                 label="Format"
                 value={`${props.programPreviewFrame.frame_format} / ${props.programPreviewFrame.encoding}`}
               />
-              <KeyValue
-                label="Render"
-                value={`${props.programPreviewFrame.render_time_ms.toFixed(2)} ms server`}
-              />
-              <KeyValue
-                label="Checksum"
-                value={props.programPreviewFrame.checksum ?? "none"}
-              />
+              <KeyValue label="Render" value={`${props.programPreviewFrame.render_time_ms.toFixed(2)} ms server`} />
+              <KeyValue label="Checksum" value={props.programPreviewFrame.checksum ?? "none"} />
               <KeyValue
                 label="Transport"
                 value={
@@ -6821,9 +6027,7 @@ function DesignerPage(props: {
               />
             </div>
           ) : (
-            <div className="empty compact-empty">
-              No program frame requested.
-            </div>
+            <div className="empty compact-empty">No program frame requested.</div>
           )}
           {props.programPreviewFrame &&
             (props.programPreviewFrame.validation.errors.length > 0 ||
@@ -6836,10 +6040,7 @@ function DesignerPage(props: {
                   </div>
                 ))}
                 {props.programPreviewFrame.validation.warnings.map((message) => (
-                  <div
-                    className="validation-issue warning"
-                    key={`program-preview-warning-${message}`}
-                  >
+                  <div className="validation-issue warning" key={`program-preview-warning-${message}`}>
                     <code>program</code>
                     <span>{message}</span>
                   </div>
@@ -6847,10 +6048,7 @@ function DesignerPage(props: {
               </div>
             )}
         </div>
-        <OutputPreflightPanel
-          pipelinePlan={props.pipelinePlan}
-          preflight={props.preflight}
-        />
+        <OutputPreflightPanel pipelinePlan={props.pipelinePlan} preflight={props.preflight} />
         <SceneDesignerReadinessPanel
           audioGraphRuntime={props.audioGraphRuntime}
           captureProviderRuntime={props.captureProviderRuntime}
@@ -6880,15 +6078,10 @@ function DesignerPage(props: {
               value={props.scene.name}
             />
             {selectedSourceIds.length > 1 && (
-              <div
-                className="designer-selection-tools"
-                data-testid="designer-selection-tools"
-              >
+              <div className="designer-selection-tools" data-testid="designer-selection-tools">
                 <div className="designer-selection-tools-header">
                   <strong>{selectedSourceIds.length} selected</strong>
-                  <span>
-                    {props.selectedSources.filter((source) => source.locked).length} locked
-                  </span>
+                  <span>{props.selectedSources.filter((source) => source.locked).length} locked</span>
                 </div>
                 {selectionBounds && (
                   <>
@@ -6932,11 +6125,7 @@ function DesignerPage(props: {
                   <label>
                     Pivot
                     <select
-                      onChange={(event) =>
-                        setTransformPivot(
-                          event.target.value as "selection" | "individual",
-                        )
-                      }
+                      onChange={(event) => setTransformPivot(event.target.value as "selection" | "individual")}
                       value={transformPivot}
                     >
                       <option value="selection">Selection</option>
@@ -6964,9 +6153,7 @@ function DesignerPage(props: {
                     className="secondary-button compact"
                     data-testid="designer-group-selection"
                     disabled={!canGroupSelection}
-                    onClick={() =>
-                      props.onGroupSources(props.scene.id, selectedSourceIds)
-                    }
+                    onClick={() => props.onGroupSources(props.scene.id, selectedSourceIds)}
                     type="button"
                   >
                     <Group size={14} />
@@ -6976,9 +6163,7 @@ function DesignerPage(props: {
                     className="secondary-button compact"
                     data-testid="designer-ungroup-selection"
                     disabled={!hasGroupSelection}
-                    onClick={() =>
-                      props.onUngroupSources(props.scene.id, selectedSourceIds)
-                    }
+                    onClick={() => props.onUngroupSources(props.scene.id, selectedSourceIds)}
                     type="button"
                   >
                     <Layers size={14} />
@@ -6986,9 +6171,7 @@ function DesignerPage(props: {
                   </button>
                   <button
                     className="secondary-button compact danger"
-                    onClick={() =>
-                      props.onDeleteSources(props.scene.id, selectedSourceIds)
-                    }
+                    onClick={() => props.onDeleteSources(props.scene.id, selectedSourceIds)}
                     type="button"
                   >
                     <Trash2 size={14} />
@@ -6999,9 +6182,7 @@ function DesignerPage(props: {
                   <button
                     aria-label="Align selected left"
                     className="icon-button compact"
-                    onClick={() =>
-                      props.onAlignSelection(props.scene.id, selectedSourceIds, "left")
-                    }
+                    onClick={() => props.onAlignSelection(props.scene.id, selectedSourceIds, "left")}
                     title="Align selected left"
                     type="button"
                   >
@@ -7010,13 +6191,7 @@ function DesignerPage(props: {
                   <button
                     aria-label="Align selected horizontal center"
                     className="icon-button compact"
-                    onClick={() =>
-                      props.onAlignSelection(
-                        props.scene.id,
-                        selectedSourceIds,
-                        "horizontal-center",
-                      )
-                    }
+                    onClick={() => props.onAlignSelection(props.scene.id, selectedSourceIds, "horizontal-center")}
                     title="Align selected horizontal center"
                     type="button"
                   >
@@ -7025,9 +6200,7 @@ function DesignerPage(props: {
                   <button
                     aria-label="Align selected right"
                     className="icon-button compact"
-                    onClick={() =>
-                      props.onAlignSelection(props.scene.id, selectedSourceIds, "right")
-                    }
+                    onClick={() => props.onAlignSelection(props.scene.id, selectedSourceIds, "right")}
                     title="Align selected right"
                     type="button"
                   >
@@ -7036,9 +6209,7 @@ function DesignerPage(props: {
                   <button
                     aria-label="Align selected top"
                     className="icon-button compact"
-                    onClick={() =>
-                      props.onAlignSelection(props.scene.id, selectedSourceIds, "top")
-                    }
+                    onClick={() => props.onAlignSelection(props.scene.id, selectedSourceIds, "top")}
                     title="Align selected top"
                     type="button"
                   >
@@ -7047,13 +6218,7 @@ function DesignerPage(props: {
                   <button
                     aria-label="Align selected vertical center"
                     className="icon-button compact"
-                    onClick={() =>
-                      props.onAlignSelection(
-                        props.scene.id,
-                        selectedSourceIds,
-                        "vertical-center",
-                      )
-                    }
+                    onClick={() => props.onAlignSelection(props.scene.id, selectedSourceIds, "vertical-center")}
                     title="Align selected vertical center"
                     type="button"
                   >
@@ -7062,9 +6227,7 @@ function DesignerPage(props: {
                   <button
                     aria-label="Align selected bottom"
                     className="icon-button compact"
-                    onClick={() =>
-                      props.onAlignSelection(props.scene.id, selectedSourceIds, "bottom")
-                    }
+                    onClick={() => props.onAlignSelection(props.scene.id, selectedSourceIds, "bottom")}
                     title="Align selected bottom"
                     type="button"
                   >
@@ -7075,13 +6238,7 @@ function DesignerPage(props: {
                   <button
                     className="secondary-button compact"
                     disabled={selectedSourceIds.length < 3}
-                    onClick={() =>
-                      props.onDistributeSelection(
-                        props.scene.id,
-                        selectedSourceIds,
-                        "horizontal",
-                      )
-                    }
+                    onClick={() => props.onDistributeSelection(props.scene.id, selectedSourceIds, "horizontal")}
                     type="button"
                   >
                     <AlignCenterHorizontal size={14} />
@@ -7090,13 +6247,7 @@ function DesignerPage(props: {
                   <button
                     className="secondary-button compact"
                     disabled={selectedSourceIds.length < 3}
-                    onClick={() =>
-                      props.onDistributeSelection(
-                        props.scene.id,
-                        selectedSourceIds,
-                        "vertical",
-                      )
-                    }
+                    onClick={() => props.onDistributeSelection(props.scene.id, selectedSourceIds, "vertical")}
                     type="button"
                   >
                     <AlignCenterVertical size={14} />
@@ -7126,11 +6277,7 @@ function DesignerPage(props: {
               </button>
               <button
                 className="secondary-button compact"
-                onClick={() =>
-                  updateSelectedSource(
-                    centerSourceOnCanvas(props.scene, props.selectedSource!),
-                  )
-                }
+                onClick={() => updateSelectedSource(centerSourceOnCanvas(props.scene, props.selectedSource!))}
                 title="Center source on canvas"
                 type="button"
               >
@@ -7160,11 +6307,7 @@ function DesignerPage(props: {
               <button
                 aria-label="Align source left"
                 className="icon-button compact"
-                onClick={() =>
-                  updateSelectedSource(
-                    alignSourceToCanvas(props.scene, props.selectedSource!, "left"),
-                  )
-                }
+                onClick={() => updateSelectedSource(alignSourceToCanvas(props.scene, props.selectedSource!, "left"))}
                 title="Align source left"
                 type="button"
               >
@@ -7174,13 +6317,7 @@ function DesignerPage(props: {
                 aria-label="Align source horizontal center"
                 className="icon-button compact"
                 onClick={() =>
-                  updateSelectedSource(
-                    alignSourceToCanvas(
-                      props.scene,
-                      props.selectedSource!,
-                      "horizontal-center",
-                    ),
-                  )
+                  updateSelectedSource(alignSourceToCanvas(props.scene, props.selectedSource!, "horizontal-center"))
                 }
                 title="Align source horizontal center"
                 type="button"
@@ -7190,11 +6327,7 @@ function DesignerPage(props: {
               <button
                 aria-label="Align source right"
                 className="icon-button compact"
-                onClick={() =>
-                  updateSelectedSource(
-                    alignSourceToCanvas(props.scene, props.selectedSource!, "right"),
-                  )
-                }
+                onClick={() => updateSelectedSource(alignSourceToCanvas(props.scene, props.selectedSource!, "right"))}
                 title="Align source right"
                 type="button"
               >
@@ -7203,11 +6336,7 @@ function DesignerPage(props: {
               <button
                 aria-label="Align source top"
                 className="icon-button compact"
-                onClick={() =>
-                  updateSelectedSource(
-                    alignSourceToCanvas(props.scene, props.selectedSource!, "top"),
-                  )
-                }
+                onClick={() => updateSelectedSource(alignSourceToCanvas(props.scene, props.selectedSource!, "top"))}
                 title="Align source top"
                 type="button"
               >
@@ -7217,13 +6346,7 @@ function DesignerPage(props: {
                 aria-label="Align source vertical center"
                 className="icon-button compact"
                 onClick={() =>
-                  updateSelectedSource(
-                    alignSourceToCanvas(
-                      props.scene,
-                      props.selectedSource!,
-                      "vertical-center",
-                    ),
-                  )
+                  updateSelectedSource(alignSourceToCanvas(props.scene, props.selectedSource!, "vertical-center"))
                 }
                 title="Align source vertical center"
                 type="button"
@@ -7233,11 +6356,7 @@ function DesignerPage(props: {
               <button
                 aria-label="Align source bottom"
                 className="icon-button compact"
-                onClick={() =>
-                  updateSelectedSource(
-                    alignSourceToCanvas(props.scene, props.selectedSource!, "bottom"),
-                  )
-                }
+                onClick={() => updateSelectedSource(alignSourceToCanvas(props.scene, props.selectedSource!, "bottom"))}
                 title="Align source bottom"
                 type="button"
               >
@@ -7405,16 +6524,10 @@ function DesignerPage(props: {
               />
               Locked
             </label>
-            <KeyValue
-              label="Source Kind"
-              value={sceneSourceKindLabels[props.selectedSource.kind]}
-            />
+            <KeyValue label="Source Kind" value={sceneSourceKindLabels[props.selectedSource.kind]} />
             <div className="identity-panel">
               <KeyValue label="Source ID" value={props.selectedSource.id} />
-              <KeyValue
-                label="Parent"
-                value={selectedEffectiveState?.parentId ?? "Root"}
-              />
+              <KeyValue label="Parent" value={selectedEffectiveState?.parentId ?? "Root"} />
               <KeyValue
                 label="Effective"
                 value={`${selectedEffectiveState?.visible ? "visible" : "hidden"} / ${
@@ -7525,21 +6638,13 @@ function DesignerPage(props: {
               binding={selectedRuntimeBinding}
               candidates={selectedCaptureCandidates}
               provider={selectedCaptureProvider}
-              onRebind={() =>
-                props.onRebindSource(props.scene.id, props.selectedSource!.id)
-              }
+              onRebind={() => props.onRebindSource(props.scene.id, props.selectedSource!.id)}
               onRefresh={props.onRefreshCaptureBindings}
               refreshing={props.captureBindingRefreshing}
               source={props.selectedSource}
             />
-            <LiveCaptureRuntimePanel
-              node={selectedRuntimeNode}
-              source={props.selectedSource}
-            />
-            <AudioInputRuntimePanel
-              audioGraphSource={selectedAudioGraphSource}
-              source={props.selectedSource}
-            />
+            <LiveCaptureRuntimePanel node={selectedRuntimeNode} source={props.selectedSource} />
+            <AudioInputRuntimePanel audioGraphSource={selectedAudioGraphSource} source={props.selectedSource} />
             <SourceConfigEditor
               captureInventory={props.captureInventory}
               onChange={(config) =>
@@ -7547,31 +6652,14 @@ function DesignerPage(props: {
                   config,
                 })
               }
-              onPickAsset={(mediaType) =>
-                props.onPickSourceAsset(
-                  props.scene.id,
-                  props.selectedSource!.id,
-                  mediaType,
-                )
-              }
-              onPickFont={() =>
-                props.onPickSourceFont(props.scene.id, props.selectedSource!.id)
-              }
+              onPickAsset={(mediaType) => props.onPickSourceAsset(props.scene.id, props.selectedSource!.id, mediaType)}
+              onPickFont={() => props.onPickSourceFont(props.scene.id, props.selectedSource!.id)}
               scene={props.scene}
               source={props.selectedSource}
             />
-            <ImageAssetRuntimePanel
-              node={selectedRuntimeNode}
-              source={props.selectedSource}
-            />
-            <TextRuntimePanel
-              node={selectedRuntimeNode}
-              source={props.selectedSource}
-            />
-            <BrowserRuntimePanel
-              node={selectedRuntimeNode}
-              source={props.selectedSource}
-            />
+            <ImageAssetRuntimePanel node={selectedRuntimeNode} source={props.selectedSource} />
+            <TextRuntimePanel node={selectedRuntimeNode} source={props.selectedSource} />
+            <BrowserRuntimePanel node={selectedRuntimeNode} source={props.selectedSource} />
             <SourceFilterEditor
               onChange={(filters) =>
                 props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
@@ -7580,14 +6668,8 @@ function DesignerPage(props: {
               }
               source={props.selectedSource}
             />
-            <AudioFilterRuntimePanel
-              audioGraphSource={selectedAudioGraphSource}
-              source={props.selectedSource}
-            />
-            <FilterRuntimePanel
-              node={selectedRuntimeNode}
-              source={props.selectedSource}
-            />
+            <AudioFilterRuntimePanel audioGraphSource={selectedAudioGraphSource} source={props.selectedSource} />
+            <FilterRuntimePanel node={selectedRuntimeNode} source={props.selectedSource} />
             {sceneSourceAvailability(props.selectedSource) && (
               <KeyValue
                 label="Availability"
@@ -7603,29 +6685,14 @@ function DesignerPage(props: {
   );
 }
 
-function OutputPreflightPanel(props: {
-  pipelinePlan: MediaPipelinePlan | null;
-  preflight: PreflightSnapshot | null;
-}) {
+function OutputPreflightPanel(props: { pipelinePlan: MediaPipelinePlan | null; preflight: PreflightSnapshot | null }) {
   const outputPlan = props.pipelinePlan?.config.output_preflight_plan ?? null;
-  const renderTargetStep = props.pipelinePlan?.steps.find(
-    (step) => step.id === "outputs.render_targets",
-  );
-  const encoderStep = props.pipelinePlan?.steps.find(
-    (step) => step.id === "outputs.encoder_readiness",
-  );
-  const recordingStep = props.pipelinePlan?.steps.find(
-    (step) => step.id === "outputs.recording_path",
-  );
-  const streamStep = props.pipelinePlan?.steps.find(
-    (step) => step.id === "outputs.stream_readiness",
-  );
-  const blockingIssues =
-    (outputPlan?.validation.errors.length ?? 0) +
-    (props.pipelinePlan?.errors.length ?? 0);
-  const warningIssues =
-    (outputPlan?.validation.warnings.length ?? 0) +
-    (props.pipelinePlan?.warnings.length ?? 0);
+  const renderTargetStep = props.pipelinePlan?.steps.find((step) => step.id === "outputs.render_targets");
+  const encoderStep = props.pipelinePlan?.steps.find((step) => step.id === "outputs.encoder_readiness");
+  const recordingStep = props.pipelinePlan?.steps.find((step) => step.id === "outputs.recording_path");
+  const streamStep = props.pipelinePlan?.steps.find((step) => step.id === "outputs.stream_readiness");
+  const blockingIssues = (outputPlan?.validation.errors.length ?? 0) + (props.pipelinePlan?.errors.length ?? 0);
+  const warningIssues = (outputPlan?.validation.warnings.length ?? 0) + (props.pipelinePlan?.warnings.length ?? 0);
 
   return (
     <div className="designer-preview-diagnostics" data-testid="designer-output-preflight">
@@ -7641,11 +6708,7 @@ function OutputPreflightPanel(props: {
         </div>
         <Pill
           tone={
-            outputPlan?.validation.ready && props.pipelinePlan?.ready
-              ? "green"
-              : blockingIssues > 0
-                ? "red"
-                : "amber"
+            outputPlan?.validation.ready && props.pipelinePlan?.ready ? "green" : blockingIssues > 0 ? "red" : "amber"
           }
         >
           {outputPlan?.validation.ready && props.pipelinePlan?.ready
@@ -7658,26 +6721,16 @@ function OutputPreflightPanel(props: {
       {outputPlan ? (
         <>
           <div className="designer-preview-meta">
-            <KeyValue
-              label="Active Scene"
-              value={outputPlan.active_scene_name ?? "none"}
-            />
+            <KeyValue label="Active Scene" value={outputPlan.active_scene_name ?? "none"} />
             <KeyValue
               label="Render Targets"
               value={outputPlan.render_targets
-                .map(
-                  (target) =>
-                    `${target.kind}:${target.width}x${target.height}@${target.framerate}`,
-                )
+                .map((target) => `${target.kind}:${target.width}x${target.height}@${target.framerate}`)
                 .join(", ")}
             />
             <KeyValue
               label="Recording"
-              value={
-                outputPlan.recording_target
-                  ? outputPlan.recording_target.output_path_preview
-                  : "not requested"
-              }
+              value={outputPlan.recording_target ? outputPlan.recording_target.output_path_preview : "not requested"}
             />
             <KeyValue
               label="Streaming"
@@ -7685,18 +6738,22 @@ function OutputPreflightPanel(props: {
                 outputPlan.streaming_targets.length
                   ? outputPlan.streaming_targets
                       .map(
-                        (target) =>
-                          `${target.destination_name} ${
-                            target.has_stream_key ? "key ready" : "key missing"
-                          }`,
+                        (target) => `${target.destination_name} ${target.has_stream_key ? "key ready" : "key missing"}`,
                       )
                       .join(", ")
                   : "not requested"
               }
             />
+            <KeyValue label="Issues" value={`${blockingIssues} blocked / ${warningIssues} warning`} />
             <KeyValue
-              label="Issues"
-              value={`${blockingIssues} blocked / ${warningIssues} warning`}
+              label="Output Targets"
+              value={outputPlan.validation.dry_run_render_targets_ready ? "ready" : "review"}
+            />
+            <KeyValue label="Encoder" value={outputPlan.validation.encoder_preferences_ready ? "ready" : "blocked"} />
+            <KeyValue label="Recording Path" value={outputPlan.validation.recording_path_ready ? "ready" : "blocked"} />
+            <KeyValue
+              label="Stream Destination"
+              value={outputPlan.validation.stream_destinations_ready ? "ready" : "review"}
             />
             <KeyValue
               label="App Preflight"
@@ -7716,8 +6773,7 @@ function OutputPreflightPanel(props: {
                 </div>
               ))}
           </div>
-          {(outputPlan.validation.errors.length > 0 ||
-            outputPlan.validation.warnings.length > 0) && (
+          {(outputPlan.validation.errors.length > 0 || outputPlan.validation.warnings.length > 0) && (
             <div className="designer-validation-list">
               {outputPlan.validation.errors.slice(0, 4).map((message) => (
                 <div className="validation-issue" key={`output-error-${message}`}>
@@ -7726,10 +6782,7 @@ function OutputPreflightPanel(props: {
                 </div>
               ))}
               {outputPlan.validation.warnings.slice(0, 4).map((message) => (
-                <div
-                  className="validation-issue warning"
-                  key={`output-warning-${message}`}
-                >
+                <div className="validation-issue warning" key={`output-warning-${message}`}>
                   <code>output</code>
                   <span>{message}</span>
                 </div>
@@ -7744,12 +6797,7 @@ function OutputPreflightPanel(props: {
   );
 }
 
-type DesignerReadinessState =
-  | "ready"
-  | "degraded"
-  | "blocked"
-  | "pending"
-  | "not_applicable";
+type DesignerReadinessState = "ready" | "degraded" | "blocked" | "pending" | "not_applicable";
 
 interface DesignerReadinessItem {
   id: string;
@@ -7775,33 +6823,30 @@ function SceneDesignerReadinessPanel(props: {
   scene: Scene;
   sceneValid: boolean;
 }) {
-  const nodes =
-    props.previewFrame?.rendered_frame?.targets.flatMap((target) => target.nodes) ?? [];
-  const captureSources = props.scene.sources.filter((source) =>
-    ["display", "window", "camera"].includes(source.kind),
-  );
+  const nodes = props.previewFrame?.rendered_frame?.targets.flatMap((target) => target.nodes) ?? [];
+  const captureSources = props.scene.sources.filter((source) => ["display", "window", "camera"].includes(source.kind));
   const browserNodes = nodes.filter((node) => node.browser);
   const mediaNodes = nodes.filter((node) => node.asset);
   const filterNodes = nodes.filter((node) => node.filters.length > 0);
   const transitionCount = props.collection.transitions.length;
   const outputPlan = props.pipelinePlan?.config.output_preflight_plan ?? null;
+  const outputReady =
+    props.designerReadinessReport?.output_ready ??
+    buildLocalSceneOutputReadyDiagnostic(props.scene, props.programPreviewFrame, props.pipelinePlan);
   const localReadiness: DesignerReadinessItem[] = [
     {
       id: "scene-model",
       label: "Scene Model",
       state: props.sceneValid && props.graphReady ? "ready" : "blocked",
-      detail: props.sceneValid && props.graphReady
-        ? "Collection and compositor graph validate."
-        : "Collection or compositor graph needs attention.",
+      detail:
+        props.sceneValid && props.graphReady
+          ? "Collection and compositor graph validate."
+          : "Collection or compositor graph needs attention.",
     },
     {
       id: "runtime-preview",
       label: "Runtime Preview",
-      state: props.previewFrame
-        ? props.previewFrame.validation.ready
-          ? "ready"
-          : "degraded"
-        : "pending",
+      state: props.previewFrame ? (props.previewFrame.validation.ready ? "ready" : "degraded") : "pending",
       detail: props.previewFrame
         ? `${props.previewFrame.width}x${props.previewFrame.height}, ${props.previewFrame.render_time_ms.toFixed(1)} ms render, ${props.previewStats.droppedFrames} dropped.`
         : "No runtime preview frame has been requested yet.",
@@ -7821,44 +6866,50 @@ function SceneDesignerReadinessPanel(props: {
     {
       id: "capture",
       label: "Capture",
-      state: captureSources.length === 0
-        ? "not_applicable"
-        : props.captureProviderRuntime?.validation.errors.length
-          ? "blocked"
+      state:
+        captureSources.length === 0
+          ? "not_applicable"
+          : props.captureProviderRuntime?.validation.errors.length
+            ? "blocked"
+            : props.captureProviderRuntime
+              ? props.captureProviderRuntime.validation.warnings.length
+                ? "degraded"
+                : "ready"
+              : "pending",
+      detail:
+        captureSources.length === 0
+          ? "No display/window/camera sources in this scene."
           : props.captureProviderRuntime
-            ? props.captureProviderRuntime.validation.warnings.length
-              ? "degraded"
-              : "ready"
-            : "pending",
-      detail: captureSources.length === 0
-        ? "No display/window/camera sources in this scene."
-        : props.captureProviderRuntime
-          ? `${props.captureProviderRuntime.providers.length} provider(s), ${props.captureProviderRuntime.validation.warnings.length} warning(s).`
-          : "Capture provider runtime has not been evaluated.",
+            ? `${props.captureProviderRuntime.providers.length} provider(s), ${props.captureProviderRuntime.validation.warnings.length} warning(s).`
+            : "Capture provider runtime has not been evaluated.",
     },
     {
       id: "browser",
       label: "Browser",
-      state: browserNodes.length === 0
-        ? "not_applicable"
-        : browserNodes.some((node) => node.browser?.status === "rendered")
-          ? "ready"
-          : "degraded",
-      detail: browserNodes.length === 0
-        ? "No browser overlay source rendered in the latest frame."
-        : `${browserNodes.length} browser source(s) evaluated.`,
+      state:
+        browserNodes.length === 0
+          ? "not_applicable"
+          : browserNodes.some((node) => node.browser?.status === "rendered")
+            ? "ready"
+            : "degraded",
+      detail:
+        browserNodes.length === 0
+          ? "No browser overlay source rendered in the latest frame."
+          : `${browserNodes.length} browser source(s) evaluated.`,
     },
     {
       id: "media",
       label: "Media",
-      state: mediaNodes.length === 0
-        ? "not_applicable"
-        : mediaNodes.some((node) => node.asset?.status !== "decoded")
-          ? "degraded"
-          : "ready",
-      detail: mediaNodes.length === 0
-        ? "No image/video assets rendered in the latest frame."
-        : `${mediaNodes.length} media source(s) evaluated.`,
+      state:
+        mediaNodes.length === 0
+          ? "not_applicable"
+          : mediaNodes.some((node) => node.asset?.status !== "decoded")
+            ? "degraded"
+            : "ready",
+      detail:
+        mediaNodes.length === 0
+          ? "No image/video assets rendered in the latest frame."
+          : `${mediaNodes.length} media source(s) evaluated.`,
     },
     {
       id: "audio",
@@ -7885,9 +6936,7 @@ function SceneDesignerReadinessPanel(props: {
     {
       id: "filters",
       label: "Filters",
-      state: filterNodes.some((node) =>
-        node.filters.some((filter) => filter.status === "error"),
-      )
+      state: filterNodes.some((node) => node.filters.some((filter) => filter.status === "error"))
         ? "degraded"
         : "ready",
       detail: filterNodes.length
@@ -7897,11 +6946,12 @@ function SceneDesignerReadinessPanel(props: {
     {
       id: "performance",
       label: "Performance",
-      state: props.previewFrame && props.previewFrame.render_time_ms > 100
-        ? "degraded"
-        : props.previewFrame
-          ? "ready"
-          : "pending",
+      state:
+        props.previewFrame && props.previewFrame.render_time_ms > 100
+          ? "degraded"
+          : props.previewFrame
+            ? "ready"
+            : "pending",
       detail: props.previewFrame
         ? `${props.previewFrame.render_time_ms.toFixed(1)} ms last render, ${props.previewStats.averageRenderTimeMs.toFixed(1)} ms average.`
         : "No render timing sample yet.",
@@ -7909,13 +6959,14 @@ function SceneDesignerReadinessPanel(props: {
     {
       id: "permissions",
       label: "Permissions",
-      state: props.preflight?.overall === "blocked"
-        ? "blocked"
-        : props.preflight
-          ? props.preflight.overall === "warning"
-            ? "degraded"
-            : "ready"
-          : "pending",
+      state:
+        props.preflight?.overall === "blocked"
+          ? "blocked"
+          : props.preflight
+            ? props.preflight.overall === "warning"
+              ? "degraded"
+              : "ready"
+            : "pending",
       detail: props.preflight
         ? `Desktop preflight is ${preflightLabel(props.preflight.overall)}.`
         : "Desktop preflight has not loaded.",
@@ -7923,22 +6974,21 @@ function SceneDesignerReadinessPanel(props: {
     {
       id: "runtime-session",
       label: "Runtime Session",
-      state:
-        (props.designerRuntimeSession?.readiness_state as
-          | DesignerReadinessState
-          | undefined) ?? "pending",
+      state: (props.designerRuntimeSession?.readiness_state as DesignerReadinessState | undefined) ?? "pending",
       detail: props.designerRuntimeSession
         ? `${props.designerRuntimeSession.session_state}, ${props.designerRuntimeSession.provider_status}`
         : "No Designer runtime session snapshot has been received.",
     },
     {
+      id: "scene-output-ready",
+      label: "Scene Output Ready",
+      state: outputReady.state as DesignerReadinessState,
+      detail: outputReady.detail,
+    },
+    {
       id: "output-handoff",
       label: "Output Handoff",
-      state: outputPlan?.validation.errors.length
-        ? "blocked"
-        : outputPlan
-          ? "ready"
-          : "pending",
+      state: outputPlan?.validation.errors.length ? "blocked" : outputPlan ? "ready" : "pending",
       detail: outputPlan
         ? `${outputPlan.render_targets.length} dry-run render target(s) prepared.`
         : "Output handoff preflight has not loaded.",
@@ -7955,10 +7005,7 @@ function SceneDesignerReadinessPanel(props: {
         {
           id: "runtime-session",
           label: "Runtime Session",
-          state:
-            (props.designerRuntimeSession?.readiness_state as
-              | DesignerReadinessState
-              | undefined) ?? "pending",
+          state: (props.designerRuntimeSession?.readiness_state as DesignerReadinessState | undefined) ?? "pending",
           detail: props.designerRuntimeSession
             ? `${props.designerRuntimeSession.session_state}, ${props.designerRuntimeSession.provider_status}`
             : "No Designer runtime session snapshot has been received.",
@@ -7978,7 +7025,8 @@ function SceneDesignerReadinessPanel(props: {
         <div>
           <strong>Scene Designer Readiness</strong>
           <span>
-            {blocked} blocked, {warnings} degraded, {pending} pending
+            {blocked} blocked, {warnings} degraded, {pending} pending, output{" "}
+            {outputReady.ready ? "ready" : outputReady.state}
           </span>
         </div>
         <button
@@ -7992,11 +7040,7 @@ function SceneDesignerReadinessPanel(props: {
         </button>
         <Pill tone={readinessTone(overall)}>{overall}</Pill>
       </div>
-      {props.designerRuntimeMessage && (
-        <div className="designer-runtime-message">
-          {props.designerRuntimeMessage}
-        </div>
-      )}
+      {props.designerRuntimeMessage && <div className="designer-runtime-message">{props.designerRuntimeMessage}</div>}
       <div className="check-list compact-check-list">
         {readiness.map((item) => (
           <div className="check-row-compact" key={item.id}>
@@ -8010,6 +7054,71 @@ function SceneDesignerReadinessPanel(props: {
       </div>
     </div>
   );
+}
+
+function buildLocalSceneOutputReadyDiagnostic(
+  scene: Scene,
+  programPreviewFrame: ProgramPreviewFrameResponse | null,
+  pipelinePlan: MediaPipelinePlan | null,
+): SceneOutputReadyDiagnostic {
+  const outputPlan = pipelinePlan?.config.output_preflight_plan ?? null;
+  const programPreviewFrameReady = Boolean(programPreviewFrame?.validation.ready && programPreviewFrame.rendered_frame);
+  const compositorRenderPlanReady = Boolean(
+    pipelinePlan?.config.compositor_render_plan?.targets.some(
+      (target) =>
+        target.enabled && target.kind === "program" && target.width > 0 && target.height > 0 && target.framerate > 0,
+    ),
+  );
+  const outputPreflightReady = Boolean(
+    outputPlan?.validation.ready &&
+    outputPlan.validation.dry_run_render_targets_ready &&
+    outputPlan.validation.recording_path_ready &&
+    outputPlan.validation.encoder_preferences_ready &&
+    outputPlan.validation.stream_destinations_ready,
+  );
+  const mediaPipelineReady = Boolean(pipelinePlan?.ready);
+  const blockers = [
+    !programPreviewFrameReady ? "Program preview frame is not ready." : "",
+    !compositorRenderPlanReady ? "Compositor render plan has no enabled program target." : "",
+    !pipelinePlan ? "Media pipeline plan has not loaded." : "",
+    pipelinePlan && !mediaPipelineReady ? "Media pipeline validation is blocked." : "",
+    !outputPlan ? "Output preflight plan has not loaded." : "",
+    outputPlan && !outputPlan.validation.ready ? "Output preflight validation is blocked." : "",
+  ].filter((item): item is string => Boolean(item));
+  const warnings = [
+    ...(programPreviewFrame?.validation.warnings ?? []),
+    ...(pipelinePlan?.warnings ?? []),
+    ...(outputPlan?.validation.warnings ?? []),
+    outputPlan && outputPlan.validation.ready && !outputPreflightReady
+      ? "Output preflight has unresolved recording, encoder, render target, or stream readiness."
+      : "",
+  ].filter((item): item is string => Boolean(item));
+  const state: SceneOutputReadyDiagnostic["state"] = blockers.length
+    ? "blocked"
+    : warnings.length
+      ? "degraded"
+      : "ready";
+  const detail =
+    state === "ready"
+      ? "Active scene, program preview frame, compositor render plan, output preflight, and media pipeline are output-ready for dry-run handoff."
+      : blockers.length
+        ? `${blockers.length} output blocker(s) must be resolved.`
+        : `${warnings.length} output warning(s) remain before final handoff.`;
+
+  return {
+    version: 1,
+    ready: state === "ready",
+    state,
+    active_scene_id: scene.id,
+    active_scene_name: scene.name,
+    program_preview_frame_ready: programPreviewFrameReady,
+    compositor_render_plan_ready: compositorRenderPlanReady,
+    output_preflight_ready: outputPreflightReady,
+    media_pipeline_ready: mediaPipelineReady,
+    detail,
+    blockers,
+    warnings,
+  };
 }
 
 function RuntimeBindingPanel(props: {
@@ -8048,24 +7157,12 @@ function RuntimeBindingPanel(props: {
         <KeyValue label="Shape" value={runtimeBindingShape(props.binding)} />
         {props.audioGraphSource && (
           <>
-            <KeyValue
-              label="Level"
-              value={formatAudioLevel(props.audioGraphSource.level_db)}
-            />
-            <KeyValue
-              label="Peak"
-              value={formatAudioLevel(props.audioGraphSource.peak_db)}
-            />
-            <KeyValue
-              label="Sync"
-              value={`${props.audioGraphSource.sync_offset_ms} ms`}
-            />
+            <KeyValue label="Level" value={formatAudioLevel(props.audioGraphSource.level_db)} />
+            <KeyValue label="Peak" value={formatAudioLevel(props.audioGraphSource.peak_db)} />
+            <KeyValue label="Sync" value={`${props.audioGraphSource.sync_offset_ms} ms`} />
           </>
         )}
-        <KeyValue
-          label="Candidates"
-          value={`${availableCandidates.length}/${props.candidates.length} available`}
-        />
+        <KeyValue label="Candidates" value={`${availableCandidates.length}/${props.candidates.length} available`} />
       </div>
       {props.audioGraphSource && (
         <div className="designer-audio-meter runtime-meter">
@@ -8076,47 +7173,27 @@ function RuntimeBindingPanel(props: {
           />
         </div>
       )}
-      <div
-        className="capture-provider-runtime-panel"
-        data-testid="designer-capture-provider-runtime"
-      >
+      <div className="capture-provider-runtime-panel" data-testid="designer-capture-provider-runtime">
         <div className="runtime-binding-header">
           <div>
             <strong>Capture Provider Runtime</strong>
-            <span>
-              {props.provider?.status_detail ??
-                "Provider lifecycle has not been resolved for this source."}
-            </span>
+            <span>{props.provider?.status_detail ?? "Provider lifecycle has not been resolved for this source."}</span>
           </div>
-          <Pill tone={captureProviderTone(props.provider)}>
-            {props.provider?.lifecycle ?? "pending"}
-          </Pill>
+          <Pill tone={captureProviderTone(props.provider)}>{props.provider?.lifecycle ?? "pending"}</Pill>
         </div>
         <div className="designer-preview-meta">
-          <KeyValue
-            label="Provider"
-            value={props.provider?.provider_id ?? "pending"}
-          />
-          <KeyValue
-            label="Binding"
-            value={props.provider?.binding_status?.replace("_", " ") ?? status}
-          />
+          <KeyValue label="Provider" value={props.provider?.provider_id ?? "pending"} />
+          <KeyValue label="Binding" value={props.provider?.binding_status?.replace("_", " ") ?? status} />
           <KeyValue label="Shape" value={captureProviderShape(props.provider)} />
           <KeyValue
             label="Frames"
             value={
-              props.provider
-                ? `${props.provider.frame_index} / dropped ${props.provider.dropped_frames}`
-                : "pending"
+              props.provider ? `${props.provider.frame_index} / dropped ${props.provider.dropped_frames}` : "pending"
             }
           />
           <KeyValue
             label="Latency"
-            value={
-              props.provider?.latency_ms != null
-                ? `${props.provider.latency_ms.toFixed(1)} ms`
-                : "pending"
-            }
+            value={props.provider?.latency_ms != null ? `${props.provider.latency_ms.toFixed(1)} ms` : "pending"}
           />
         </div>
       </div>
@@ -8152,15 +7229,8 @@ function RuntimeBindingPanel(props: {
   );
 }
 
-function LiveCaptureRuntimePanel(props: {
-  node: CompositorEvaluatedNode | null;
-  source: SceneSource;
-}) {
-  if (
-    props.source.kind !== "display" &&
-    props.source.kind !== "window" &&
-    props.source.kind !== "camera"
-  ) {
+function LiveCaptureRuntimePanel(props: { node: CompositorEvaluatedNode | null; source: SceneSource }) {
+  if (props.source.kind !== "display" && props.source.kind !== "window" && props.source.kind !== "camera") {
     return null;
   }
 
@@ -8184,15 +7254,10 @@ function LiveCaptureRuntimePanel(props: {
           <strong>Live Capture Runtime</strong>
           <span>{detail}</span>
         </div>
-        <Pill tone={captureRuntimeStatusTone(status)}>
-          {captureRuntimeStatusLabel(status)}
-        </Pill>
+        <Pill tone={captureRuntimeStatusTone(status)}>{captureRuntimeStatusLabel(status)}</Pill>
       </div>
       <div className="designer-preview-meta">
-        <KeyValue
-          label="Source"
-          value={capture?.capture_source_id ?? runtimeCaptureConfigTarget(props.source)}
-        />
+        <KeyValue label="Source" value={capture?.capture_source_id ?? runtimeCaptureConfigTarget(props.source)} />
         <KeyValue label="Provider" value={capture?.provider_name ?? "macOS pending"} />
         <KeyValue
           label="Frame"
@@ -8204,41 +7269,26 @@ function LiveCaptureRuntimePanel(props: {
         />
         <KeyValue
           label="Capture"
-          value={
-            capture?.capture_duration_ms != null
-              ? `${capture.capture_duration_ms} ms`
-              : "pending"
-          }
+          value={capture?.capture_duration_ms != null ? `${capture.capture_duration_ms} ms` : "pending"}
         />
         <KeyValue
           label="Latency"
           value={capture?.latency_ms != null ? `${capture.latency_ms.toFixed(1)} ms` : "pending"}
         />
-        <KeyValue
-          label="Dropped"
-          value={capture ? String(capture.dropped_frames) : "pending"}
-        />
-        <KeyValue
-          label="Checksum"
-          value={capture?.checksum ? capture.checksum.toString(16) : "none"}
-        />
+        <KeyValue label="Dropped" value={capture ? String(capture.dropped_frames) : "pending"} />
+        <KeyValue label="Checksum" value={capture?.checksum ? capture.checksum.toString(16) : "none"} />
       </div>
     </div>
   );
 }
 
-function ImageAssetRuntimePanel(props: {
-  node: CompositorEvaluatedNode | null;
-  source: SceneSource;
-}) {
+function ImageAssetRuntimePanel(props: { node: CompositorEvaluatedNode | null; source: SceneSource }) {
   if (props.source.kind !== "image_media") return null;
 
   const asset = props.node?.asset ?? null;
   const mediaType = props.source.config.media_type ?? "image";
   const isVideo = mediaType === "video";
-  const status =
-    asset?.status ??
-    (props.source.config.asset_uri ? "pending" : "no_asset");
+  const status = asset?.status ?? (props.source.config.asset_uri ? "pending" : "no_asset");
   const detail =
     asset?.status_detail ??
     (props.source.config.asset_uri
@@ -8250,31 +7300,19 @@ function ImageAssetRuntimePanel(props: {
         : "No local image asset has been selected.");
 
   return (
-    <div
-      className="image-asset-runtime-panel"
-      data-testid="designer-image-asset-runtime"
-    >
+    <div className="image-asset-runtime-panel" data-testid="designer-image-asset-runtime">
       <div className="runtime-binding-header">
         <div>
           <strong>{isVideo ? "Video Asset Runtime" : "Image Asset Runtime"}</strong>
           <span>{detail}</span>
         </div>
-        <Pill tone={imageAssetStatusTone(status)}>
-          {imageAssetStatusLabel(status)}
-        </Pill>
+        <Pill tone={imageAssetStatusTone(status)}>{imageAssetStatusLabel(status)}</Pill>
       </div>
       <div className="designer-preview-meta">
-        <KeyValue
-          label="Asset"
-          value={asset?.uri ?? String(props.source.config.asset_uri ?? "none")}
-        />
+        <KeyValue label="Asset" value={asset?.uri ?? String(props.source.config.asset_uri ?? "none")} />
         <KeyValue
           label="Dimensions"
-          value={
-            asset?.width && asset.height
-              ? `${asset.width}x${asset.height}`
-              : "not decoded"
-          }
+          value={asset?.width && asset.height ? `${asset.width}x${asset.height}` : "not decoded"}
         />
         <KeyValue label="Format" value={asset?.format ?? mediaType} />
         {isVideo && (
@@ -8283,16 +7321,11 @@ function ImageAssetRuntimePanel(props: {
               label="Sample"
               value={
                 asset?.sampled_frame_time_ms != null
-                  ? `${(asset.sampled_frame_time_ms / 1000).toFixed(2)}s (#${
-                      asset.sample_index ?? 0
-                    })`
+                  ? `${(asset.sampled_frame_time_ms / 1000).toFixed(2)}s (#${asset.sample_index ?? 0})`
                   : "not sampled"
               }
             />
-            <KeyValue
-              label="Decoder"
-              value={asset?.decoder_name ?? "ffmpeg optional"}
-            />
+            <KeyValue label="Decoder" value={asset?.decoder_name ?? "ffmpeg optional"} />
             <KeyValue
               label="Timeline"
               value={
@@ -8310,34 +7343,19 @@ function ImageAssetRuntimePanel(props: {
               value={`${asset?.playback_rate ?? props.source.config.playback_rate ?? 1}x, ${
                 (asset?.loop_enabled ?? props.source.config.loop) ? "loop" : "no loop"
               }, ${
-                (asset?.restart_on_scene_activate ??
-                props.source.config.restart_on_scene_activate)
+                (asset?.restart_on_scene_activate ?? props.source.config.restart_on_scene_activate)
                   ? "restart on activate"
                   : "continue timeline"
               }`}
             />
           </>
         )}
-        <KeyValue
-          label="Checksum"
-          value={asset?.checksum ? asset.checksum.toString(16) : "none"}
-        />
-        <KeyValue
-          label="Cache"
-          value={
-            asset
-              ? asset.cache_hit
-                ? "cache hit"
-                : "fresh decode"
-              : "no decoded frame"
-          }
-        />
+        <KeyValue label="Checksum" value={asset?.checksum ? asset.checksum.toString(16) : "none"} />
+        <KeyValue label="Cache" value={asset ? (asset.cache_hit ? "cache hit" : "fresh decode") : "no decoded frame"} />
         <KeyValue
           label="Modified"
           value={
-            asset?.modified_unix_ms
-              ? formatSuiteTimestamp(new Date(asset.modified_unix_ms).toISOString())
-              : "unknown"
+            asset?.modified_unix_ms ? formatSuiteTimestamp(new Date(asset.modified_unix_ms).toISOString()) : "unknown"
           }
         />
       </div>
@@ -8351,10 +7369,7 @@ function ImageAssetRuntimePanel(props: {
   );
 }
 
-function AudioInputRuntimePanel(props: {
-  audioGraphSource: AudioGraphRuntimeSource | null;
-  source: SceneSource;
-}) {
+function AudioInputRuntimePanel(props: { audioGraphSource: AudioGraphRuntimeSource | null; source: SceneSource }) {
   if (props.source.kind !== "audio_meter") return null;
 
   const source = props.audioGraphSource;
@@ -8380,20 +7395,10 @@ function AudioInputRuntimePanel(props: {
         <KeyValue label="Provider" value={source?.provider_name ?? "pending"} />
         <KeyValue
           label="Samples"
-          value={
-            source
-              ? `${source.sample_count} @ ${source.sample_rate} Hz / ${source.channels} ch`
-              : "pending"
-          }
+          value={source ? `${source.sample_count} @ ${source.sample_rate} Hz / ${source.channels} ch` : "pending"}
         />
-        <KeyValue
-          label="Capture"
-          value={source ? `${source.capture_duration_ms} ms` : "pending"}
-        />
-        <KeyValue
-          label="Latency"
-          value={source ? `${source.latency_ms.toFixed(1)} ms` : "pending"}
-        />
+        <KeyValue label="Capture" value={source ? `${source.capture_duration_ms} ms` : "pending"} />
+        <KeyValue label="Latency" value={source ? `${source.latency_ms.toFixed(1)} ms` : "pending"} />
         <KeyValue label="Level" value={formatAudioLevel(source?.level_db)} />
         <KeyValue label="Decay" value={formatAudioLevel(source?.decay_level_db)} />
         <KeyValue label="Peak Hold" value={formatAudioLevel(source?.peak_hold_db)} />
@@ -8415,10 +7420,7 @@ function AudioInputRuntimePanel(props: {
   );
 }
 
-function TextRuntimePanel(props: {
-  node: CompositorEvaluatedNode | null;
-  source: SceneSource;
-}) {
+function TextRuntimePanel(props: { node: CompositorEvaluatedNode | null; source: SceneSource }) {
   if (props.source.kind !== "text") return null;
 
   const text = props.node?.text ?? null;
@@ -8438,40 +7440,23 @@ function TextRuntimePanel(props: {
           <strong>Text Runtime</strong>
           <span>{detail}</span>
         </div>
-        <Pill tone={textRuntimeStatusTone(status)}>
-          {textRuntimeStatusLabel(status)}
-        </Pill>
+        <Pill tone={textRuntimeStatusTone(status)}>{textRuntimeStatusLabel(status)}</Pill>
       </div>
       <div className="designer-preview-meta">
-        <KeyValue
-          label="Requested"
-          value={text?.requested_font_family ?? props.source.config.font_family}
-        />
+        <KeyValue label="Requested" value={text?.requested_font_family ?? props.source.config.font_family} />
         <KeyValue label="Used" value={text?.used_font_family ?? "pending"} />
-        <KeyValue
-          label="Size"
-          value={`${text?.font_size ?? props.source.config.font_size}px`}
-        />
+        <KeyValue label="Size" value={`${text?.font_size ?? props.source.config.font_size}px`} />
         <KeyValue label="Color" value={text?.color ?? props.source.config.color} />
         <KeyValue label="Align" value={text?.align ?? props.source.config.align} />
-        <KeyValue
-          label="Length"
-          value={`${text?.text_length ?? configuredText.length} chars`}
-        />
-        <KeyValue
-          label="Lines"
-          value={`${text?.line_count ?? props.source.config.text.split("\n").length}`}
-        />
+        <KeyValue label="Length" value={`${text?.text_length ?? configuredText.length} chars`} />
+        <KeyValue label="Lines" value={`${text?.line_count ?? props.source.config.text.split("\n").length}`} />
         <KeyValue
           label="Effects"
-          value={`stroke ${text?.stroke_width ?? props.source.config.stroke_width ?? 0}px, bg ${
-            Math.round((text?.background_opacity ?? props.source.config.background_opacity ?? 0) * 100)
-          }%`}
+          value={`stroke ${text?.stroke_width ?? props.source.config.stroke_width ?? 0}px, bg ${Math.round(
+            (text?.background_opacity ?? props.source.config.background_opacity ?? 0) * 100,
+          )}%`}
         />
-        <KeyValue
-          label="Font File"
-          value={text?.font_file_uri ?? props.source.config.font_file_uri ?? "bundled"}
-        />
+        <KeyValue label="Font File" value={text?.font_file_uri ?? props.source.config.font_file_uri ?? "bundled"} />
         <KeyValue
           label="Bounds"
           value={
@@ -8480,10 +7465,7 @@ function TextRuntimePanel(props: {
               : "not rendered"
           }
         />
-        <KeyValue
-          label="Checksum"
-          value={text?.checksum ? text.checksum.toString(16) : "none"}
-        />
+        <KeyValue label="Checksum" value={text?.checksum ? text.checksum.toString(16) : "none"} />
       </div>
       {status !== "rendered" && (
         <div className="validation-issue warning">
@@ -8495,10 +7477,7 @@ function TextRuntimePanel(props: {
   );
 }
 
-function BrowserRuntimePanel(props: {
-  node: CompositorEvaluatedNode | null;
-  source: SceneSource;
-}) {
+function BrowserRuntimePanel(props: { node: CompositorEvaluatedNode | null; source: SceneSource }) {
   if (props.source.kind !== "browser_overlay") return null;
 
   const browser = props.node?.browser ?? null;
@@ -8528,9 +7507,7 @@ function BrowserRuntimePanel(props: {
           <strong>Browser Runtime</strong>
           <span>{detail}</span>
         </div>
-        <Pill tone={browserRuntimeStatusTone(status)}>
-          {browserRuntimeStatusLabel(status)}
-        </Pill>
+        <Pill tone={browserRuntimeStatusTone(status)}>{browserRuntimeStatusLabel(status)}</Pill>
       </div>
       <div className="designer-preview-meta">
         <KeyValue label="URL" value={(browser?.url ?? configuredUrl) || "none"} />
@@ -8547,33 +7524,18 @@ function BrowserRuntimePanel(props: {
           label="Sample"
           value={
             browser?.sampled_frame_time_ms != null
-              ? `${(browser.sampled_frame_time_ms / 1000).toFixed(2)}s (#${
-                  browser.sample_index ?? 0
-                })`
+              ? `${(browser.sampled_frame_time_ms / 1000).toFixed(2)}s (#${browser.sample_index ?? 0})`
               : "not sampled"
           }
         />
-        <KeyValue
-          label="Checksum"
-          value={browser?.checksum ? browser.checksum.toString(16) : "none"}
-        />
+        <KeyValue label="Checksum" value={browser?.checksum ? browser.checksum.toString(16) : "none"} />
         <KeyValue
           label="Capture"
-          value={
-            browser?.capture_duration_ms != null
-              ? `${browser.capture_duration_ms} ms`
-              : "not captured"
-          }
+          value={browser?.capture_duration_ms != null ? `${browser.capture_duration_ms} ms` : "not captured"}
         />
         <KeyValue
           label="Cache"
-          value={
-            browser
-              ? browser.cache_hit
-                ? "cache hit"
-                : "fresh capture"
-              : "no captured frame"
-          }
+          value={browser ? (browser.cache_hit ? "cache hit" : "fresh capture") : "no captured frame"}
         />
         <KeyValue
           label="Process"
@@ -8602,19 +7564,14 @@ function BrowserRuntimePanel(props: {
   );
 }
 
-function AudioFilterRuntimePanel(props: {
-  audioGraphSource: AudioGraphRuntimeSource | null;
-  source: SceneSource;
-}) {
+function AudioFilterRuntimePanel(props: { audioGraphSource: AudioGraphRuntimeSource | null; source: SceneSource }) {
   if (props.source.kind !== "audio_meter") return null;
-  const configuredFilters = sortedSceneSourceFilters(props.source.filters ?? []).filter(
-    (filter) => isAudioSourceFilterKind(filter.kind),
+  const configuredFilters = sortedSceneSourceFilters(props.source.filters ?? []).filter((filter) =>
+    isAudioSourceFilterKind(filter.kind),
   );
   if (configuredFilters.length === 0) return null;
 
-  const runtimeById = new Map(
-    (props.audioGraphSource?.filters ?? []).map((filter) => [filter.id, filter]),
-  );
+  const runtimeById = new Map((props.audioGraphSource?.filters ?? []).map((filter) => [filter.id, filter]));
   const rows = configuredFilters.map((filter) => {
     const runtime = runtimeById.get(filter.id);
     return {
@@ -8623,9 +7580,7 @@ function AudioFilterRuntimePanel(props: {
       kind: filter.kind,
       order: filter.order,
       status: runtime?.status ?? "pending",
-      detail:
-        runtime?.status_detail ??
-        "Waiting for the next audio graph snapshot to evaluate this filter.",
+      detail: runtime?.status_detail ?? "Waiting for the next audio graph snapshot to evaluate this filter.",
       runtime,
     };
   });
@@ -8633,40 +7588,23 @@ function AudioFilterRuntimePanel(props: {
   const sourceLevel = props.audioGraphSource;
 
   return (
-    <div
-      className="audio-filter-runtime-panel"
-      data-testid="designer-audio-filter-runtime"
-    >
+    <div className="audio-filter-runtime-panel" data-testid="designer-audio-filter-runtime">
       <div className="runtime-binding-header">
         <div>
           <strong>Audio Filter Runtime</strong>
           <span>
-            {configuredFilters.length} configured /{" "}
-            {props.audioGraphSource?.filters.length ?? 0} runtime result(s)
+            {configuredFilters.length} configured / {props.audioGraphSource?.filters.length ?? 0} runtime result(s)
           </span>
         </div>
         <Pill tone={summary.tone}>{summary.label}</Pill>
       </div>
       <div className="designer-preview-meta">
-        <KeyValue
-          label="Pre"
-          value={formatAudioLevel(sourceLevel?.pre_filter_level_db)}
-        />
-        <KeyValue
-          label="Post"
-          value={formatAudioLevel(sourceLevel?.post_filter_level_db)}
-        />
-        <KeyValue
-          label="Peak"
-          value={formatAudioLevel(sourceLevel?.post_filter_peak_db)}
-        />
+        <KeyValue label="Pre" value={formatAudioLevel(sourceLevel?.pre_filter_level_db)} />
+        <KeyValue label="Post" value={formatAudioLevel(sourceLevel?.post_filter_level_db)} />
+        <KeyValue label="Peak" value={formatAudioLevel(sourceLevel?.post_filter_peak_db)} />
         <KeyValue
           label="Delta"
-          value={formatAudioDelta(
-            sourceLevel
-              ? sourceLevel.post_filter_level_db - sourceLevel.pre_filter_level_db
-              : 0,
-          )}
+          value={formatAudioDelta(sourceLevel ? sourceLevel.post_filter_level_db - sourceLevel.pre_filter_level_db : 0)}
         />
       </div>
       <div className="filter-runtime-list">
@@ -8677,9 +7615,7 @@ function AudioFilterRuntimePanel(props: {
               <span>{sceneFilterKindLabels[filter.kind]}</span>
             </div>
             <div>
-              <Pill tone={filterRuntimeStatusTone(filter.status)}>
-                {filterRuntimeStatusLabel(filter.status)}
-              </Pill>
+              <Pill tone={filterRuntimeStatusTone(filter.status)}>{filterRuntimeStatusLabel(filter.status)}</Pill>
               <code>#{filter.order}</code>
             </div>
             <div className="audio-filter-levels">
@@ -8689,9 +7625,7 @@ function AudioFilterRuntimePanel(props: {
               </span>
               <span>{audioFilterAdjustmentLabel(filter.runtime ?? null)}</span>
             </div>
-            {filter.runtime?.control_summary && (
-              <span>{filter.runtime.control_summary}</span>
-            )}
+            {filter.runtime?.control_summary && <span>{filter.runtime.control_summary}</span>}
             <span>{filter.detail}</span>
           </div>
         ))}
@@ -8700,19 +7634,13 @@ function AudioFilterRuntimePanel(props: {
   );
 }
 
-function FilterRuntimePanel(props: {
-  node: CompositorEvaluatedNode | null;
-  source: SceneSource;
-}) {
+function FilterRuntimePanel(props: { node: CompositorEvaluatedNode | null; source: SceneSource }) {
   const configuredFilters = sortedSceneSourceFilters(props.source.filters ?? []).filter(
-    (filter) =>
-      props.source.kind !== "audio_meter" || !isAudioSourceFilterKind(filter.kind),
+    (filter) => props.source.kind !== "audio_meter" || !isAudioSourceFilterKind(filter.kind),
   );
   if (configuredFilters.length === 0) return null;
 
-  const runtimeById = new Map(
-    (props.node?.filters ?? []).map((filter) => [filter.id, filter]),
-  );
+  const runtimeById = new Map((props.node?.filters ?? []).map((filter) => [filter.id, filter]));
   const rows = configuredFilters.map((filter) => {
     const runtime = runtimeById.get(filter.id);
     return {
@@ -8721,9 +7649,7 @@ function FilterRuntimePanel(props: {
       kind: filter.kind,
       order: filter.order,
       status: runtime?.status ?? "pending",
-      detail:
-        runtime?.status_detail ??
-        "Waiting for the next runtime preview frame to evaluate this filter.",
+      detail: runtime?.status_detail ?? "Waiting for the next runtime preview frame to evaluate this filter.",
       checksum: runtime?.checksum ?? null,
     };
   });
@@ -8735,8 +7661,7 @@ function FilterRuntimePanel(props: {
         <div>
           <strong>Filter Runtime</strong>
           <span>
-            {configuredFilters.length} configured /{" "}
-            {props.node?.filters.length ?? 0} runtime result(s)
+            {configuredFilters.length} configured / {props.node?.filters.length ?? 0} runtime result(s)
           </span>
         </div>
         <Pill tone={summary.tone}>{summary.label}</Pill>
@@ -8749,9 +7674,7 @@ function FilterRuntimePanel(props: {
               <span>{sceneFilterKindLabels[filter.kind]}</span>
             </div>
             <div>
-              <Pill tone={filterRuntimeStatusTone(filter.status)}>
-                {filterRuntimeStatusLabel(filter.status)}
-              </Pill>
+              <Pill tone={filterRuntimeStatusTone(filter.status)}>{filterRuntimeStatusLabel(filter.status)}</Pill>
               <code>#{filter.order}</code>
             </div>
             <span>{filter.detail}</span>
@@ -8769,23 +7692,13 @@ function DesignerShortcutPanel(props: {
   message: string | null;
   onListen: (action: DesignerShortcutAction) => void;
   onReset: () => void;
-  onShortcutKeyDown: (
-    event: ReactKeyboardEvent,
-    action: DesignerShortcutAction,
-  ) => void;
+  onShortcutKeyDown: (event: ReactKeyboardEvent, action: DesignerShortcutAction) => void;
 }) {
   return (
-    <section
-      className="panel designer-shortcuts-panel"
-      data-testid="designer-shortcuts-panel"
-    >
+    <section className="panel designer-shortcuts-panel" data-testid="designer-shortcuts-panel">
       <PanelTitle
         action={
-          <button
-            className="secondary-button compact"
-            onClick={props.onReset}
-            type="button"
-          >
+          <button className="secondary-button compact" onClick={props.onReset} type="button">
             <RotateCcw size={14} />
             Reset
           </button>
@@ -8806,23 +7719,17 @@ function DesignerShortcutPanel(props: {
                 className={listening ? "shortcut-capture active" : "shortcut-capture"}
                 data-shortcut-action={definition.action}
                 onClick={() => props.onListen(definition.action)}
-                onKeyDown={(event) =>
-                  props.onShortcutKeyDown(event, definition.action)
-                }
+                onKeyDown={(event) => props.onShortcutKeyDown(event, definition.action)}
                 type="button"
               >
                 <Keyboard size={13} />
-                {listening
-                  ? "Listening"
-                  : formatDesignerShortcutCombo(props.bindings[definition.action])}
+                {listening ? "Listening" : formatDesignerShortcutCombo(props.bindings[definition.action])}
               </button>
             </div>
           );
         })}
       </div>
-      {props.message && (
-        <div className="designer-shortcut-message">{props.message}</div>
-      )}
+      {props.message && <div className="designer-shortcut-message">{props.message}</div>}
     </section>
   );
 }
@@ -8832,15 +7739,9 @@ function TransitionPreviewFrameView(props: {
   runtimeError?: string | null;
   runtimeFrame?: TransitionPreviewFrameResponse | null;
 }) {
-  const runtimeImage =
-    props.runtimeFrame?.image_data?.startsWith("data:")
-      ? props.runtimeFrame.image_data
-      : null;
+  const runtimeImage = props.runtimeFrame?.image_data?.startsWith("data:") ? props.runtimeFrame.image_data : null;
   return (
-    <div
-      className={`transition-preview-stage ${props.frame.transition_kind}`}
-      data-testid="transition-preview-stage"
-    >
+    <div className={`transition-preview-stage ${props.frame.transition_kind}`} data-testid="transition-preview-stage">
       {runtimeImage ? (
         <>
           <img
@@ -8851,9 +7752,7 @@ function TransitionPreviewFrameView(props: {
           />
           <span className="transition-preview-runtime-badge">
             Runtime {props.runtimeFrame?.transition_kind ?? "frame"}{" "}
-            {props.runtimeFrame
-              ? `${Math.round(props.runtimeFrame.eased_progress * 100)}%`
-              : ""}
+            {props.runtimeFrame ? `${Math.round(props.runtimeFrame.eased_progress * 100)}%` : ""}
           </span>
         </>
       ) : (
@@ -8877,11 +7776,7 @@ function TransitionPreviewFrameView(props: {
           );
         })
       )}
-      {props.runtimeError && (
-        <span className="transition-preview-runtime-error">
-          {props.runtimeError}
-        </span>
-      )}
+      {props.runtimeError && <span className="transition-preview-runtime-error">{props.runtimeError}</span>}
     </div>
   );
 }
@@ -8894,18 +7789,15 @@ function StingerTransitionRuntimePanel(props: {
   if (props.transition.kind !== "stinger") return null;
 
   const stinger = props.frame?.stinger ?? null;
-  const validationMessage =
-    props.frame?.validation.errors[0] ?? props.frame?.validation.warnings[0] ?? null;
+  const validationMessage = props.frame?.validation.errors[0] ?? props.frame?.validation.warnings[0] ?? null;
   const status =
-    stinger?.status ??
-    (props.error || props.frame?.validation.errors.length ? "decode_failed" : "pending");
+    stinger?.status ?? (props.error || props.frame?.validation.errors.length ? "decode_failed" : "pending");
   const detail =
     props.error ??
     stinger?.status_detail ??
     validationMessage ??
     "Waiting for the next runtime preview frame to evaluate the stinger asset.";
-  const assetUri =
-    stinger?.uri || String(props.transition.config.asset_uri ?? "") || "none";
+  const assetUri = stinger?.uri || String(props.transition.config.asset_uri ?? "") || "none";
 
   return (
     <div className="stinger-runtime-panel" data-testid="designer-stinger-runtime">
@@ -8914,9 +7806,7 @@ function StingerTransitionRuntimePanel(props: {
           <strong>Stinger Runtime</strong>
           <span>{detail}</span>
         </div>
-        <Pill tone={stingerRuntimeStatusTone(status)}>
-          {stingerRuntimeStatusLabel(status)}
-        </Pill>
+        <Pill tone={stingerRuntimeStatusTone(status)}>{stingerRuntimeStatusLabel(status)}</Pill>
       </div>
       <div className="designer-preview-meta">
         <KeyValue label="Asset" value={assetUri} />
@@ -8932,34 +7822,24 @@ function StingerTransitionRuntimePanel(props: {
           label="Sample"
           value={
             stinger?.sampled_frame_time_ms != null
-              ? `${(stinger.sampled_frame_time_ms / 1000).toFixed(2)}s (#${
-                  stinger.sample_index ?? 0
-                })`
+              ? `${(stinger.sampled_frame_time_ms / 1000).toFixed(2)}s (#${stinger.sample_index ?? 0})`
               : "not decoded"
           }
         />
         <KeyValue
           label="Dimensions"
-          value={
-            stinger?.width && stinger.height
-              ? `${stinger.width}x${stinger.height}`
-              : "not decoded"
-          }
+          value={stinger?.width && stinger.height ? `${stinger.width}x${stinger.height}` : "not decoded"}
         />
         <KeyValue label="Decoder" value={stinger?.decoder_name ?? "none"} />
         <KeyValue label="Cache" value={stinger?.cache_hit ? "hit" : "miss"} />
         <KeyValue
           label="Checksum"
           value={
-            stinger?.checksum != null
-              ? `asset:${stinger.checksum.toString(16)}`
-              : (props.frame?.checksum ?? "none")
+            stinger?.checksum != null ? `asset:${stinger.checksum.toString(16)}` : (props.frame?.checksum ?? "none")
           }
         />
       </div>
-      {stinger?.fallback_reason && (
-        <div className="runtime-binding-warning">{stinger.fallback_reason}</div>
-      )}
+      {stinger?.fallback_reason && <div className="runtime-binding-warning">{stinger.fallback_reason}</div>}
     </div>
   );
 }
@@ -8998,9 +7878,7 @@ function TransitionConfigEditor(props: {
           <label>
             Direction
             <select
-              onChange={(event) =>
-                props.onChange({ direction: event.target.value })
-              }
+              onChange={(event) => props.onChange({ direction: event.target.value })}
               value={String(config.direction ?? "left")}
             >
               <option value="left">Left</option>
@@ -9042,18 +7920,14 @@ function TransitionConfigEditor(props: {
         <SceneNumberInput
           label="Trigger ms"
           min={0}
-          onChange={(trigger_time_ms) =>
-            props.onChange({ trigger_time_ms: Math.round(trigger_time_ms) })
-          }
+          onChange={(trigger_time_ms) => props.onChange({ trigger_time_ms: Math.round(trigger_time_ms) })}
           step={50}
           value={Number(config.trigger_time_ms ?? 500)}
         />
         <label>
           Audio
           <select
-            onChange={(event) =>
-              props.onChange({ audio_behavior: event.target.value })
-            }
+            onChange={(event) => props.onChange({ audio_behavior: event.target.value })}
             value={String(config.audio_behavior ?? "mix")}
           >
             <option value="mix">Mix</option>
@@ -9084,9 +7958,7 @@ function SourceCreationPanel(props: {
     const createRequest = sourceCreateRequestFromCaptureCandidate(candidate);
     if (kindFilter !== "all" && createRequest.kind !== kindFilter) return false;
     if (!normalizedSearch) return true;
-    return `${candidate.name} ${candidate.kind} ${candidate.notes ?? ""}`
-      .toLowerCase()
-      .includes(normalizedSearch);
+    return `${candidate.name} ${candidate.kind} ${candidate.notes ?? ""}`.toLowerCase().includes(normalizedSearch);
   });
   const createFromPreset = (preset: SourceCreatePreset) => {
     props.onCreateSource(preset.kind, {
@@ -9150,9 +8022,7 @@ function SourceCreationPanel(props: {
                 Kind
                 <select
                   aria-label="Filter source kind"
-                  onChange={(event) =>
-                    setKindFilter(event.target.value as SceneSourceKind | "all")
-                  }
+                  onChange={(event) => setKindFilter(event.target.value as SceneSourceKind | "all")}
                   value={kindFilter}
                 >
                   <option value="all">All</option>
@@ -9169,11 +8039,7 @@ function SourceCreationPanel(props: {
                 Blank Source
                 <select
                   aria-label="New source kind"
-                  onChange={(event) =>
-                    props.onNewSourceKindChange(
-                      event.target.value as SceneSourceKind,
-                    )
-                  }
+                  onChange={(event) => props.onNewSourceKindChange(event.target.value as SceneSourceKind)}
                   value={props.newSourceKind}
                 >
                   {Object.entries(sceneSourceKindLabels).map(([kind, label]) => (
@@ -9217,14 +8083,11 @@ function SourceCreationPanel(props: {
                   </div>
                 </div>
                 {filteredCandidates.map((candidate) => {
-                  const createRequest =
-                    sourceCreateRequestFromCaptureCandidate(candidate);
+                  const createRequest = sourceCreateRequestFromCaptureCandidate(candidate);
                   return (
                     <button
                       className={
-                        candidate.available
-                          ? "capture-candidate-create"
-                          : "capture-candidate-create unavailable"
+                        candidate.available ? "capture-candidate-create" : "capture-candidate-create unavailable"
                       }
                       data-testid="designer-capture-candidate-create"
                       key={candidate.id}
@@ -9262,19 +8125,16 @@ function SourceCreationPanel(props: {
   );
 }
 
-function sourceCreatePresetMatches(
-  preset: SourceCreatePreset,
-  kindFilter: SceneSourceKind | "all",
-  search: string,
-) {
+function sourceCreatePresetMatches(preset: SourceCreatePreset, kindFilter: SceneSourceKind | "all", search: string) {
   if (kindFilter !== "all" && preset.kind !== kindFilter) return false;
   if (!search) return true;
   return `${preset.name} ${preset.detail} ${preset.kind}`.toLowerCase().includes(search);
 }
 
-function sourceCreateRequestFromCaptureCandidate(
-  candidate: CaptureSourceCandidate,
-): { kind: SceneSourceKind; defaults: SceneSourceDefaults } {
+function sourceCreateRequestFromCaptureCandidate(candidate: CaptureSourceCandidate): {
+  kind: SceneSourceKind;
+  defaults: SceneSourceDefaults;
+} {
   switch (candidate.kind) {
     case "display":
       return {
@@ -9331,33 +8191,19 @@ function sourceCreateRequestFromCaptureCandidate(
   }
 }
 
-function SourceFilterEditor(props: {
-  onChange: (filters: SceneSourceFilter[]) => void;
-  source: SceneSource;
-}) {
-  const [newFilterKind, setNewFilterKind] =
-    useState<SceneSourceFilterKind>("color_correction");
+function SourceFilterEditor(props: { onChange: (filters: SceneSourceFilter[]) => void; source: SceneSource }) {
+  const [newFilterKind, setNewFilterKind] = useState<SceneSourceFilterKind>("color_correction");
   const filters = sortedSceneSourceFilters(props.source.filters ?? []);
 
   function commit(nextFilters: SceneSourceFilter[]) {
     props.onChange(nextFilters);
   }
 
-  function updateFilter(
-    filterId: string,
-    patch: Partial<SceneSourceFilter>,
-  ) {
-    commit(
-      (props.source.filters ?? []).map((filter) =>
-        filter.id === filterId ? { ...filter, ...patch } : filter,
-      ),
-    );
+  function updateFilter(filterId: string, patch: Partial<SceneSourceFilter>) {
+    commit((props.source.filters ?? []).map((filter) => (filter.id === filterId ? { ...filter, ...patch } : filter)));
   }
 
-  function updateFilterConfig(
-    filterId: string,
-    patch: Record<string, unknown>,
-  ) {
+  function updateFilterConfig(filterId: string, patch: Record<string, unknown>) {
     const filter = props.source.filters?.find((item) => item.id === filterId);
     if (!filter) return;
     updateFilter(filterId, {
@@ -9373,40 +8219,31 @@ function SourceFilterEditor(props: {
     const targetIndex = direction === "up" ? index - 1 : index + 1;
     if (index < 0 || targetIndex < 0 || targetIndex >= filters.length) return;
     const reordered = [...filters];
-    [reordered[index], reordered[targetIndex]] = [
-      reordered[targetIndex],
-      reordered[index],
-    ];
-    commit(reordered.map((filter, nextIndex) => ({ ...filter, order: nextIndex * 10 })));
+    [reordered[index], reordered[targetIndex]] = [reordered[targetIndex], reordered[index]];
+    commit(
+      reordered.map((filter, nextIndex) => ({
+        ...filter,
+        order: nextIndex * 10,
+      })),
+    );
   }
 
   function addFilter() {
-    const nextOrder =
-      filters.reduce((highest, filter) => Math.max(highest, filter.order), -10) + 10;
-    commit([
-      ...(props.source.filters ?? []),
-      createDefaultSceneSourceFilter(newFilterKind, nextOrder),
-    ]);
+    const nextOrder = filters.reduce((highest, filter) => Math.max(highest, filter.order), -10) + 10;
+    commit([...(props.source.filters ?? []), createDefaultSceneSourceFilter(newFilterKind, nextOrder)]);
   }
 
   function removeFilter(filterId: string) {
     commit((props.source.filters ?? []).filter((filter) => filter.id !== filterId));
   }
 
-  async function pickFilterAsset(
-    filterId: string,
-    assetKind: "image" | "lut",
-  ) {
+  async function pickFilterAsset(filterId: string, assetKind: "image" | "lut") {
     try {
       const path = await pickLocalAssetPath(assetKind);
       if (!path) return;
       updateFilterConfig(filterId, assetKind === "image" ? { mask_uri: path } : { lut_uri: path });
     } catch (error) {
-      window.alert(
-        error instanceof Error
-          ? error.message
-          : "Unable to open the asset picker for this filter.",
-      );
+      window.alert(error instanceof Error ? error.message : "Unable to open the asset picker for this filter.");
     }
   }
 
@@ -9422,9 +8259,7 @@ function SourceFilterEditor(props: {
             aria-label="New filter kind"
             data-testid="designer-new-source-filter-kind"
             value={newFilterKind}
-            onChange={(event) =>
-              setNewFilterKind(event.target.value as SceneSourceFilterKind)
-            }
+            onChange={(event) => setNewFilterKind(event.target.value as SceneSourceFilterKind)}
           >
             {Object.entries(sceneFilterKindLabels).map(([kind, label]) => (
               <option key={kind} value={kind}>
@@ -9453,9 +8288,7 @@ function SourceFilterEditor(props: {
               <div className="source-filter-item-header">
                 <SlidersHorizontal size={15} />
                 <strong>{filter.name}</strong>
-                <Pill tone={filter.enabled ? "green" : "muted"}>
-                  {filter.enabled ? "Enabled" : "Bypassed"}
-                </Pill>
+                <Pill tone={filter.enabled ? "green" : "muted"}>{filter.enabled ? "Enabled" : "Bypassed"}</Pill>
               </div>
               <div className="source-filter-actions">
                 <button
@@ -9524,9 +8357,7 @@ function SourceFilterEditor(props: {
               <label className="check-row">
                 <input
                   checked={filter.enabled}
-                  onChange={(event) =>
-                    updateFilter(filter.id, { enabled: event.target.checked })
-                  }
+                  onChange={(event) => updateFilter(filter.id, { enabled: event.target.checked })}
                   type="checkbox"
                 />
                 Enabled
@@ -9551,11 +8382,7 @@ function SourceFilterEditor(props: {
                         config: parsed as Record<string, unknown>,
                       });
                     } catch (error) {
-                      window.alert(
-                        error instanceof Error
-                          ? error.message
-                          : "Filter config must be valid JSON.",
-                      );
+                      window.alert(error instanceof Error ? error.message : "Filter config must be valid JSON.");
                     }
                   }}
                   rows={4}
@@ -9697,9 +8524,7 @@ function FilterConfigFields(props: {
           <label>
             Blend Mode
             <select
-              onChange={(event) =>
-                props.onChange({ blend_mode: event.target.value })
-              }
+              onChange={(event) => props.onChange({ blend_mode: event.target.value })}
               value={configString(config, "blend_mode", "normal")}
             >
               <option value="normal">Normal</option>
@@ -9800,9 +8625,7 @@ function FilterConfigFields(props: {
               label="Close dB"
               max={0}
               min={-96}
-              onChange={(close_threshold_db) =>
-                props.onChange({ close_threshold_db })
-              }
+              onChange={(close_threshold_db) => props.onChange({ close_threshold_db })}
               step={0.5}
               value={configNumber(config, "close_threshold_db", -45)}
             />
@@ -9810,9 +8633,7 @@ function FilterConfigFields(props: {
               label="Open dB"
               max={0}
               min={-96}
-              onChange={(open_threshold_db) =>
-                props.onChange({ open_threshold_db })
-              }
+              onChange={(open_threshold_db) => props.onChange({ open_threshold_db })}
               step={0.5}
               value={configNumber(config, "open_threshold_db", -35)}
             />
@@ -9900,8 +8721,7 @@ function SourceConfigEditor(props: {
             <select
               value={source.config.display_id ?? ""}
               onChange={(event) => {
-                const candidate =
-                  candidates.find((item) => item.id === event.target.value) ?? null;
+                const candidate = candidates.find((item) => item.id === event.target.value) ?? null;
                 props.onChange(captureConfigPatchForCandidate(source, candidate));
               }}
             >
@@ -9918,9 +8738,7 @@ function SourceConfigEditor(props: {
           <label className="check-row">
             <input
               checked={source.config.capture_cursor}
-              onChange={(event) =>
-                props.onChange({ capture_cursor: event.target.checked })
-              }
+              onChange={(event) => props.onChange({ capture_cursor: event.target.checked })}
               type="checkbox"
             />
             Capture cursor
@@ -9969,8 +8787,7 @@ function SourceConfigEditor(props: {
             <select
               value={source.config.window_id ?? ""}
               onChange={(event) => {
-                const candidate =
-                  candidates.find((item) => item.id === event.target.value) ?? null;
+                const candidate = candidates.find((item) => item.id === event.target.value) ?? null;
                 props.onChange(captureConfigPatchForCandidate(source, candidate));
               }}
             >
@@ -9989,11 +8806,7 @@ function SourceConfigEditor(props: {
             onChange={(application_name) => props.onChange({ application_name })}
             value={source.config.application_name ?? ""}
           />
-          <TextInput
-            label="Title"
-            onChange={(title) => props.onChange({ title })}
-            value={source.config.title ?? ""}
-          />
+          <TextInput label="Title" onChange={(title) => props.onChange({ title })} value={source.config.title ?? ""} />
           <div className="form-grid">
             <SceneNumberInput
               label="Source Width"
@@ -10038,8 +8851,7 @@ function SourceConfigEditor(props: {
             <select
               value={source.config.device_id ?? ""}
               onChange={(event) => {
-                const candidate =
-                  candidates.find((item) => item.id === event.target.value) ?? null;
+                const candidate = candidates.find((item) => item.id === event.target.value) ?? null;
                 props.onChange(captureConfigPatchForCandidate(source, candidate));
               }}
             >
@@ -10103,18 +8915,13 @@ function SourceConfigEditor(props: {
             <select
               value={source.config.device_id ?? ""}
               onChange={(event) => {
-                const candidate =
-                  candidates.find((item) => item.id === event.target.value) ?? null;
+                const candidate = candidates.find((item) => item.id === event.target.value) ?? null;
                 props.onChange(captureConfigPatchForCandidate(source, candidate));
               }}
             >
               <option value="">Unassigned audio device</option>
               {candidates
-                .filter(
-                  (candidate) =>
-                    candidate.kind === "microphone" ||
-                    candidate.kind === "system_audio",
-                )
+                .filter((candidate) => candidate.kind === "microphone" || candidate.kind === "system_audio")
                 .map((candidate) => (
                   <option key={candidate.id} value={candidate.id}>
                     {candidate.name}
@@ -10181,9 +8988,7 @@ function SourceConfigEditor(props: {
             <label className="check-row">
               <input
                 checked={source.config.monitor_enabled ?? false}
-                onChange={(event) =>
-                  props.onChange({ monitor_enabled: event.target.checked })
-                }
+                onChange={(event) => props.onChange({ monitor_enabled: event.target.checked })}
                 type="checkbox"
               />
               Monitor
@@ -10192,9 +8997,7 @@ function SourceConfigEditor(props: {
           <label className="check-row">
             <input
               checked={source.config.meter_enabled ?? true}
-              onChange={(event) =>
-                props.onChange({ meter_enabled: event.target.checked })
-              }
+              onChange={(event) => props.onChange({ meter_enabled: event.target.checked })}
               type="checkbox"
             />
             Meter enabled
@@ -10215,11 +9018,7 @@ function SourceConfigEditor(props: {
             onClick={() => props.onPickAsset(source.config.media_type ?? "image")}
             type="button"
           >
-            {source.config.media_type === "video" ? (
-              <FileVideo size={14} />
-            ) : (
-              <ImageIcon size={14} />
-            )}
+            {source.config.media_type === "video" ? <FileVideo size={14} /> : <ImageIcon size={14} />}
             Choose Asset
           </button>
           <div className="form-grid">
@@ -10294,10 +9093,7 @@ function SourceConfigEditor(props: {
                     value={source.config.playback_state ?? "playing"}
                     onChange={(event) =>
                       props.onChange({
-                        playback_state: event.target.value as
-                          | "playing"
-                          | "paused"
-                          | "stopped",
+                        playback_state: event.target.value as "playing" | "paused" | "stopped",
                       })
                     }
                   >
@@ -10309,9 +9105,7 @@ function SourceConfigEditor(props: {
                 <SceneNumberInput
                   label="Timeline Position MS"
                   min={0}
-                  onChange={(timeline_position_ms) =>
-                    props.onChange({ timeline_position_ms })
-                  }
+                  onChange={(timeline_position_ms) => props.onChange({ timeline_position_ms })}
                   step={100}
                   value={source.config.timeline_position_ms ?? 0}
                 />
@@ -10343,11 +9137,7 @@ function SourceConfigEditor(props: {
     case "browser_overlay":
       return (
         <div className="source-config-editor">
-          <TextInput
-            label="URL"
-            onChange={(url) => props.onChange({ url })}
-            value={source.config.url ?? ""}
-          />
+          <TextInput label="URL" onChange={(url) => props.onChange({ url })} value={source.config.url ?? ""} />
           <div className="form-grid">
             <SceneNumberInput
               label="Viewport Width"
@@ -10374,9 +9164,7 @@ function SourceConfigEditor(props: {
             <SceneNumberInput
               label="Refresh Interval MS"
               min={250}
-              onChange={(refresh_interval_ms) =>
-                props.onChange({ refresh_interval_ms })
-              }
+              onChange={(refresh_interval_ms) => props.onChange({ refresh_interval_ms })}
               value={source.config.refresh_interval_ms ?? 1000}
             />
             <label>
@@ -10399,9 +9187,7 @@ function SourceConfigEditor(props: {
           <label>
             Custom CSS
             <textarea
-              onChange={(event) =>
-                props.onChange({ custom_css: event.target.value || null })
-              }
+              onChange={(event) => props.onChange({ custom_css: event.target.value || null })}
               rows={3}
               value={source.config.custom_css ?? ""}
             />
@@ -10428,9 +9214,7 @@ function SourceConfigEditor(props: {
             />
             <TextInput
               label="Font File URI"
-              onChange={(font_file_uri) =>
-                props.onChange({ font_file_uri: font_file_uri || null })
-              }
+              onChange={(font_file_uri) => props.onChange({ font_file_uri: font_file_uri || null })}
               value={source.config.font_file_uri ?? ""}
             />
             <SceneNumberInput
@@ -10458,11 +9242,7 @@ function SourceConfigEditor(props: {
             Choose Font
           </button>
           <div className="form-grid">
-            <TextInput
-              label="Color"
-              onChange={(color) => props.onChange({ color })}
-              value={source.config.color}
-            />
+            <TextInput label="Color" onChange={(color) => props.onChange({ color })} value={source.config.color} />
             <label>
               Align
               <select
@@ -10523,9 +9303,7 @@ function SourceConfigEditor(props: {
               label="Background Opacity"
               min={0}
               max={1}
-              onChange={(background_opacity) =>
-                props.onChange({ background_opacity })
-              }
+              onChange={(background_opacity) => props.onChange({ background_opacity })}
               step={0.05}
               value={source.config.background_opacity ?? 0}
             />
@@ -10550,9 +9328,7 @@ function GroupChildManager(props: {
   scene: Scene;
   source: Extract<SceneSource, { kind: "group" }>;
 }) {
-  const sourceById = new Map(
-    props.scene.sources.map((source) => [source.id, source]),
-  );
+  const sourceById = new Map(props.scene.sources.map((source) => [source.id, source]));
   const parentMap = sceneSourceParentMap(props.scene);
   const selectedIds = new Set(props.source.config.child_source_ids);
   const duplicateIds = duplicateSourceIds(props.source.config.child_source_ids);
@@ -10564,11 +9340,7 @@ function GroupChildManager(props: {
     .map((source) => {
       const parentId = parentMap.get(source.id) ?? null;
       const groupedElsewhere = parentId !== null && parentId !== props.source.id;
-      const createsCycle = groupWouldCreateCycle(
-        props.scene,
-        source.id,
-        props.source.id,
-      );
+      const createsCycle = groupWouldCreateCycle(props.scene, source.id, props.source.id);
       const disabled = groupedElsewhere || createsCycle;
       const detail = groupedElsewhere
         ? `Already grouped by ${sourceById.get(parentId)?.name ?? parentId}`
@@ -10590,25 +9362,18 @@ function GroupChildManager(props: {
       props.onChange(uniqueSourceIds([...props.source.config.child_source_ids, childId]));
       return;
     }
-    props.onChange(
-      props.source.config.child_source_ids.filter((sourceId) => sourceId !== childId),
-    );
+    props.onChange(props.source.config.child_source_ids.filter((sourceId) => sourceId !== childId));
   }
 
   return (
     <div className="group-child-manager" data-testid="designer-group-child-manager">
       <div className="group-child-manager-header">
         <strong>Group Children</strong>
-        <Pill tone={selectedIds.size > 0 ? "green" : "muted"}>
-          {selectedIds.size} selected
-        </Pill>
+        <Pill tone={selectedIds.size > 0 ? "green" : "muted"}>{selectedIds.size} selected</Pill>
       </div>
       <div className="group-child-list">
         {rows.map(({ detail, disabled, source }) => (
-          <label
-            className={disabled ? "group-child-row disabled" : "group-child-row"}
-            key={source.id}
-          >
+          <label className={disabled ? "group-child-row disabled" : "group-child-row"} key={source.id}>
             <input
               checked={selectedIds.has(source.id)}
               disabled={disabled && !selectedIds.has(source.id)}
@@ -10624,17 +9389,11 @@ function GroupChildManager(props: {
           </label>
         ))}
       </div>
-      {rows.length === 0 && (
-        <div className="empty compact-empty">No eligible sources in this scene</div>
-      )}
+      {rows.length === 0 && <div className="empty compact-empty">No eligible sources in this scene</div>}
       {(missingIds.length > 0 || duplicateIds.length > 0) && (
         <div className="group-child-warnings">
-          {missingIds.length > 0 && (
-            <span>Missing child ID(s): {missingIds.join(", ")}</span>
-          )}
-          {duplicateIds.length > 0 && (
-            <span>Duplicate child ID(s): {duplicateIds.join(", ")}</span>
-          )}
+          {missingIds.length > 0 && <span>Missing child ID(s): {missingIds.join(", ")}</span>}
+          {duplicateIds.length > 0 && <span>Duplicate child ID(s): {duplicateIds.join(", ")}</span>}
         </div>
       )}
     </div>
@@ -10666,18 +9425,8 @@ function Dashboard(props: {
           tone={props.streamActive ? "green" : "muted"}
           value={props.streamActive ? "Live" : "Idle"}
         />
-        <Metric
-          icon={<MapPin size={20} />}
-          label="Destination"
-          tone="amber"
-          value={props.activeDestination}
-        />
-        <Metric
-          icon={<Terminal size={20} />}
-          label="Engine"
-          tone="muted"
-          value={props.engine}
-        />
+        <Metric icon={<MapPin size={20} />} label="Destination" tone="amber" value={props.activeDestination} />
+        <Metric icon={<Terminal size={20} />} label="Engine" tone="muted" value={props.engine} />
       </div>
 
       <div className="two-column">
@@ -10703,9 +9452,7 @@ function Dashboard(props: {
             <div className="check-list">
               <div className="check-row-compact">
                 <strong>Overall</strong>
-                <Pill tone={preflightTone(props.preflight.overall)}>
-                  {preflightLabel(props.preflight.overall)}
-                </Pill>
+                <Pill tone={preflightTone(props.preflight.overall)}>{preflightLabel(props.preflight.overall)}</Pill>
               </div>
               {props.preflight.checks.map((check) => (
                 <div className="check-row-compact" key={check.id}>
@@ -10713,9 +9460,7 @@ function Dashboard(props: {
                     <strong>{check.label}</strong>
                     <span>{check.detail}</span>
                   </div>
-                  <Pill tone={preflightTone(check.status)}>
-                    {preflightLabel(check.status)}
-                  </Pill>
+                  <Pill tone={preflightTone(check.status)}>{preflightLabel(check.status)}</Pill>
                 </div>
               ))}
             </div>
@@ -10778,9 +9523,7 @@ function DestinationsPage(props: {
                 <strong>{destination.name}</strong>
                 <span>{destination.ingest_url}</span>
               </div>
-              <Pill tone={destination.enabled ? "green" : "muted"}>
-                {platformLabels[destination.platform]}
-              </Pill>
+              <Pill tone={destination.enabled ? "green" : "muted"}>{platformLabels[destination.platform]}</Pill>
               <Pill tone={destination.stream_key_ref ? "amber" : "muted"}>
                 {destination.stream_key_ref ? "key stored" : "no key"}
               </Pill>
@@ -10811,19 +9554,11 @@ function DestinationsPage(props: {
 
       <section className="panel">
         <PanelTitle title={isEditing ? "Edit Destination" : "Create Destination"} />
-        <button
-          className="secondary-button full"
-          onClick={props.onUseTwitchManual}
-          type="button"
-        >
+        <button className="secondary-button full" onClick={props.onUseTwitchManual} type="button">
           <Radio size={16} />
           Twitch Manual RTMP
         </button>
-        <button
-          className="secondary-button full"
-          onClick={props.onImportTwitchKey}
-          type="button"
-        >
+        <button className="secondary-button full" onClick={props.onImportTwitchKey} type="button">
           <Link2 size={16} />
           Import Twitch Key from Console
         </button>
@@ -10831,9 +9566,7 @@ function DestinationsPage(props: {
           <TextInput
             label="Name"
             value={props.destinationForm.name}
-            onChange={(name) =>
-              props.onFormChange({ ...props.destinationForm, name })
-            }
+            onChange={(name) => props.onFormChange({ ...props.destinationForm, name })}
           />
           <label>
             Platform
@@ -10856,21 +9589,15 @@ function DestinationsPage(props: {
           <TextInput
             label="Ingest URL"
             value={props.destinationForm.ingest_url ?? ""}
-            onChange={(ingest_url) =>
-              props.onFormChange({ ...props.destinationForm, ingest_url })
-            }
+            onChange={(ingest_url) => props.onFormChange({ ...props.destinationForm, ingest_url })}
           />
           <TextInput
             label="Stream Key"
             type="password"
             value={props.destinationForm.stream_key ?? ""}
-            onChange={(stream_key) =>
-              props.onFormChange({ ...props.destinationForm, stream_key })
-            }
+            onChange={(stream_key) => props.onFormChange({ ...props.destinationForm, stream_key })}
           />
-          {isEditing && (
-            <p className="form-hint">Leave blank to keep the stored key.</p>
-          )}
+          {isEditing && <p className="form-hint">Leave blank to keep the stored key.</p>}
           <label className="check-row">
             <input
               checked={props.destinationForm.enabled ?? true}
@@ -10890,11 +9617,7 @@ function DestinationsPage(props: {
               {isEditing ? "Save Destination" : "Add Destination"}
             </button>
             {isEditing && (
-              <button
-                className="secondary-button"
-                onClick={props.onCancelEdit}
-                type="button"
-              >
+              <button className="secondary-button" onClick={props.onCancelEdit} type="button">
                 <X size={16} />
                 Cancel
               </button>
@@ -10928,8 +9651,8 @@ function RecordingProfilesPage(props: {
               <div>
                 <strong>{profile.name}</strong>
                 <span>
-                  {profile.resolution.width}x{profile.resolution.height} -{" "}
-                  {profile.framerate} fps - {profile.bitrate_kbps} kbps
+                  {profile.resolution.width}x{profile.resolution.height} - {profile.framerate} fps -{" "}
+                  {profile.bitrate_kbps} kbps
                 </span>
               </div>
               <Pill tone="amber">{profile.container}</Pill>
@@ -10970,16 +9693,12 @@ function RecordingProfilesPage(props: {
           <TextInput
             label="Output Folder"
             value={props.profileForm.output_folder}
-            onChange={(output_folder) =>
-              props.onFormChange({ ...props.profileForm, output_folder })
-            }
+            onChange={(output_folder) => props.onFormChange({ ...props.profileForm, output_folder })}
           />
           <TextInput
             label="Filename Pattern"
             value={props.profileForm.filename_pattern}
-            onChange={(filename_pattern) =>
-              props.onFormChange({ ...props.profileForm, filename_pattern })
-            }
+            onChange={(filename_pattern) => props.onFormChange({ ...props.profileForm, filename_pattern })}
           />
           <div className="form-grid">
             <NumberInput
@@ -11007,16 +9726,12 @@ function RecordingProfilesPage(props: {
             <NumberInput
               label="Framerate"
               value={props.profileForm.framerate}
-              onChange={(framerate) =>
-                props.onFormChange({ ...props.profileForm, framerate })
-              }
+              onChange={(framerate) => props.onFormChange({ ...props.profileForm, framerate })}
             />
             <NumberInput
               label="Bitrate"
               value={props.profileForm.bitrate_kbps}
-              onChange={(bitrate_kbps) =>
-                props.onFormChange({ ...props.profileForm, bitrate_kbps })
-              }
+              onChange={(bitrate_kbps) => props.onFormChange({ ...props.profileForm, bitrate_kbps })}
             />
           </div>
           <label>
@@ -11038,9 +9753,7 @@ function RecordingProfilesPage(props: {
             Encoder
             <select
               value={
-                typeof props.profileForm.encoder_preference === "string"
-                  ? props.profileForm.encoder_preference
-                  : "auto"
+                typeof props.profileForm.encoder_preference === "string" ? props.profileForm.encoder_preference : "auto"
               }
               onChange={(event) =>
                 props.onFormChange({
@@ -11060,11 +9773,7 @@ function RecordingProfilesPage(props: {
               {isEditing ? "Save Profile" : "Add Profile"}
             </button>
             {isEditing && (
-              <button
-                className="secondary-button"
-                onClick={props.onCancelEdit}
-                type="button"
-              >
+              <button className="secondary-button" onClick={props.onCancelEdit} type="button">
                 <X size={16} />
                 Cancel
               </button>
@@ -11080,10 +9789,7 @@ function ControlsPage(props: {
   captureInventory: CaptureSourceInventory | null;
   captureSourceSaving: boolean;
   markerLabel: string;
-  onCaptureSourceToggle: (
-    candidate: CaptureSourceCandidate,
-    enabled: boolean,
-  ) => void;
+  onCaptureSourceToggle: (candidate: CaptureSourceCandidate, enabled: boolean) => void;
   onCreateMarker: () => void;
   onMarkerLabelChange: (value: string) => void;
   onStartRecording: () => void;
@@ -11114,8 +9820,7 @@ function ControlsPage(props: {
     props.preflight,
     props.twitchReadiness,
   );
-  const enabledSources =
-    props.settings?.capture_sources.filter((source) => source.enabled) ?? [];
+  const enabledSources = props.settings?.capture_sources.filter((source) => source.enabled) ?? [];
   const defaultProfile = props.settings?.default_recording_profile;
   const sourceCandidates =
     props.captureInventory?.candidates ??
@@ -11141,21 +9846,14 @@ function ControlsPage(props: {
         ) : (
           <div className="source-grid">
             {sourceCandidates.map((candidate) => {
-              const selected = props.settings?.capture_sources.find(
-                (source) => source.id === candidate.id,
-              );
+              const selected = props.settings?.capture_sources.find((source) => source.id === candidate.id);
               const checked = selected?.enabled ?? false;
               return (
                 <label className="source-option" key={candidate.id}>
                   <input
                     checked={checked}
                     disabled={!candidate.available || props.captureSourceSaving}
-                    onChange={(event) =>
-                      props.onCaptureSourceToggle(
-                        candidate,
-                        event.target.checked,
-                      )
-                    }
+                    onChange={(event) => props.onCaptureSourceToggle(candidate, event.target.checked)}
                     type="checkbox"
                   />
                   <div>
@@ -11175,10 +9873,7 @@ function ControlsPage(props: {
         <PanelTitle title="Recording" />
         <label>
           Profile
-          <select
-            value={props.selectedProfileId}
-            onChange={(event) => props.setSelectedProfileId(event.target.value)}
-          >
+          <select value={props.selectedProfileId} onChange={(event) => props.setSelectedProfileId(event.target.value)}>
             {(props.profiles?.recording_profiles ?? []).map((profile) => (
               <option key={profile.id} value={profile.id}>
                 {profile.name}
@@ -11223,9 +9918,7 @@ function ControlsPage(props: {
           Destination
           <select
             value={props.selectedDestinationId}
-            onChange={(event) =>
-              props.setSelectedDestinationId(event.target.value)
-            }
+            onChange={(event) => props.setSelectedDestinationId(event.target.value)}
           >
             {(props.profiles?.stream_destinations ?? []).map((destination) => (
               <option key={destination.id} value={destination.id}>
@@ -11235,12 +9928,7 @@ function ControlsPage(props: {
           </select>
         </label>
         <div className="button-row">
-          <button
-            className="primary-button"
-            disabled={props.streamActive}
-            onClick={props.onStartStream}
-            type="button"
-          >
+          <button className="primary-button" disabled={props.streamActive} onClick={props.onStartStream} type="button">
             <Play size={16} />
             Start Stream
           </button>
@@ -11260,9 +9948,7 @@ function ControlsPage(props: {
         <PanelTitle title="Broadcast Setup" />
         <div className="checklist">
           <div className="checklist-row">
-            <Pill tone={enabledSources.length ? "green" : "amber"}>
-              {enabledSources.length ? "Ready" : "Check"}
-            </Pill>
+            <Pill tone={enabledSources.length ? "green" : "amber"}>{enabledSources.length ? "Ready" : "Check"}</Pill>
             <div>
               <strong>Capture</strong>
               <span>
@@ -11273,9 +9959,7 @@ function ControlsPage(props: {
             </div>
           </div>
           <div className="checklist-row">
-            <Pill tone={defaultProfile ? "green" : "amber"}>
-              {defaultProfile ? "Ready" : "Check"}
-            </Pill>
+            <Pill tone={defaultProfile ? "green" : "amber"}>{defaultProfile ? "Ready" : "Check"}</Pill>
             <div>
               <strong>Quality</strong>
               <span>
@@ -11286,11 +9970,7 @@ function ControlsPage(props: {
             </div>
           </div>
         </div>
-        <button
-          className="secondary-button full"
-          onClick={props.onOpenSettings}
-          type="button"
-        >
+        <button className="secondary-button full" onClick={props.onOpenSettings} type="button">
           <SlidersHorizontal size={16} />
           Open Capture Settings
         </button>
@@ -11301,9 +9981,7 @@ function ControlsPage(props: {
         <div className="checklist">
           {checklist.map((item) => (
             <div className="checklist-row" key={item.label}>
-              <Pill tone={item.ready ? "green" : "amber"}>
-                {item.ready ? "Ready" : "Check"}
-              </Pill>
+              <Pill tone={item.ready ? "green" : "amber"}>{item.ready ? "Ready" : "Check"}</Pill>
               <div>
                 <strong>{item.label}</strong>
                 <span>{item.detail}</span>
@@ -11315,16 +9993,8 @@ function ControlsPage(props: {
 
       <section className="panel">
         <PanelTitle title="Marker" />
-        <TextInput
-          label="Label"
-          value={props.markerLabel}
-          onChange={props.onMarkerLabelChange}
-        />
-        <button
-          className="secondary-button full"
-          onClick={props.onCreateMarker}
-          type="button"
-        >
+        <TextInput label="Label" value={props.markerLabel} onChange={props.onMarkerLabelChange} />
+        <button className="secondary-button full" onClick={props.onCreateMarker} type="button">
           <MapPin size={16} />
           Create Marker
         </button>
@@ -11344,8 +10014,7 @@ function goLiveChecklist(
   const ingestReady = Boolean(destination?.ingest_url?.trim());
   const keyReady = Boolean(destination?.stream_key_ref);
   const runnerReady = Boolean(runner?.running) && engineMode !== "dry_run";
-  const preflightReady =
-    !preflight || preflight.overall === "ready" || preflight.overall === "warning";
+  const preflightReady = !preflight || preflight.overall === "ready" || preflight.overall === "warning";
 
   return [
     {
@@ -11358,9 +10027,7 @@ function goLiveChecklist(
     {
       label: "Stream Key",
       ready: keyReady || !isTwitch,
-      detail: keyReady
-        ? "A local stream key is stored."
-        : "Store a Twitch stream key before going live.",
+      detail: keyReady ? "A local stream key is stored." : "Store a Twitch stream key before going live.",
     },
     {
       label: "Twitch Readiness",
@@ -11374,49 +10041,35 @@ function goLiveChecklist(
     {
       label: "Media Runner",
       ready: runnerReady,
-      detail: runnerReady
-        ? "Real RTMP runner is available."
-        : "Studio is still using dry-run media.",
+      detail: runnerReady ? "Real RTMP runner is available." : "Studio is still using dry-run media.",
     },
     {
       label: "Permissions",
       ready: preflightReady,
-      detail: preflight
-        ? `Preflight status is ${preflight.overall}.`
-        : "Preflight status has not loaded yet.",
+      detail: preflight ? `Preflight status is ${preflight.overall}.` : "Preflight status has not loaded yet.",
     },
   ];
 }
 
-function mergeSceneSourcePatch(
-  source: SceneSource,
-  patch: SceneSourcePatch,
-): SceneSource {
+function mergeSceneSourcePatch(source: SceneSource, patch: SceneSourcePatch): SceneSource {
   return {
     ...source,
     ...patch,
-    position: patch.position
-      ? { ...source.position, ...patch.position }
-      : source.position,
+    position: patch.position ? { ...source.position, ...patch.position } : source.position,
     size: patch.size ? { ...source.size, ...patch.size } : source.size,
     crop: patch.crop ? { ...source.crop, ...patch.crop } : source.crop,
     config: patch.config ? { ...source.config, ...patch.config } : source.config,
   } as SceneSource;
 }
 
-function formatSceneValidationSummary(
-  issues: Array<{ path: string; message: string }>,
-): string {
+function formatSceneValidationSummary(issues: Array<{ path: string; message: string }>): string {
   if (issues.length === 0) return "no validation issues";
   const firstIssue = issues[0];
   const suffix = issues.length > 1 ? ` and ${issues.length - 1} more` : "";
   return `${firstIssue.path}: ${firstIssue.message}${suffix}`;
 }
 
-function mergeSceneTransitionPatch(
-  transition: SceneTransition,
-  patch: SceneTransitionPatch,
-): SceneTransition {
+function mergeSceneTransitionPatch(transition: SceneTransition, patch: SceneTransitionPatch): SceneTransition {
   const nextKind = patch.kind ?? transition.kind;
   const kindChanged = nextKind !== transition.kind;
   const config = kindChanged
@@ -11435,13 +10088,8 @@ function mergeSceneTransitionPatch(
     duration_ms:
       nextKind === "cut"
         ? 0
-        : (patch.duration_ms ??
-          (kindChanged
-            ? defaultSceneTransitionDuration(nextKind)
-            : transition.duration_ms)),
-    easing:
-      patch.easing ??
-      (kindChanged ? defaultSceneTransitionEasing(nextKind) : transition.easing),
+        : (patch.duration_ms ?? (kindChanged ? defaultSceneTransitionDuration(nextKind) : transition.duration_ms)),
+    easing: patch.easing ?? (kindChanged ? defaultSceneTransitionEasing(nextKind) : transition.easing),
     kind: nextKind,
   };
 }
@@ -11467,18 +10115,13 @@ function duplicateSourceIds(sourceIds: string[]): string[] {
   return [...duplicates];
 }
 
-function removeGroupChildRefs(
-  source: SceneSource,
-  removedSourceIds: Set<string>,
-): SceneSource {
+function removeGroupChildRefs(source: SceneSource, removedSourceIds: Set<string>): SceneSource {
   if (source.kind !== "group") return source;
   return {
     ...source,
     config: {
       ...source.config,
-      child_source_ids: source.config.child_source_ids.filter(
-        (childId) => !removedSourceIds.has(childId),
-      ),
+      child_source_ids: source.config.child_source_ids.filter((childId) => !removedSourceIds.has(childId)),
     },
   };
 }
@@ -11487,14 +10130,8 @@ function cloneSceneSource(source: SceneSource): SceneSource {
   return JSON.parse(JSON.stringify(source)) as SceneSource;
 }
 
-function cloneDesignerSourcesForInsert(
-  sources: SceneSource[],
-  scene: Scene,
-  suffix: string,
-): SceneSource[] {
-  const sourceIdMap = new Map(
-    sources.map((source) => [source.id, designerId("source")]),
-  );
+function cloneDesignerSourcesForInsert(sources: SceneSource[], scene: Scene, suffix: string): SceneSource[] {
+  const sourceIdMap = new Map(sources.map((source) => [source.id, designerId("source")]));
   const nextZIndex = nextSceneZIndex(scene);
   return sources.map((source, index) => {
     const clone = cloneSceneSource(source);
@@ -11518,10 +10155,7 @@ function cloneDesignerSourcesForInsert(
   });
 }
 
-function findAvailableDuplicatePosition(
-  scene: Scene,
-  source: SceneSource,
-): ScenePoint {
+function findAvailableDuplicatePosition(scene: Scene, source: SceneSource): ScenePoint {
   const baseOffset = 32;
   for (let index = 1; index <= 12; index += 1) {
     const position = {
@@ -11529,12 +10163,7 @@ function findAvailableDuplicatePosition(
       y: source.position.y + baseOffset * index,
     };
     const candidate = { ...source, position };
-    if (
-      !scene.sources.some(
-        (existing) =>
-          existing.id !== source.id && sourceIntersectsSource(candidate, existing),
-      )
-    ) {
+    if (!scene.sources.some((existing) => existing.id !== source.id && sourceIntersectsSource(candidate, existing))) {
       return position;
     }
   }
@@ -11589,15 +10218,11 @@ function defaultSceneTransitionDuration(kind: SceneTransition["kind"]): number {
   }
 }
 
-function defaultSceneTransitionEasing(
-  kind: SceneTransition["kind"],
-): SceneTransition["easing"] {
+function defaultSceneTransitionEasing(kind: SceneTransition["kind"]): SceneTransition["easing"] {
   return kind === "cut" ? "linear" : "ease_in_out";
 }
 
-function defaultSceneTransitionConfig(
-  kind: SceneTransition["kind"],
-): Record<string, unknown> {
+function defaultSceneTransitionConfig(kind: SceneTransition["kind"]): Record<string, unknown> {
   switch (kind) {
     case "cut":
       return {};
@@ -11620,16 +10245,12 @@ function nextSceneZIndex(scene: Scene): number {
 
 function designerId(prefix: string): string {
   const random =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? crypto.randomUUID()
-      : Math.random().toString(36).slice(2);
+    typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2);
   return `${prefix}-${random}`;
 }
 
 function firstSceneSourceId(collection: SceneCollection): string {
-  const scene =
-    collection.scenes.find((item) => item.id === collection.active_scene_id) ??
-    collection.scenes[0];
+  const scene = collection.scenes.find((item) => item.id === collection.active_scene_id) ?? collection.scenes[0];
   return scene?.sources[0]?.id ?? "";
 }
 
@@ -11642,24 +10263,14 @@ function previewFallbackToSceneId(collection: SceneCollection, fromSceneId: stri
   );
 }
 
-function sceneCollectionContainsSource(
-  collection: SceneCollection,
-  sourceId: string,
-): boolean {
+function sceneCollectionContainsSource(collection: SceneCollection, sourceId: string): boolean {
   if (!sourceId) return false;
-  return collection.scenes.some((scene) =>
-    scene.sources.some((source) => source.id === sourceId),
-  );
+  return collection.scenes.some((scene) => scene.sources.some((source) => source.id === sourceId));
 }
 
-function sortedSceneSources(
-  scene: Scene,
-  direction: "asc" | "desc" = "desc",
-): SceneSource[] {
+function sortedSceneSources(scene: Scene, direction: "asc" | "desc" = "desc"): SceneSource[] {
   const multiplier = direction === "asc" ? 1 : -1;
-  return [...scene.sources].sort(
-    (left, right) => (left.z_index - right.z_index) * multiplier,
-  );
+  return [...scene.sources].sort((left, right) => (left.z_index - right.z_index) * multiplier);
 }
 
 function sceneSourceParentMap(scene: Scene): Map<string, string> {
@@ -11683,9 +10294,7 @@ function buildSourceStackTree(
   const sourceById = new Map(scene.sources.map((source) => [source.id, source]));
   const parentMap = sceneSourceParentMap(scene);
   const collapsed = new Set(collapsedGroupIds);
-  const isolatedGroup = isolatedGroupId
-    ? sourceById.get(isolatedGroupId)
-    : undefined;
+  const isolatedGroup = isolatedGroupId ? sourceById.get(isolatedGroupId) : undefined;
   const roots =
     isolatedGroup?.kind === "group"
       ? isolatedGroup.config.child_source_ids
@@ -11719,9 +10328,7 @@ function buildSourceStackTree(
   return flatten(
     roots
       .sort((left, right) => right.z_index - left.z_index)
-      .map((source) =>
-        buildItem(source, 0, isolatedGroup?.kind === "group" ? isolatedGroup.id : null, new Set()),
-      ),
+      .map((source) => buildItem(source, 0, isolatedGroup?.kind === "group" ? isolatedGroup.id : null, new Set())),
   );
 }
 
@@ -11774,11 +10381,7 @@ function sceneSourceWorldPosition(scene: Scene, sourceId: string): ScenePoint {
   return position;
 }
 
-function groupWouldCreateCycle(
-  scene: Scene,
-  sourceId: string,
-  parentGroupId: string | null,
-): boolean {
+function groupWouldCreateCycle(scene: Scene, sourceId: string, parentGroupId: string | null): boolean {
   if (!parentGroupId) return false;
   const sourceById = new Map(scene.sources.map((source) => [source.id, source]));
   const source = sourceById.get(sourceId);
@@ -11799,15 +10402,10 @@ function groupWouldCreateCycle(
 }
 
 function sortedSceneSourceFilters(filters: SceneSourceFilter[]): SceneSourceFilter[] {
-  return [...filters].sort(
-    (left, right) => left.order - right.order || left.id.localeCompare(right.id),
-  );
+  return [...filters].sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
 }
 
-function createDefaultSceneSourceFilter(
-  kind: SceneSourceFilterKind,
-  order: number,
-): SceneSourceFilter {
+function createDefaultSceneSourceFilter(kind: SceneSourceFilterKind, order: number): SceneSourceFilter {
   return {
     id: designerId("filter"),
     name: sceneFilterKindLabels[kind],
@@ -11818,9 +10416,7 @@ function createDefaultSceneSourceFilter(
   };
 }
 
-function defaultSceneSourceFilterConfig(
-  kind: SceneSourceFilterKind,
-): Record<string, unknown> {
+function defaultSceneSourceFilterConfig(kind: SceneSourceFilterKind): Record<string, unknown> {
   switch (kind) {
     case "color_correction":
       return { brightness: 0, contrast: 1, saturation: 1, gamma: 1 };
@@ -11839,9 +10435,20 @@ function defaultSceneSourceFilterConfig(
     case "audio_gain":
       return { gain_db: 0 };
     case "noise_gate":
-      return { close_threshold_db: -45, open_threshold_db: -35, attack_ms: 10, release_ms: 120 };
+      return {
+        close_threshold_db: -45,
+        open_threshold_db: -35,
+        attack_ms: 10,
+        release_ms: 120,
+      };
     case "compressor":
-      return { threshold_db: -18, ratio: 3, attack_ms: 8, release_ms: 120, makeup_gain_db: 0 };
+      return {
+        threshold_db: -18,
+        ratio: 3,
+        attack_ms: 8,
+        release_ms: 120,
+        makeup_gain_db: 0,
+      };
   }
 }
 
@@ -11849,20 +10456,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function configNumber(
-  config: Record<string, unknown>,
-  key: string,
-  fallback: number,
-): number {
+function configNumber(config: Record<string, unknown>, key: string, fallback: number): number {
   const value = config[key];
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-function configString(
-  config: Record<string, unknown>,
-  key: string,
-  fallback: string,
-): string {
+function configString(config: Record<string, unknown>, key: string, fallback: string): string {
   const value = config[key];
   return typeof value === "string" ? value : fallback;
 }
@@ -11873,11 +10472,7 @@ function isEditableEventTarget(target: EventTarget | null): boolean {
   return ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName);
 }
 
-function drawCompositorPreview(
-  canvas: HTMLCanvasElement | null,
-  graph: CompositorGraph,
-  selectedSourceId: string,
-) {
+function drawCompositorPreview(canvas: HTMLCanvasElement | null, graph: CompositorGraph, selectedSourceId: string) {
   if (!canvas) return;
   const context = canvas.getContext("2d");
   if (!context) return;
@@ -11945,9 +10540,7 @@ function drawRuntimePreviewFrame(
   }
   context.restore();
 
-  target.nodes.forEach((node) =>
-    drawRuntimePreviewNode(context, node, selectedSourceId),
-  );
+  target.nodes.forEach((node) => drawRuntimePreviewNode(context, node, selectedSourceId));
 }
 
 function drawRuntimePreviewImage(
@@ -12031,12 +10624,7 @@ function drawRuntimePreviewNode(
   context.fillStyle = "#f4f8ff";
   context.font = `700 ${labelSize}px Inter, system-ui, sans-serif`;
   context.textBaseline = "top";
-  context.fillText(
-    node.name,
-    -width / 2 + labelInset,
-    -height / 2 + labelInset,
-    Math.max(48, width - labelInset * 2),
-  );
+  context.fillText(node.name, -width / 2 + labelInset, -height / 2 + labelInset, Math.max(48, width - labelInset * 2));
   context.font = `500 ${Math.max(14, labelSize * 0.58)}px Inter, system-ui, sans-serif`;
   context.fillStyle = "rgba(244, 248, 255, 0.72)";
   context.fillText(
@@ -12105,12 +10693,7 @@ function drawCompositorNode(
   context.fillStyle = "#f4f8ff";
   context.font = `700 ${labelSize}px Inter, system-ui, sans-serif`;
   context.textBaseline = "top";
-  context.fillText(
-    node.name,
-    -width / 2 + labelInset,
-    -height / 2 + labelInset,
-    Math.max(48, width - labelInset * 2),
-  );
+  context.fillText(node.name, -width / 2 + labelInset, -height / 2 + labelInset, Math.max(48, width - labelInset * 2));
   context.font = `500 ${Math.max(16, labelSize * 0.58)}px Inter, system-ui, sans-serif`;
   context.fillStyle = "rgba(244, 248, 255, 0.72)";
   context.fillText(
@@ -12149,30 +10732,25 @@ function drawCompositorNodeContent(
   }
 }
 
-function drawTextSourceContent(
-  context: CanvasRenderingContext2D,
-  node: CompositorNode,
-  width: number,
-  height: number,
-) {
-  const config = node.config as { text?: string; font_size?: number; color?: string; align?: string };
+function drawTextSourceContent(context: CanvasRenderingContext2D, node: CompositorNode, width: number, height: number) {
+  const config = node.config as {
+    text?: string;
+    font_size?: number;
+    color?: string;
+    align?: string;
+  };
   const text = config.text?.trim() || node.name;
   const fontSize = clamp(Number(config.font_size ?? height * 0.48), 18, Math.max(18, height * 0.72));
   context.fillStyle = config.color || "#f4f8ff";
   context.font = `700 ${fontSize}px Inter, system-ui, sans-serif`;
-  context.textAlign =
-    config.align === "left" ? "left" : config.align === "right" ? "right" : "center";
+  context.textAlign = config.align === "left" ? "left" : config.align === "right" ? "right" : "center";
   context.textBaseline = "middle";
   const x = config.align === "left" ? -width / 2 + 24 : config.align === "right" ? width / 2 - 24 : 0;
   context.fillText(text, x, 0, Math.max(32, width - 48));
   context.textAlign = "left";
 }
 
-function drawAudioMeterContent(
-  context: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-) {
+function drawAudioMeterContent(context: CanvasRenderingContext2D, width: number, height: number) {
   const inset = Math.max(10, Math.min(24, height * 0.2));
   const barCount = 18;
   const gap = 5;
@@ -12196,7 +10774,10 @@ function drawBrowserOverlayContent(
   width: number,
   height: number,
 ) {
-  const config = node.config as { url?: string | null; viewport?: { width: number; height: number } };
+  const config = node.config as {
+    url?: string | null;
+    viewport?: { width: number; height: number };
+  };
   const title = config.url || `${config.viewport?.width ?? 1280}x${config.viewport?.height ?? 720} web overlay`;
   context.fillStyle = "rgba(255, 255, 255, 0.1)";
   context.fillRect(-width / 2 + 18, -height / 2 + 18, width - 36, 34);
@@ -12212,7 +10793,10 @@ function drawMediaSourceContent(
   width: number,
   height: number,
 ) {
-  const config = node.config as { asset_uri?: string | null; media_type?: string };
+  const config = node.config as {
+    asset_uri?: string | null;
+    media_type?: string;
+  };
   const label = config.asset_uri || `No ${config.media_type ?? "media"} selected`;
   const tile = 28;
   for (let y = -height / 2; y < height / 2; y += tile) {
@@ -12230,11 +10814,7 @@ function drawMediaSourceContent(
   context.fillText(label, -width / 2 + 24, 0, Math.max(32, width - 48));
 }
 
-function drawGroupSourceContent(
-  context: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-) {
+function drawGroupSourceContent(context: CanvasRenderingContext2D, width: number, height: number) {
   context.strokeStyle = "rgba(244, 248, 255, 0.35)";
   context.lineWidth = 2;
   context.setLineDash([14, 12]);
@@ -12264,10 +10844,7 @@ function compositorNodeLabel(node: CompositorNode, graph: CompositorGraph): stri
   )} on ${graph.output.width}x${graph.output.height}`;
 }
 
-function sceneSourcePreviewStyle(
-  source: SceneSource,
-  scene: Scene,
-): CSSProperties {
+function sceneSourcePreviewStyle(source: SceneSource, scene: Scene): CSSProperties {
   const left = (source.position.x / scene.canvas.width) * 100;
   const top = (source.position.y / scene.canvas.height) * 100;
   const width = (source.size.width / scene.canvas.width) * 100;
@@ -12351,21 +10928,15 @@ function distributeSourcePositions(
 ): Map<string, Partial<ScenePoint>> {
   const ordered = [...sources].sort((left, right) =>
     axis === "horizontal"
-      ? left.position.x + left.size.width / 2 -
-        (right.position.x + right.size.width / 2)
-      : left.position.y + left.size.height / 2 -
-        (right.position.y + right.size.height / 2),
+      ? left.position.x + left.size.width / 2 - (right.position.x + right.size.width / 2)
+      : left.position.y + left.size.height / 2 - (right.position.y + right.size.height / 2),
   );
   const first = ordered[0];
   const last = ordered[ordered.length - 1];
   const firstCenter =
-    axis === "horizontal"
-      ? first.position.x + first.size.width / 2
-      : first.position.y + first.size.height / 2;
+    axis === "horizontal" ? first.position.x + first.size.width / 2 : first.position.y + first.size.height / 2;
   const lastCenter =
-    axis === "horizontal"
-      ? last.position.x + last.size.width / 2
-      : last.position.y + last.size.height / 2;
+    axis === "horizontal" ? last.position.x + last.size.width / 2 : last.position.y + last.size.height / 2;
   const spacing = (lastCenter - firstCenter) / (ordered.length - 1);
   const positions = new Map<string, Partial<ScenePoint>>();
 
@@ -12382,10 +10953,7 @@ function distributeSourcePositions(
   return positions;
 }
 
-function sourceIntersectsSource(
-  left: SceneSource,
-  right: SceneSource,
-): boolean {
+function sourceIntersectsSource(left: SceneSource, right: SceneSource): boolean {
   return sourceIntersectsRect(right, {
     x: left.position.x,
     y: left.position.y,
@@ -12433,10 +11001,7 @@ function canvasPointFromPointerEvent(
   };
 }
 
-function marqueeStyle(
-  state: DesignerMarqueeState,
-  scene: Scene,
-): CSSProperties {
+function marqueeStyle(state: DesignerMarqueeState, scene: Scene): CSSProperties {
   const rect = sceneRectFromPoints(state.start, state.current);
   return {
     left: `${(rect.x / scene.canvas.width) * 100}%`,
@@ -12462,22 +11027,14 @@ function sceneRectCenter(rect: SceneRect): ScenePoint {
   };
 }
 
-function scenePointToClientPoint(
-  point: ScenePoint,
-  scene: Scene,
-  canvasRect: DOMRect,
-): ScenePoint {
+function scenePointToClientPoint(point: ScenePoint, scene: Scene, canvasRect: DOMRect): ScenePoint {
   return {
     x: canvasRect.left + (point.x / scene.canvas.width) * canvasRect.width,
     y: canvasRect.top + (point.y / scene.canvas.height) * canvasRect.height,
   };
 }
 
-function rotatePointAroundCenter(
-  point: ScenePoint,
-  center: ScenePoint,
-  degrees: number,
-): ScenePoint {
+function rotatePointAroundCenter(point: ScenePoint, center: ScenePoint, degrees: number): ScenePoint {
   const radians = (degrees * Math.PI) / 180;
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
@@ -12489,16 +11046,8 @@ function rotatePointAroundCenter(
   };
 }
 
-function pointerAngleDegrees(
-  clientX: number,
-  clientY: number,
-  centerClientX: number,
-  centerClientY: number,
-): number {
-  return (
-    (Math.atan2(clientY - centerClientY, clientX - centerClientX) * 180) /
-    Math.PI
-  );
+function pointerAngleDegrees(clientX: number, clientY: number, centerClientX: number, centerClientY: number): number {
+  return (Math.atan2(clientY - centerClientY, clientX - centerClientX) * 180) / Math.PI;
 }
 
 function snapGuideStyle(guide: DesignerSnapGuide, scene: Scene): CSSProperties {
@@ -12625,11 +11174,7 @@ function snapTargetsForAxis(
     if (ignoredSourceIds.has(source.id)) return;
     const start = axis === "x" ? source.position.x : source.position.y;
     const size = axis === "x" ? source.size.width : source.size.height;
-    targets.push(
-      { coordinate: start },
-      { coordinate: start + size / 2 },
-      { coordinate: start + size },
-    );
+    targets.push({ coordinate: start }, { coordinate: start + size / 2 }, { coordinate: start + size });
   });
   return targets;
 }
@@ -12640,8 +11185,11 @@ function nearestSnapCandidate(
   threshold = designerSnapThreshold,
 ): { coordinate: number; position: number } | null {
   if (threshold < 0) return null;
-  let nearest: { coordinate: number; position: number; distance: number } | null =
-    null;
+  let nearest: {
+    coordinate: number;
+    position: number;
+    distance: number;
+  } | null = null;
   edges.forEach((edge) => {
     targets.forEach((target) => {
       const distance = Math.abs(edge.coordinate - target.coordinate);
@@ -12657,13 +11205,7 @@ function nearestSnapCandidate(
   return nearest;
 }
 
-type SourceCanvasAlignment =
-  | "left"
-  | "horizontal-center"
-  | "right"
-  | "top"
-  | "vertical-center"
-  | "bottom";
+type SourceCanvasAlignment = "left" | "horizontal-center" | "right" | "top" | "vertical-center" | "bottom";
 
 function fitSourceToCanvas(scene: Scene): SceneSourcePatch {
   return {
@@ -12677,10 +11219,7 @@ function fitSourceToCanvas(scene: Scene): SceneSourcePatch {
   };
 }
 
-function centerSourceOnCanvas(
-  scene: Scene,
-  source: SceneSource,
-): SceneSourcePatch {
+function centerSourceOnCanvas(scene: Scene, source: SceneSource): SceneSourcePatch {
   return {
     position: {
       x: Math.round((scene.canvas.width - source.size.width) / 2),
@@ -12689,11 +11228,7 @@ function centerSourceOnCanvas(
   };
 }
 
-function alignSourceToCanvas(
-  scene: Scene,
-  source: SceneSource,
-  alignment: SourceCanvasAlignment,
-): SceneSourcePatch {
+function alignSourceToCanvas(scene: Scene, source: SceneSource, alignment: SourceCanvasAlignment): SceneSourcePatch {
   switch (alignment) {
     case "left":
       return { position: { x: 0 } };
@@ -12873,11 +11408,7 @@ function ConnectedAppsPage(props: {
                 : "Studio can create the shared local session used by all three apps."}
             </span>
           </div>
-          <button
-            className="secondary-button"
-            onClick={props.onStartSuiteSession}
-            type="button"
-          >
+          <button className="secondary-button" onClick={props.onStartSuiteSession} type="button">
             <RefreshCw size={16} />
             Start Session
           </button>
@@ -12899,18 +11430,10 @@ function ConnectedAppsPage(props: {
                 <Pill tone={app.suiteSessionId ? "green" : "muted"}>
                   {app.suiteSessionId ? "In session" : "No session"}
                 </Pill>
-                <Pill tone={app.activity ? "amber" : "muted"}>
-                  {app.activity ?? "idle"}
-                </Pill>
-                <Pill tone={suiteStatusTone(app)}>
-                  {suiteStatusLabel(app)}
-                </Pill>
-                <Pill tone={app.installed ? "green" : "red"}>
-                  {app.installed ? "Installed" : "Missing"}
-                </Pill>
-                <Pill tone={app.running ? "green" : "muted"}>
-                  {app.running ? "Running" : "Stopped"}
-                </Pill>
+                <Pill tone={app.activity ? "amber" : "muted"}>{app.activity ?? "idle"}</Pill>
+                <Pill tone={suiteStatusTone(app)}>{suiteStatusLabel(app)}</Pill>
+                <Pill tone={app.installed ? "green" : "red"}>{app.installed ? "Installed" : "Missing"}</Pill>
+                <Pill tone={app.running ? "green" : "muted"}>{app.running ? "Running" : "Stopped"}</Pill>
               </div>
             ))}
           </div>
@@ -12918,18 +11441,12 @@ function ConnectedAppsPage(props: {
       </section>
       <section className="panel">
         <PanelTitle title="Suite Launcher" />
-        <button
-          className="secondary-button full"
-          onClick={props.onLaunchSuite}
-          type="button"
-        >
+        <button className="secondary-button full" onClick={props.onLaunchSuite} type="button">
           <Play size={16} />
           Launch & Verify Studio, Pulse, and Console
         </button>
         {props.suiteLaunchStatus && (
-          <Pill tone={suiteLaunchTone(props.suiteLaunchStatus)}>
-            {props.suiteLaunchStatus}
-          </Pill>
+          <Pill tone={suiteLaunchTone(props.suiteLaunchStatus)}>{props.suiteLaunchStatus}</Pill>
         )}
         <div className="button-row">
           <button
@@ -12981,12 +11498,8 @@ function ConnectedAppsPage(props: {
         <PanelTitle title="Local Endpoints" />
         <CopyLine label="HTTP API URL" value={apiUrl} />
         <CopyLine label="WebSocket URL" value={wsUrl} />
-        {props.config?.portFallbackActive && (
-          <CopyLine label="Configured API URL" value={configuredApiUrl} />
-        )}
-        {props.config?.discoveryFile && (
-          <CopyLine label="Discovery File" value={props.config.discoveryFile} />
-        )}
+        {props.config?.portFallbackActive && <CopyLine label="Configured API URL" value={configuredApiUrl} />}
+        {props.config?.discoveryFile && <CopyLine label="Discovery File" value={props.config.discoveryFile} />}
         {consolePlatformUrl && (
           <button
             className="secondary-button full"
@@ -13002,14 +11515,8 @@ function ConnectedAppsPage(props: {
       <section className="panel">
         <PanelTitle title="Local Runtime" />
         <KeyValue label="Media Runner" value={runnerState} />
-        <KeyValue
-          label="Sidecar Bundle"
-          value={props.mediaRunnerInfo?.bundled ? "bundled" : "not bundled"}
-        />
-        <KeyValue
-          label="Status Endpoint"
-          value={props.mediaRunnerInfo?.statusAddr ?? "inactive"}
-        />
+        <KeyValue label="Sidecar Bundle" value={props.mediaRunnerInfo?.bundled ? "bundled" : "not bundled"} />
+        <KeyValue label="Status Endpoint" value={props.mediaRunnerInfo?.statusAddr ?? "inactive"} />
       </section>
       <section className="panel">
         <PanelTitle title="Recent Clients" />
@@ -13023,15 +11530,10 @@ function ConnectedAppsPage(props: {
                   <strong>{connectedClientName(client)}</strong>
                   <span>{client.last_path ?? "local API"}</span>
                 </div>
-                <Pill tone={connectedClientTone(client)}>
-                  {connectedClientApp(client)}
-                </Pill>
-                <Pill tone={client.kind === "websocket" ? "green" : "amber"}>
-                  {client.kind}
-                </Pill>
+                <Pill tone={connectedClientTone(client)}>{connectedClientApp(client)}</Pill>
+                <Pill tone={client.kind === "websocket" ? "green" : "amber"}>{client.kind}</Pill>
                 <span>
-                  {client.request_count} req,{" "}
-                  {new Date(client.last_seen_at).toLocaleTimeString()}
+                  {client.request_count} req, {new Date(client.last_seen_at).toLocaleTimeString()}
                 </span>
               </div>
             ))}
@@ -13051,9 +11553,7 @@ function ConnectedAppsPage(props: {
                   <span>{recording.session_id}</span>
                   <code>{recording.output_path}</code>
                 </div>
-                <Pill tone="amber">
-                  {new Date(recording.stopped_at).toLocaleTimeString()}
-                </Pill>
+                <Pill tone="amber">{new Date(recording.stopped_at).toLocaleTimeString()}</Pill>
                 <Pill tone="muted">{recording.profile_id}</Pill>
                 <div className="table-actions">
                   <button
@@ -13083,9 +11583,7 @@ function ConnectedAppsPage(props: {
                   <span>{marker.source_event_id ?? marker.id}</span>
                   {marker.media_path && <code>{marker.media_path}</code>}
                 </div>
-                <Pill tone={markerSourceTone(marker.source_app)}>
-                  {markerSourceLabel(marker.source_app)}
-                </Pill>
+                <Pill tone={markerSourceTone(marker.source_app)}>{markerSourceLabel(marker.source_app)}</Pill>
                 <Pill tone="muted">
                   {marker.start_seconds !== null && marker.end_seconds !== null
                     ? `${marker.start_seconds.toFixed(1)}-${marker.end_seconds.toFixed(1)}s`
@@ -13150,9 +11648,7 @@ function buildSuiteTimeline(
     id: `event-${event.id}`,
     kind: "event" as const,
     title: event.type,
-    detail: String(
-      event.payload["session_id"] ?? event.payload["destination_name"] ?? event.id,
-    ),
+    detail: String(event.payload["session_id"] ?? event.payload["destination_name"] ?? event.id),
     timestamp: event.timestamp,
     source: "Studio",
   }));
@@ -13191,18 +11687,14 @@ function timelineTone(kind: SuiteTimelineItem["kind"]): "green" | "red" | "amber
 }
 
 function formatSuiteVerification(status: SuiteAppStatus[]): string {
-  const blocked = status.filter(
-    (app) => !app.installed || !app.running || app.stale || !app.reachable,
-  );
+  const blocked = status.filter((app) => !app.installed || !app.running || app.stale || !app.reachable);
   if (blocked.length === 0 && status.length > 0) {
     return "Suite verified. Studio, Pulse, and Console are ready.";
   }
   if (blocked.length === 0) {
     return "Launch requested for Studio, Pulse, and Console.";
   }
-  return `Launch requested. Still waiting on ${blocked
-    .map((app) => app.appName)
-    .join(", ")}.`;
+  return `Launch requested. Still waiting on ${blocked.map((app) => app.appName).join(", ")}.`;
 }
 
 function suiteLaunchTone(status: string): "green" | "red" | "amber" | "muted" {
@@ -13233,9 +11725,7 @@ function markerSourceLabel(sourceApp: string | null): string {
   return "Studio";
 }
 
-function markerSourceTone(
-  sourceApp: string | null,
-): "green" | "red" | "amber" | "muted" {
+function markerSourceTone(sourceApp: string | null): "green" | "red" | "amber" | "muted" {
   if (sourceApp === "vaexcore-pulse" || sourceApp === "vaexcore-console") {
     return "green";
   }
@@ -13257,19 +11747,14 @@ function connectedClientApp(client: ConnectedClient): string {
   return "External";
 }
 
-function connectedClientTone(
-  client: ConnectedClient,
-): "green" | "red" | "amber" | "muted" {
+function connectedClientTone(client: ConnectedClient): "green" | "red" | "amber" | "muted" {
   const app = connectedClientApp(client);
   if (app === "Pulse" || app === "Console") return "green";
   if (app === "Studio") return "muted";
   return "amber";
 }
 
-function LogsPage(props: {
-  auditEntries: AuditLogEntry[];
-  events: StudioEvent[];
-}) {
+function LogsPage(props: { auditEntries: AuditLogEntry[]; events: StudioEvent[] }) {
   return (
     <div className="stack">
       <section className="panel">
@@ -13326,13 +11811,8 @@ function SettingsPage(props: {
     });
   }
 
-  function updateCaptureSource(
-    candidate: CaptureSourceCandidate,
-    enabled: boolean,
-  ) {
-    props.onSettingsChange(
-      updateSettingsCaptureSource(props.settings, candidate, enabled),
-    );
+  function updateCaptureSource(candidate: CaptureSourceCandidate, enabled: boolean) {
+    props.onSettingsChange(updateSettingsCaptureSource(props.settings, candidate, enabled));
   }
 
   const sourceCandidates =
@@ -13358,11 +11838,7 @@ function SettingsPage(props: {
 
       <section className="panel">
         <PanelTitle title="Local API" />
-        <TextInput
-          label="Host"
-          value={props.settings.api_host}
-          onChange={(api_host) => updateSettings({ api_host })}
-        />
+        <TextInput label="Host" value={props.settings.api_host} onChange={(api_host) => updateSettings({ api_host })} />
         <NumberInput
           label="Port"
           value={props.settings.api_port}
@@ -13371,25 +11847,17 @@ function SettingsPage(props: {
         <label className="check-row">
           <input
             checked={props.settings.dev_auth_bypass}
-            onChange={(event) =>
-              updateSettings({ dev_auth_bypass: event.target.checked })
-            }
+            onChange={(event) => updateSettings({ dev_auth_bypass: event.target.checked })}
             type="checkbox"
           />
           Dev auth bypass
         </label>
         <CopyLine label="API Token" secret value={token} />
         <div className="button-row">
-          <button
-            className="secondary-button"
-            onClick={props.onRegenerateToken}
-            type="button"
-          >
+          <button className="secondary-button" onClick={props.onRegenerateToken} type="button">
             Regenerate Token
           </button>
-          {props.snapshot?.restartRequired && (
-            <Pill tone="amber">restart required</Pill>
-          )}
+          {props.snapshot?.restartRequired && <Pill tone="amber">restart required</Pill>}
         </div>
       </section>
 
@@ -13397,53 +11865,22 @@ function SettingsPage(props: {
         <PanelTitle title="Runtime" />
         <KeyValue label="Engine" value={props.engine} />
         <KeyValue label="Mode" value={props.mode} />
-        <KeyValue
-          label="Active API"
-          value={props.config?.bindAddr ?? "127.0.0.1:51287"}
-        />
-        <KeyValue
-          label="Configured API"
-          value={props.config?.configuredBindAddr ?? "127.0.0.1:51287"}
-        />
-        <KeyValue
-          label="Port Fallback"
-          value={props.config?.portFallbackActive ? "active" : "inactive"}
-        />
-        <KeyValue
-          label="Media Runner"
-          value={mediaRunnerState(props.mediaRunnerInfo, props.engine)}
-        />
-        <KeyValue
-          label="Sidecar Bundle"
-          value={props.mediaRunnerInfo?.bundled ? "bundled" : "not bundled"}
-        />
-        <KeyValue
-          label="Service"
-          value={props.health?.service ?? "vaexcore studio"}
-        />
+        <KeyValue label="Active API" value={props.config?.bindAddr ?? "127.0.0.1:51287"} />
+        <KeyValue label="Configured API" value={props.config?.configuredBindAddr ?? "127.0.0.1:51287"} />
+        <KeyValue label="Port Fallback" value={props.config?.portFallbackActive ? "active" : "inactive"} />
+        <KeyValue label="Media Runner" value={mediaRunnerState(props.mediaRunnerInfo, props.engine)} />
+        <KeyValue label="Sidecar Bundle" value={props.mediaRunnerInfo?.bundled ? "bundled" : "not bundled"} />
+        <KeyValue label="Service" value={props.health?.service ?? "vaexcore studio"} />
         <KeyValue label="Version" value={props.health?.version ?? "0.1.0"} />
-        {props.snapshot?.discoveryFile && (
-          <CopyLine label="Discovery File" value={props.snapshot.discoveryFile} />
-        )}
-        {props.snapshot?.logDir && (
-          <CopyLine label="Log Directory" value={props.snapshot.logDir} />
-        )}
+        {props.snapshot?.discoveryFile && <CopyLine label="Discovery File" value={props.snapshot.discoveryFile} />}
+        {props.snapshot?.logDir && <CopyLine label="Log Directory" value={props.snapshot.logDir} />}
       </section>
 
       <section className="panel">
         <PanelTitle title="Security" />
-        <KeyValue
-          label="Auth Required"
-          value={props.health?.auth_required ? "yes" : "no"}
-        />
-        <KeyValue
-          label="Dev Auth Bypass"
-          value={props.config?.devAuthBypass ? "enabled" : "disabled"}
-        />
-        <KeyValue
-          label="Token"
-          value={props.config?.token ? "generated" : "not configured"}
-        />
+        <KeyValue label="Auth Required" value={props.health?.auth_required ? "yes" : "no"} />
+        <KeyValue label="Dev Auth Bypass" value={props.config?.devAuthBypass ? "enabled" : "disabled"} />
+        <KeyValue label="Token" value={props.config?.token ? "generated" : "not configured"} />
       </section>
 
       <section className="panel settings-wide-panel">
@@ -13477,9 +11914,7 @@ function SettingsPage(props: {
             </div>
             <button
               className="secondary-button compact"
-              onClick={() =>
-                props.onOpenScreenRecordingPrivacy().catch(() => undefined)
-              }
+              onClick={() => props.onOpenScreenRecordingPrivacy().catch(() => undefined)}
               type="button"
             >
               Open Privacy
@@ -13488,18 +11923,14 @@ function SettingsPage(props: {
         </div>
         <div className="source-grid">
           {sourceCandidates.map((candidate) => {
-            const selected = props.settings.capture_sources.find(
-              (source) => source.id === candidate.id,
-            );
+            const selected = props.settings.capture_sources.find((source) => source.id === candidate.id);
             const checked = selected?.enabled ?? false;
             return (
               <label className="source-option" key={candidate.id}>
                 <input
                   checked={checked}
                   disabled={!candidate.available}
-                  onChange={(event) =>
-                    updateCaptureSource(candidate, event.target.checked)
-                  }
+                  onChange={(event) => updateCaptureSource(candidate, event.target.checked)}
                   type="checkbox"
                 />
                 <div>
@@ -13516,25 +11947,17 @@ function SettingsPage(props: {
       <section className="panel settings-wide-panel">
         <PanelTitle title="Default Recording Profile" />
         <div className="form-grid">
-          <TextInput
-            label="Name"
-            value={profile.name}
-            onChange={(name) => updateDefaultProfile({ name })}
-          />
+          <TextInput label="Name" value={profile.name} onChange={(name) => updateDefaultProfile({ name })} />
           <TextInput
             label="Output Folder"
             value={profile.output_folder}
-            onChange={(output_folder) =>
-              updateDefaultProfile({ output_folder })
-            }
+            onChange={(output_folder) => updateDefaultProfile({ output_folder })}
           />
         </div>
         <TextInput
           label="Filename Pattern"
           value={profile.filename_pattern}
-          onChange={(filename_pattern) =>
-            updateDefaultProfile({ filename_pattern })
-          }
+          onChange={(filename_pattern) => updateDefaultProfile({ filename_pattern })}
         />
         <div className="form-grid">
           <NumberInput
@@ -13586,17 +12009,10 @@ function SettingsPage(props: {
           <label>
             Encoder
             <select
-              value={
-                typeof profile.encoder_preference === "string"
-                  ? profile.encoder_preference
-                  : "auto"
-              }
+              value={typeof profile.encoder_preference === "string" ? profile.encoder_preference : "auto"}
               onChange={(event) =>
                 updateDefaultProfile({
-                  encoder_preference: event.target.value as
-                    | "auto"
-                    | "hardware"
-                    | "software",
+                  encoder_preference: event.target.value as "auto" | "hardware" | "software",
                 })
               }
             >
@@ -13611,38 +12027,17 @@ function SettingsPage(props: {
       <section className="panel">
         <PanelTitle title="Storage" />
         <CopyLine label="Data Directory" value={props.snapshot?.dataDir ?? ""} />
-        <CopyLine
-          label="Database"
-          value={props.snapshot?.databasePath ?? ""}
-        />
-        <CopyLine
-          label="Pipeline Plan"
-          value={props.snapshot?.pipelinePlanPath ?? ""}
-        />
-        <CopyLine
-          label="Pipeline Config"
-          value={props.snapshot?.pipelineConfigPath ?? ""}
-        />
-        <button
-          className="secondary-button full"
-          onClick={props.onOpenDataDirectory}
-          type="button"
-        >
+        <CopyLine label="Database" value={props.snapshot?.databasePath ?? ""} />
+        <CopyLine label="Pipeline Plan" value={props.snapshot?.pipelinePlanPath ?? ""} />
+        <CopyLine label="Pipeline Config" value={props.snapshot?.pipelineConfigPath ?? ""} />
+        <button className="secondary-button full" onClick={props.onOpenDataDirectory} type="button">
           Open Data Directory
         </button>
         <div className="button-row">
-          <button
-            className="secondary-button"
-            onClick={props.onExportProfileBundle}
-            type="button"
-          >
+          <button className="secondary-button" onClick={props.onExportProfileBundle} type="button">
             Export Profiles
           </button>
-          <button
-            className="secondary-button"
-            onClick={props.onImportProfileBundle}
-            type="button"
-          >
+          <button className="secondary-button" onClick={props.onImportProfileBundle} type="button">
             Import Profiles
           </button>
         </div>
@@ -13667,9 +12062,7 @@ function SettingsPage(props: {
             <option value="error">Error</option>
           </select>
         </label>
-        <p className="muted-note">
-          Log level changes are persisted and apply on next launch.
-        </p>
+        <p className="muted-note">Log level changes are persisted and apply on next launch.</p>
       </section>
 
       <section className="panel settings-actions-panel">
@@ -13682,12 +12075,7 @@ function SettingsPage(props: {
   );
 }
 
-function Metric(props: {
-  icon: ReactNode;
-  label: string;
-  tone: "green" | "red" | "amber" | "muted";
-  value: string;
-}) {
+function Metric(props: { icon: ReactNode; label: string; tone: "green" | "red" | "amber" | "muted"; value: string }) {
   return (
     <section className={`metric ${props.tone}`}>
       <div className="metric-icon">{props.icon}</div>
@@ -13706,11 +12094,7 @@ function RuntimeCounter(props: { label: string; value: string }) {
   );
 }
 
-function PermissionStatusLine(props: {
-  label: string;
-  onOpen: () => void;
-  status: PermissionStatus | null;
-}) {
+function PermissionStatusLine(props: { label: string; onOpen: () => void; status: PermissionStatus | null }) {
   const status = props.status?.status ?? "unknown";
   return (
     <div className="permission-line">
@@ -13720,11 +12104,7 @@ function PermissionStatusLine(props: {
       </div>
       <div className="permission-actions">
         <Pill tone={permissionTone(status)}>{permissionLabel(status)}</Pill>
-        <button
-          className="secondary-button compact"
-          onClick={props.onOpen}
-          type="button"
-        >
+        <button className="secondary-button compact" onClick={props.onOpen} type="button">
           Open Privacy
         </button>
       </div>
@@ -13817,10 +12197,7 @@ function KeyValue(props: { label: string; value: string }) {
   );
 }
 
-function Pill(props: {
-  children: ReactNode;
-  tone: "green" | "red" | "amber" | "muted";
-}) {
+function Pill(props: { children: ReactNode; tone: "green" | "red" | "amber" | "muted" }) {
   return <span className={`pill ${props.tone}`}>{props.children}</span>;
 }
 
@@ -13828,29 +12205,16 @@ function StatusDot(props: { active: boolean }) {
   return <span className={props.active ? "status-dot active" : "status-dot"} />;
 }
 
-function TextInput(props: {
-  label: string;
-  onChange: (value: string) => void;
-  type?: string;
-  value: string;
-}) {
+function TextInput(props: { label: string; onChange: (value: string) => void; type?: string; value: string }) {
   return (
     <label>
       {props.label}
-      <input
-        type={props.type ?? "text"}
-        value={props.value}
-        onChange={(event) => props.onChange(event.target.value)}
-      />
+      <input type={props.type ?? "text"} value={props.value} onChange={(event) => props.onChange(event.target.value)} />
     </label>
   );
 }
 
-function NumberInput(props: {
-  label: string;
-  onChange: (value: number) => void;
-  value: number;
-}) {
+function NumberInput(props: { label: string; onChange: (value: number) => void; value: number }) {
   return (
     <label>
       {props.label}
@@ -13945,10 +12309,7 @@ function mergeEvents(events: StudioEvent[]): StudioEvent[] {
     .slice(0, 100);
 }
 
-function mediaRunnerState(
-  info: MediaRunnerInfo | null,
-  engine: string,
-): string {
+function mediaRunnerState(info: MediaRunnerInfo | null, engine: string): string {
   if (info?.running && info.bundled) return "bundled, running";
   if (info?.running) return "running";
   if (engine === "starting") return "unavailable";
@@ -13973,9 +12334,7 @@ function preflightLabel(status: PreflightStatus): string {
   return status.replace("_", " ");
 }
 
-function permissionTone(
-  status: PermissionStatus["status"],
-): "green" | "red" | "amber" | "muted" {
+function permissionTone(status: PermissionStatus["status"]): "green" | "red" | "amber" | "muted" {
   if (status === "authorized") return "green";
   if (status === "denied" || status === "restricted") return "red";
   if (status === "not_determined") return "amber";
@@ -13991,9 +12350,7 @@ function updateSettingsCaptureSource(
   candidate: CaptureSourceCandidate,
   enabled: boolean,
 ): AppSettings {
-  const existing = settings.capture_sources.find(
-    (source) => source.id === candidate.id,
-  );
+  const existing = settings.capture_sources.find((source) => source.id === candidate.id);
   const nextSource: CaptureSourceSelection = {
     id: candidate.id,
     kind: candidate.kind,
@@ -14001,9 +12358,7 @@ function updateSettingsCaptureSource(
     enabled,
   };
   const capture_sources = existing
-    ? settings.capture_sources.map((source) =>
-        source.id === candidate.id ? { ...source, enabled } : source,
-      )
+    ? settings.capture_sources.map((source) => (source.id === candidate.id ? { ...source, enabled } : source))
     : [...settings.capture_sources, nextSource];
 
   return { ...settings, capture_sources };

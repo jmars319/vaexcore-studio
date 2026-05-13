@@ -10,6 +10,7 @@ import type {
   ConnectedClientsSnapshot,
   CreatedProfile,
   CreateMarkerRequestInput,
+  DesignerReadinessReport,
   HealthResponse,
   Marker,
   MarkersSnapshot,
@@ -139,6 +140,10 @@ export class VaexcoreStudioClient {
     return this.request<SceneRuntimeSnapshot>("/scene-runtime");
   }
 
+  designerReadinessReport(): Promise<DesignerReadinessReport> {
+    return this.request<DesignerReadinessReport>("/scene-runtime/readiness-report");
+  }
+
   activateScene(request: SceneActivationRequest): Promise<SceneActivationResponse> {
     return this.request<SceneActivationResponse>("/scene-runtime/activate", {
       method: "POST",
@@ -146,9 +151,7 @@ export class VaexcoreStudioClient {
     });
   }
 
-  updateSceneRuntimeState(
-    request: SceneRuntimeStateUpdateRequest,
-  ): Promise<SceneRuntimeStateUpdateResponse> {
+  updateSceneRuntimeState(request: SceneRuntimeStateUpdateRequest): Promise<SceneRuntimeStateUpdateResponse> {
     return this.request<SceneRuntimeStateUpdateResponse>("/scene-runtime/state", {
       method: "PUT",
       body: JSON.stringify(request),
@@ -162,33 +165,21 @@ export class VaexcoreStudioClient {
     });
   }
 
-  programPreviewFrame(
-    request: ProgramPreviewFrameRequest,
-  ): Promise<ProgramPreviewFrameResponse> {
-    return this.request<ProgramPreviewFrameResponse>(
-      "/scene-runtime/program-preview-frame",
-      {
-        method: "POST",
-        body: JSON.stringify(request),
-      },
-    );
+  programPreviewFrame(request: ProgramPreviewFrameRequest): Promise<ProgramPreviewFrameResponse> {
+    return this.request<ProgramPreviewFrameResponse>("/scene-runtime/program-preview-frame", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
   }
 
-  transitionPreviewFrame(
-    request: TransitionPreviewFrameRequest,
-  ): Promise<TransitionPreviewFrameResponse> {
-    return this.request<TransitionPreviewFrameResponse>(
-      "/scene-runtime/transition-preview-frame",
-      {
-        method: "POST",
-        body: JSON.stringify(request),
-      },
-    );
+  transitionPreviewFrame(request: TransitionPreviewFrameRequest): Promise<TransitionPreviewFrameResponse> {
+    return this.request<TransitionPreviewFrameResponse>("/scene-runtime/transition-preview-frame", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
   }
 
-  validateRuntimeGraph(
-    request: CompositorRenderRequest,
-  ): Promise<CompositorRenderResponse> {
+  validateRuntimeGraph(request: CompositorRenderRequest): Promise<CompositorRenderResponse> {
     return this.request<CompositorRenderResponse>("/scene-runtime/validate-graph", {
       method: "POST",
       body: JSON.stringify(request),
@@ -200,9 +191,7 @@ export class VaexcoreStudioClient {
   }
 
   sceneRuntimeCaptureProviders(): Promise<CaptureProviderRuntimeSnapshot> {
-    return this.request<CaptureProviderRuntimeSnapshot>(
-      "/scene-runtime/capture-providers",
-    );
+    return this.request<CaptureProviderRuntimeSnapshot>("/scene-runtime/capture-providers");
   }
 
   sceneRuntimeAudioGraph(): Promise<AudioGraphRuntimeSnapshot> {
@@ -236,9 +225,7 @@ export class VaexcoreStudioClient {
     });
   }
 
-  mediaValidate(
-    request?: MediaPipelinePlanRequest,
-  ): Promise<MediaPipelineValidation> {
+  mediaValidate(request?: MediaPipelinePlanRequest): Promise<MediaPipelineValidation> {
     if (!request) {
       return this.request<MediaPipelineValidation>("/media/validate");
     }
@@ -288,9 +275,7 @@ export class VaexcoreStudioClient {
   createMarker(request?: string | CreateMarkerRequestInput): Promise<Marker> {
     return this.request<Marker>("/marker/create", {
       method: "POST",
-      body: JSON.stringify(
-        typeof request === "string" ? { label: request } : (request ?? {}),
-      ),
+      body: JSON.stringify(typeof request === "string" ? { label: request } : (request ?? {})),
     });
   }
 
@@ -341,9 +326,7 @@ export class VaexcoreStudioClient {
   }
 }
 
-export function createVaexcoreStudioClient(
-  options?: VaexcoreStudioClientOptions,
-): VaexcoreStudioClient {
+export function createVaexcoreStudioClient(options?: VaexcoreStudioClientOptions): VaexcoreStudioClient {
   return new VaexcoreStudioClient(options);
 }
 
