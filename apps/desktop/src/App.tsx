@@ -80,6 +80,7 @@ import type {
   CaptureSourceInventory,
   CaptureSourceKind,
   CaptureSourceSelection,
+  CompositorEvaluatedNode,
   CompositorGraph,
   CompositorNode,
   CompositorRenderedFrame,
@@ -1073,6 +1074,39 @@ function runtimeBindingTone(
     default:
       return "muted";
   }
+}
+
+function imageAssetStatusTone(
+  status: string | null | undefined,
+): "green" | "red" | "amber" | "muted" {
+  switch (status) {
+    case "decoded":
+      return "green";
+    case "missing_file":
+    case "decode_failed":
+      return "red";
+    case "unsupported_extension":
+    case "video_placeholder":
+    case "no_asset":
+      return "amber";
+    default:
+      return "muted";
+  }
+}
+
+function imageAssetStatusLabel(status: string | null | undefined): string {
+  return (status ?? "pending").replaceAll("_", " ");
+}
+
+function runtimeNodeForSource(
+  frame: PreviewFrameResponse | null,
+  sourceId: string,
+): CompositorEvaluatedNode | null {
+  for (const target of frame?.rendered_frame?.targets ?? []) {
+    const node = target.nodes.find((candidate) => candidate.source_id === sourceId);
+    if (node) return node;
+  }
+  return null;
 }
 
 function runtimeBindingTarget(binding: SelectedRuntimeBinding | null): string {
@@ -3585,6 +3619,9 @@ function DesignerPage(props: {
   const selectedCaptureCandidates = props.selectedSource
     ? captureCandidatesForSource(props.selectedSource, props.captureInventory)
     : [];
+  const selectedRuntimeNode = props.selectedSource
+    ? runtimeNodeForSource(props.previewFrame, props.selectedSource.id)
+    : null;
   const unlockedSelectedSources = selectedSceneSources.filter(
     (source) => !sourceEffectiveState(props.scene, source.id).locked,
   );
@@ -6427,6 +6464,10 @@ function DesignerPage(props: {
               scene={props.scene}
               source={props.selectedSource}
             />
+            <ImageAssetRuntimePanel
+              node={selectedRuntimeNode}
+              source={props.selectedSource}
+            />
             <SourceFilterEditor
               onChange={(filters) =>
                 props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
@@ -6682,6 +6723,90 @@ function RuntimeBindingPanel(props: {
           Auto Bind
         </button>
       </div>
+    </div>
+  );
+}
+
+function ImageAssetRuntimePanel(props: {
+  node: CompositorEvaluatedNode | null;
+  source: SceneSource;
+}) {
+  if (props.source.kind !== "image_media") return null;
+
+  const asset = props.node?.asset ?? null;
+  const mediaType = props.source.config.media_type ?? "image";
+  const status =
+    asset?.status ??
+    (mediaType === "video"
+      ? "video_placeholder"
+      : props.source.config.asset_uri
+        ? "pending"
+        : "no_asset");
+  const detail =
+    asset?.status_detail ??
+    (mediaType === "video"
+      ? "Video media decode/playback is deferred for this source."
+      : props.source.config.asset_uri
+        ? "Waiting for the next runtime preview frame to decode this image."
+        : "No local image asset has been selected.");
+
+  return (
+    <div
+      className="image-asset-runtime-panel"
+      data-testid="designer-image-asset-runtime"
+    >
+      <div className="runtime-binding-header">
+        <div>
+          <strong>Image Asset Runtime</strong>
+          <span>{detail}</span>
+        </div>
+        <Pill tone={imageAssetStatusTone(status)}>
+          {imageAssetStatusLabel(status)}
+        </Pill>
+      </div>
+      <div className="designer-preview-meta">
+        <KeyValue
+          label="Asset"
+          value={asset?.uri ?? String(props.source.config.asset_uri ?? "none")}
+        />
+        <KeyValue
+          label="Dimensions"
+          value={
+            asset?.width && asset.height
+              ? `${asset.width}x${asset.height}`
+              : "not decoded"
+          }
+        />
+        <KeyValue label="Format" value={asset?.format ?? mediaType} />
+        <KeyValue
+          label="Checksum"
+          value={asset?.checksum ? asset.checksum.toString(16) : "none"}
+        />
+        <KeyValue
+          label="Cache"
+          value={
+            asset
+              ? asset.cache_hit
+                ? "cache hit"
+                : "fresh decode"
+              : "no decoded frame"
+          }
+        />
+        <KeyValue
+          label="Modified"
+          value={
+            asset?.modified_unix_ms
+              ? formatSuiteTimestamp(new Date(asset.modified_unix_ms).toISOString())
+              : "unknown"
+          }
+        />
+      </div>
+      {status !== "decoded" && (
+        <div className="validation-issue warning">
+          <strong>{imageAssetStatusLabel(status)}</strong>
+          <span>{detail}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -7010,6 +7135,7 @@ function SourceCreationPanel(props: {
               {filteredPresets.map((preset) => (
                 <button
                   className="source-create-card"
+                  data-source-kind={preset.kind}
                   data-testid="designer-source-preset"
                   key={preset.id}
                   onClick={() => createFromPreset(preset)}

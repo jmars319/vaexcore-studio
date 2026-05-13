@@ -238,7 +238,7 @@ Accepts a `SceneRuntimeStateUpdateRequest`, applies active-scene, active-transit
 
 ### `POST /scene-runtime/preview-frame`
 
-Accepts a `PreviewFrameRequest` and returns a `PreviewFrameResponse` with deterministic software placeholder pixels, frame metadata, checksum, and optional encoded image data. The response does not contain real capture pixels.
+Accepts a `PreviewFrameRequest` and returns a `PreviewFrameResponse` with software-rendered preview pixels, frame metadata, checksum, and optional encoded image data. Local `image_media` sources with `media_type = "image"` decode PNG, JPEG, WebP, and first-frame GIF assets into the software compositor, while capture, video media, browser, and output pipelines remain placeholder-backed. Image asset diagnostics report missing files, unsupported extensions, decode failures, decoded dimensions, format, checksum, and cache state.
 
 ### `POST /scene-runtime/validate-graph`
 

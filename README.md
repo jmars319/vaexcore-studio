@@ -47,8 +47,9 @@ sidecars/
 - The media runner can run as a supervised dry-run sidecar.
 - Client SDK and smoke examples exist for companion integration testing.
 - Scene Designer offline editor V1 supports local scene/source authoring,
-  grouping, import/export, deterministic preview, and validation without
-  starting real capture, recording, or streaming output.
+  grouping, import/export, deterministic preview, local still-image preview
+  pixels, and validation without starting real capture, recording, or streaming
+  output.
 - Windows launcher material is present, but platform maturity still centers on local desktop validation.
 
 ## Deployment Posture

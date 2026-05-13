@@ -120,6 +120,37 @@ const targets = [
     ],
   },
   {
+    name: "designer-image-asset-runtime",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "click",
+        selector: '[data-testid="designer-open-source-modal"]',
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-source-add-modal\\"]"))',
+        message: "Designer source add modal did not render for image source smoke.",
+      },
+      {
+        type: "click",
+        selector:
+          '[data-testid="designer-source-preset"][data-source-kind="image_media"]',
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-asset-picker\\"]"))',
+        message: "Designer image/media asset picker did not render.",
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-image-asset-runtime\\"]"))',
+        message: "Designer image asset runtime panel did not render.",
+      },
+    ],
+  },
+  {
     name: "designer-grouping",
     path: "/?section=designer",
     minBytes: 50_000,

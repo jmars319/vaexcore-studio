@@ -1171,7 +1171,8 @@ nav {
   background: rgba(255, 190, 94, 0.08);
 }
 
-.runtime-binding-panel {
+.runtime-binding-panel,
+.image-asset-runtime-panel {
   display: grid;
   gap: 10px;
   padding: 12px;
@@ -1203,6 +1204,10 @@ nav {
 
 .runtime-binding-actions {
   justify-content: flex-start;
+}
+
+.image-asset-runtime-panel .designer-preview-meta {
+  margin-top: 0;
 }
 
 .source-filter-editor {

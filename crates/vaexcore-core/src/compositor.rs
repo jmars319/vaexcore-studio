@@ -1022,12 +1022,15 @@ fn image_media_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositor
 
     match decode_image_asset(&asset_uri) {
         Ok(decoded) => decoded_image_input_frame(node, asset_uri, decoded),
-        Err(metadata) => placeholder_input_frame_for_node(
-            node,
-            CompositorNodeStatus::Placeholder,
-            metadata.status_detail.clone(),
-            Some(metadata),
-        ),
+        Err(metadata) => {
+            let metadata = *metadata;
+            placeholder_input_frame_for_node(
+                node,
+                CompositorNodeStatus::Placeholder,
+                metadata.status_detail.clone(),
+                Some(metadata),
+            )
+        }
     }
 }
 
@@ -1160,43 +1163,43 @@ fn input_frame_size(node: &CompositorNode) -> SceneSize {
 
 fn decode_image_asset(
     asset_uri: &str,
-) -> Result<DecodedImageAsset, SoftwareCompositorAssetMetadata> {
+) -> Result<DecodedImageAsset, Box<SoftwareCompositorAssetMetadata>> {
     let Some(path) = asset_uri_path(asset_uri) else {
-        return Err(asset_metadata(
+        return Err(Box::new(asset_metadata(
             asset_uri.to_string(),
             SoftwareCompositorAssetStatus::NoAsset,
             "No local image asset has been selected.".to_string(),
             None,
-        ));
+        )));
     };
     let normalized_path = normalized_asset_path(&path);
     let Some(format) = supported_image_extension(&path) else {
-        return Err(asset_metadata(
+        return Err(Box::new(asset_metadata(
             asset_uri.to_string(),
             SoftwareCompositorAssetStatus::UnsupportedExtension,
             "Unsupported image extension. Supported image assets are png, jpg, jpeg, webp, and gif."
                 .to_string(),
             None,
-        ));
+        )));
     };
     let metadata = match fs::metadata(&path) {
         Ok(metadata) => metadata,
         Err(_) => {
-            return Err(asset_metadata(
+            return Err(Box::new(asset_metadata(
                 asset_uri.to_string(),
                 SoftwareCompositorAssetStatus::MissingFile,
                 format!("Image asset file does not exist: {normalized_path}"),
                 Some(format),
-            ));
+            )));
         }
     };
     if !metadata.is_file() {
-        return Err(asset_metadata(
+        return Err(Box::new(asset_metadata(
             asset_uri.to_string(),
             SoftwareCompositorAssetStatus::MissingFile,
             format!("Image asset path is not a file: {normalized_path}"),
             Some(format),
-        ));
+        )));
     }
     let modified_unix_ms = metadata
         .modified()
@@ -1222,12 +1225,12 @@ fn decode_image_asset(
     {
         Ok(image) => image,
         Err(error) => {
-            return Err(asset_metadata(
+            return Err(Box::new(asset_metadata(
                 asset_uri.to_string(),
                 SoftwareCompositorAssetStatus::DecodeFailed,
                 format!("Image asset could not be decoded: {error}"),
                 Some(format),
-            ));
+            )));
         }
     };
     let rgba = image.to_rgba8();
@@ -2221,25 +2224,16 @@ mod tests {
         write_test_image(&path, ImageFormat::Png, [255, 0, 0, 255]);
 
         let first = render_test_image_source(&path.display().to_string(), None);
-        assert_eq!(
-            first.input_frames[0].asset.as_ref().unwrap().cache_hit,
-            false
-        );
+        assert!(!first.input_frames[0].asset.as_ref().unwrap().cache_hit);
         let second = render_test_image_source(&path.display().to_string(), None);
-        assert_eq!(
-            second.input_frames[0].asset.as_ref().unwrap().cache_hit,
-            true
-        );
+        assert!(second.input_frames[0].asset.as_ref().unwrap().cache_hit);
 
         let first_checksum = first.input_frames[0].checksum;
         wait_for_distinct_mtime(&path, || {
             write_test_image(&path, ImageFormat::Png, [0, 0, 255, 255]);
         });
         let third = render_test_image_source(&path.display().to_string(), None);
-        assert_eq!(
-            third.input_frames[0].asset.as_ref().unwrap().cache_hit,
-            false
-        );
+        assert!(!third.input_frames[0].asset.as_ref().unwrap().cache_hit);
         assert_ne!(third.input_frames[0].checksum, first_checksum);
     }
 
