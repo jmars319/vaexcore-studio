@@ -2294,7 +2294,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
 
         let (status, preview) = request_json(
-            app,
+            app.clone(),
             "POST",
             "/scene-runtime/transition-preview-frame".to_string(),
             Some(json!({
@@ -2328,6 +2328,37 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("data:image/bmp;base64,"));
+
+        let (status, fade_preview) = request_json(
+            app,
+            "POST",
+            "/scene-runtime/transition-preview-frame".to_string(),
+            Some(json!({
+                "version": 1,
+                "request_id": "transition-preview-fade-test",
+                "collection_id": "collection-default",
+                "transition_id": "transition-fade",
+                "from_scene_id": "scene-main",
+                "to_scene_id": "scene-to",
+                "frame_index": 6,
+                "width": 320,
+                "height": 180,
+                "framerate": 30,
+                "frame_format": "rgba8",
+                "scale_mode": "fit",
+                "encoding": "data_url",
+                "include_debug_overlay": false,
+                "requested_at": "2026-05-09T12:00:05Z"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(fade_preview["data"]["transition_kind"], "fade");
+        assert!(fade_preview["data"]["stinger"].is_null());
+        assert!(fade_preview["data"]["checksum"]
+            .as_str()
+            .unwrap()
+            .starts_with("software-transition:"));
     }
 
     #[tokio::test]

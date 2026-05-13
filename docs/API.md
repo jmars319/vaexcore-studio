@@ -247,7 +247,7 @@ Accepts a `ProgramPreviewFrameRequest` and returns a `ProgramPreviewFrameRespons
 
 ### `POST /scene-runtime/transition-preview-frame`
 
-Accepts a `TransitionPreviewFrameRequest` for `stinger` transitions and returns a `TransitionPreviewFrameResponse` with a software-rendered preview image, trigger-time scene switch state, checksum, and stinger diagnostics. Stinger video frames are extracted from local MP4, MOV, WebM, and MKV assets through optional FFmpeg using the same cache and fallback policy as local video media sources. Missing assets, unsupported extensions, missing FFmpeg, and decode failures remain explicit placeholder states. Cut, fade, and swipe continue using deterministic shared preview helpers until live transition rendering is started.
+Accepts a `TransitionPreviewFrameRequest` for `cut`, `fade`, `swipe`, and `stinger` transitions and returns a `TransitionPreviewFrameResponse` with a software-rendered preview image, frame timing, progress metadata, checksum, and transition diagnostics. Cut, fade, and swipe render from/to scene pixels directly in the backend transition path. Stinger video frames are extracted from local MP4, MOV, WebM, and MKV assets through optional FFmpeg using the same cache and fallback policy as local video media sources. Missing assets, unsupported extensions, missing FFmpeg, and decode failures remain explicit placeholder states.
 
 ### `POST /scene-runtime/validate-graph`
 

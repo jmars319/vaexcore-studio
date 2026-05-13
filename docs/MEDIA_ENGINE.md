@@ -52,10 +52,11 @@ and FFmpeg is available. Video V1 supports MP4, MOV, WebM, and MKV files,
 samples the preview clock at a conservative deterministic interval, and caches
 decoded frames by normalized path, file modified time, and sampled time. Missing
 FFmpeg, missing files, unsupported extensions, and extraction failures remain
-explicit placeholder states. Stinger transition previews reuse that optional
-video extraction path to composite sampled local transition video over still
-from/to scene software frames and report trigger, decoder, cache, and fallback
-metadata. The compositor also rasterizes single-line `text` sources with the
+explicit placeholder states. Transition previews render `cut`, `fade`, and
+`swipe` pixels in the backend software path, and stinger previews reuse optional
+video extraction to composite sampled local transition video over still from/to
+scene software frames and report trigger, decoder, cache, and fallback metadata.
+The compositor also rasterizes single-line `text` sources with the
 bundled Inter font and reports font fallback, color fallback, rendered bounds,
 and checksum metadata. Browser overlay sources can render preview snapshots
 through optional local Chrome, Chromium, or Edge DevTools capture for HTTP,

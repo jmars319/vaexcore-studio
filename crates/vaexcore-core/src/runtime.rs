@@ -12,7 +12,7 @@ use crate::{
     CaptureSourceKind, CompositorFrameClock, CompositorFrameFormat, CompositorRenderPlan,
     CompositorRenderTarget, CompositorRenderTargetKind, CompositorRenderedFrame,
     CompositorRendererKind, CompositorScaleMode, Scene, SceneCollection, SceneSourceKind,
-    SceneTransition, SceneTransitionKind, SceneTransitionPreviewPlan,
+    SceneTransition, SceneTransitionEasing, SceneTransitionKind, SceneTransitionPreviewPlan,
     SoftwareCompositorAssetMetadata, SoftwareCompositorAssetStatus, SoftwareCompositorFrame,
     SoftwareCompositorInputFrame, SoftwareCompositorRenderResult,
 };
@@ -412,6 +412,8 @@ pub struct TransitionPreviewFrameResponse {
     pub to_scene_name: String,
     pub frame_index: u64,
     pub elapsed_ms: u32,
+    pub linear_progress: f64,
+    pub eased_progress: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_time_ms: Option<u32>,
     pub triggered: bool,
@@ -1283,11 +1285,6 @@ pub fn validate_transition_preview_frame_request(
             "transition preview frame transition \"{}\" does not exist",
             request.transition_id
         ));
-    } else if transition.is_some_and(|transition| transition.kind != SceneTransitionKind::Stinger) {
-        errors.push(
-            "transition preview frame runtime currently supports stinger transitions only"
-                .to_string(),
-        );
     }
     if !collection
         .scenes
@@ -1355,8 +1352,25 @@ pub fn create_transition_preview_frame_response(
             transition_preview_elapsed_ms(transition.duration_ms, frame_index, request.framerate)
         })
         .unwrap_or(0);
-    let trigger_time_ms = transition.map(stinger_trigger_time_ms);
-    let triggered = trigger_time_ms.is_some_and(|trigger| elapsed_ms >= trigger);
+    let linear_progress = transition
+        .map(|transition| {
+            transition_preview_linear_progress(transition.duration_ms, frame_index, frame_count)
+        })
+        .unwrap_or(0.0);
+    let eased_progress = transition
+        .map(|transition| transition_eased_progress(linear_progress, &transition.easing))
+        .unwrap_or(linear_progress);
+    let trigger_time_ms = transition.and_then(|transition| {
+        (transition.kind == SceneTransitionKind::Stinger)
+            .then(|| stinger_trigger_time_ms(transition))
+    });
+    let triggered =
+        if transition.is_some_and(|transition| transition.kind == SceneTransitionKind::Stinger) {
+            trigger_time_ms.is_some_and(|trigger| elapsed_ms >= trigger)
+        } else {
+            eased_progress >= 1.0
+                || transition.is_some_and(|transition| transition.kind == SceneTransitionKind::Cut)
+        };
 
     let mut rendered_pixel_frame = None;
     let mut stinger_metadata = None;
@@ -1365,21 +1379,21 @@ pub fn create_transition_preview_frame_response(
         if let (Some(transition), Some(from_scene), Some(to_scene)) =
             (transition, from_scene, to_scene)
         {
-            let rendered =
-                render_stinger_transition_preview_frame(StingerTransitionRenderContext {
-                    request,
-                    transition,
-                    from_scene,
-                    to_scene,
-                    frame_index,
-                    elapsed_ms,
-                    trigger_time_ms: trigger_time_ms.unwrap_or(0),
-                    triggered,
-                });
+            let rendered = render_transition_preview_frame(TransitionRenderContext {
+                request,
+                transition,
+                from_scene,
+                to_scene,
+                frame_index,
+                elapsed_ms,
+                trigger_time_ms: trigger_time_ms.unwrap_or(0),
+                triggered,
+                eased_progress,
+            });
             validation.warnings.extend(rendered.validation.warnings);
             validation.errors.extend(rendered.validation.errors);
             validation.ready = validation.errors.is_empty();
-            stinger_metadata = Some(rendered.stinger);
+            stinger_metadata = rendered.stinger;
             rendered_pixel_frame = Some(rendered.frame);
         }
     }
@@ -1405,6 +1419,8 @@ pub fn create_transition_preview_frame_response(
         to_scene_name: to_scene.map(|scene| scene.name.clone()).unwrap_or_default(),
         frame_index,
         elapsed_ms,
+        linear_progress,
+        eased_progress,
         trigger_time_ms,
         triggered,
         width: request.width,
@@ -1417,6 +1433,236 @@ pub fn create_transition_preview_frame_response(
         generated_at: crate::now_utc(),
         stinger: stinger_metadata,
         validation,
+    }
+}
+
+struct RenderedTransitionFrame {
+    frame: SoftwareCompositorFrame,
+    stinger: Option<StingerTransitionRuntimeMetadata>,
+    validation: SceneRuntimeContractValidation,
+}
+
+struct TransitionRenderContext<'a> {
+    request: &'a TransitionPreviewFrameRequest,
+    transition: &'a SceneTransition,
+    from_scene: &'a Scene,
+    to_scene: &'a Scene,
+    frame_index: u64,
+    elapsed_ms: u32,
+    trigger_time_ms: u32,
+    triggered: bool,
+    eased_progress: f64,
+}
+
+fn render_transition_preview_frame(
+    context: TransitionRenderContext<'_>,
+) -> RenderedTransitionFrame {
+    match context.transition.kind {
+        SceneTransitionKind::Stinger => {
+            let rendered =
+                render_stinger_transition_preview_frame(StingerTransitionRenderContext {
+                    request: context.request,
+                    transition: context.transition,
+                    from_scene: context.from_scene,
+                    to_scene: context.to_scene,
+                    frame_index: context.frame_index,
+                    elapsed_ms: context.elapsed_ms,
+                    trigger_time_ms: context.trigger_time_ms,
+                    triggered: context.triggered,
+                });
+            RenderedTransitionFrame {
+                frame: rendered.frame,
+                stinger: Some(rendered.stinger),
+                validation: rendered.validation,
+            }
+        }
+        SceneTransitionKind::Cut | SceneTransitionKind::Fade | SceneTransitionKind::Swipe => {
+            render_pixel_transition_preview_frame(context)
+        }
+    }
+}
+
+fn render_pixel_transition_preview_frame(
+    context: TransitionRenderContext<'_>,
+) -> RenderedTransitionFrame {
+    let mut validation = runtime_validation(Vec::new(), Vec::new());
+    let from_frame =
+        render_transition_scene_frame(context.request, context.from_scene, context.frame_index);
+    let to_frame =
+        render_transition_scene_frame(context.request, context.to_scene, context.frame_index);
+
+    validation
+        .warnings
+        .extend(from_frame.validation.warnings.clone());
+    validation
+        .errors
+        .extend(from_frame.validation.errors.clone());
+    validation
+        .warnings
+        .extend(to_frame.validation.warnings.clone());
+    validation.errors.extend(to_frame.validation.errors.clone());
+    validation.ready = validation.errors.is_empty();
+
+    let mut frame = match context.transition.kind {
+        SceneTransitionKind::Cut => to_frame.frame,
+        SceneTransitionKind::Fade => {
+            fade_transition_frame(&from_frame.frame, &to_frame.frame, context.eased_progress)
+        }
+        SceneTransitionKind::Swipe => swipe_transition_frame(
+            &from_frame.frame,
+            &to_frame.frame,
+            context.transition,
+            context.eased_progress,
+        ),
+        SceneTransitionKind::Stinger => unreachable!("stingers are rendered in the stinger path"),
+    };
+    frame.target_id = "target-transition-preview".to_string();
+    frame.target_kind = CompositorRenderTargetKind::Preview;
+    frame.checksum = checksum_software_pixels(&frame.pixels);
+
+    RenderedTransitionFrame {
+        frame,
+        stinger: None,
+        validation,
+    }
+}
+
+struct RenderedSceneTransitionFrame {
+    frame: SoftwareCompositorFrame,
+    validation: SceneRuntimeContractValidation,
+}
+
+fn render_transition_scene_frame(
+    request: &TransitionPreviewFrameRequest,
+    scene: &Scene,
+    frame_index: u64,
+) -> RenderedSceneTransitionFrame {
+    let result = scene_render_result(
+        scene,
+        SceneRenderTargetOptions {
+            target_id: "target-transition-preview",
+            target_name: "Transition Preview",
+            target_kind: CompositorRenderTargetKind::Preview,
+            width: request.width,
+            height: request.height,
+            framerate: request.framerate,
+            frame_format: request.frame_format.clone(),
+            scale_mode: request.scale_mode.clone(),
+        },
+        frame_index,
+    );
+    let frame = result
+        .pixel_frames
+        .first()
+        .cloned()
+        .unwrap_or_else(|| blank_software_preview_frame(request));
+    RenderedSceneTransitionFrame {
+        frame,
+        validation: runtime_validation(
+            result.frame.validation.errors.clone(),
+            result.frame.validation.warnings.clone(),
+        ),
+    }
+}
+
+fn fade_transition_frame(
+    from_frame: &SoftwareCompositorFrame,
+    to_frame: &SoftwareCompositorFrame,
+    progress: f64,
+) -> SoftwareCompositorFrame {
+    let progress = progress.clamp(0.0, 1.0);
+    let inverse = 1.0 - progress;
+    let mut frame = from_frame.clone();
+    for (output, (from, to)) in frame
+        .pixels
+        .iter_mut()
+        .zip(from_frame.pixels.iter().zip(to_frame.pixels.iter()))
+    {
+        *output = ((*from as f64 * inverse) + (*to as f64 * progress)).round() as u8;
+    }
+    frame
+}
+
+fn swipe_transition_frame(
+    from_frame: &SoftwareCompositorFrame,
+    to_frame: &SoftwareCompositorFrame,
+    transition: &SceneTransition,
+    progress: f64,
+) -> SoftwareCompositorFrame {
+    let width = from_frame.width.max(1);
+    let height = from_frame.height.max(1);
+    let progress = progress.clamp(0.0, 1.0);
+    let direction = transition
+        .config
+        .get("direction")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("left");
+    let distance_x = (f64::from(width) * progress).round() as i32;
+    let distance_y = (f64::from(height) * progress).round() as i32;
+    let width_i32 = width as i32;
+    let height_i32 = height as i32;
+    let (from_dx, from_dy, to_dx, to_dy) = match direction {
+        "right" => (distance_x, 0, -width_i32 + distance_x, 0),
+        "up" => (0, -distance_y, 0, height_i32 - distance_y),
+        "down" => (0, distance_y, 0, -height_i32 + distance_y),
+        _ => (-distance_x, 0, width_i32 - distance_x, 0),
+    };
+
+    let mut pixels = vec![0; width as usize * height as usize * 4];
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel.copy_from_slice(&[7, 9, 17, 255]);
+    }
+    draw_frame_with_offset(&mut pixels, width, height, from_frame, from_dx, from_dy);
+    draw_frame_with_offset(&mut pixels, width, height, to_frame, to_dx, to_dy);
+
+    SoftwareCompositorFrame {
+        target_id: "target-transition-preview".to_string(),
+        target_kind: CompositorRenderTargetKind::Preview,
+        width,
+        height,
+        frame_format: from_frame.frame_format.clone(),
+        bytes_per_row: width as usize * 4,
+        checksum: checksum_software_pixels(&pixels),
+        pixels,
+    }
+}
+
+fn draw_frame_with_offset(
+    destination: &mut [u8],
+    destination_width: u32,
+    destination_height: u32,
+    source: &SoftwareCompositorFrame,
+    offset_x: i32,
+    offset_y: i32,
+) {
+    let destination_width = destination_width.max(1) as i32;
+    let destination_height = destination_height.max(1) as i32;
+    let source_width = source.width.max(1) as i32;
+    let source_height = source.height.max(1) as i32;
+
+    for source_y in 0..source_height {
+        let destination_y = source_y + offset_y;
+        if destination_y < 0 || destination_y >= destination_height {
+            continue;
+        }
+        for source_x in 0..source_width {
+            let destination_x = source_x + offset_x;
+            if destination_x < 0 || destination_x >= destination_width {
+                continue;
+            }
+            let source_offset = ((source_y * source_width + source_x) * 4) as usize;
+            let destination_offset =
+                ((destination_y * destination_width + destination_x) * 4) as usize;
+            blend_rgba_pixel(
+                &mut destination[destination_offset..destination_offset + 4],
+                [
+                    source.pixels[source_offset],
+                    source.pixels[source_offset + 1],
+                    source.pixels[source_offset + 2],
+                    source.pixels[source_offset + 3],
+                ],
+            );
+        }
     }
 }
 
@@ -1584,6 +1830,29 @@ fn transition_preview_elapsed_ms(duration_ms: u32, frame_index: u64, framerate: 
     }
     let elapsed = (frame_index.saturating_mul(1_000)) / u64::from(framerate);
     elapsed.min(u64::from(duration_ms)) as u32
+}
+
+fn transition_preview_linear_progress(duration_ms: u32, frame_index: u64, frame_count: u64) -> f64 {
+    if duration_ms == 0 || frame_count <= 1 {
+        return 1.0;
+    }
+    (frame_index as f64 / (frame_count - 1) as f64).clamp(0.0, 1.0)
+}
+
+fn transition_eased_progress(progress: f64, easing: &SceneTransitionEasing) -> f64 {
+    let progress = progress.clamp(0.0, 1.0);
+    match easing {
+        SceneTransitionEasing::Linear => progress,
+        SceneTransitionEasing::EaseIn => progress * progress,
+        SceneTransitionEasing::EaseOut => 1.0 - (1.0 - progress) * (1.0 - progress),
+        SceneTransitionEasing::EaseInOut => {
+            if progress < 0.5 {
+                2.0 * progress * progress
+            } else {
+                1.0 - (-2.0 * progress + 2.0).powi(2) / 2.0
+            }
+        }
+    }
 }
 
 fn stinger_trigger_time_ms(transition: &SceneTransition) -> u32 {
@@ -2039,6 +2308,43 @@ mod tests {
     }
 
     #[test]
+    fn pixel_transition_preview_renders_cut_fade_and_swipe_frames() {
+        for (kind, config) in [
+            (SceneTransitionKind::Cut, serde_json::json!({})),
+            (
+                SceneTransitionKind::Fade,
+                serde_json::json!({ "color": "#000000" }),
+            ),
+            (
+                SceneTransitionKind::Swipe,
+                serde_json::json!({ "direction": "left", "edge_softness": 0.0 }),
+            ),
+        ] {
+            let collection = transition_test_collection(kind.clone(), config);
+            let request = transition_preview_request(&collection, 8);
+            let response = create_transition_preview_frame_response(&request, &collection);
+
+            assert_eq!(response.transition_kind, kind);
+            assert!(
+                response.validation.ready,
+                "{:?}",
+                response.validation.errors
+            );
+            assert!(response.stinger.is_none());
+            assert!(response
+                .checksum
+                .as_deref()
+                .is_some_and(|checksum| checksum.starts_with("software-transition:")));
+            assert!(response
+                .image_data
+                .as_deref()
+                .is_some_and(|data| data.starts_with("data:image/bmp;base64,")));
+            assert!((0.0..=1.0).contains(&response.linear_progress));
+            assert!((0.0..=1.0).contains(&response.eased_progress));
+        }
+    }
+
+    #[test]
     fn stinger_transition_preview_uses_placeholder_without_asset() {
         let collection = stinger_test_collection(None);
         let request = stinger_preview_request(&collection, 0);
@@ -2163,15 +2469,44 @@ mod tests {
         collection
     }
 
+    fn transition_test_collection(
+        kind: SceneTransitionKind,
+        config: serde_json::Value,
+    ) -> SceneCollection {
+        let mut collection = SceneCollection::default_collection(crate::now_utc());
+        let mut to_scene = collection.scenes[0].clone();
+        to_scene.id = "scene-to".to_string();
+        to_scene.name = "To Scene".to_string();
+        to_scene.canvas.background_color = "#123824".to_string();
+        collection.scenes.push(to_scene);
+        collection.active_transition_id = "transition-test".to_string();
+        collection.transitions.push(SceneTransition {
+            id: "transition-test".to_string(),
+            name: "Pixel Transition".to_string(),
+            kind,
+            duration_ms: 600,
+            easing: crate::SceneTransitionEasing::EaseInOut,
+            config,
+        });
+        collection
+    }
+
     fn stinger_preview_request(
+        collection: &SceneCollection,
+        frame_index: u64,
+    ) -> TransitionPreviewFrameRequest {
+        transition_preview_request(collection, frame_index)
+    }
+
+    fn transition_preview_request(
         collection: &SceneCollection,
         frame_index: u64,
     ) -> TransitionPreviewFrameRequest {
         TransitionPreviewFrameRequest {
             version: 1,
-            request_id: format!("stinger-{frame_index}"),
+            request_id: format!("transition-{frame_index}"),
             collection_id: collection.id.clone(),
-            transition_id: "transition-stinger".to_string(),
+            transition_id: collection.active_transition_id.clone(),
             from_scene_id: "scene-main".to_string(),
             to_scene_id: "scene-to".to_string(),
             frame_index,

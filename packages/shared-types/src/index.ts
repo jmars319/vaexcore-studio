@@ -1000,6 +1000,8 @@ export interface TransitionPreviewFrameResponse {
   to_scene_name: string;
   frame_index: number;
   elapsed_ms: number;
+  linear_progress: number;
+  eased_progress: number;
   trigger_time_ms?: number | null;
   triggered: boolean;
   width: number;
@@ -5232,8 +5234,6 @@ export function validateTransitionPreviewFrameRequest(
     }
     if (!transition) {
       errors.push(`Transition preview transition "${request.transition_id}" does not exist.`);
-    } else if (transition.kind !== "stinger") {
-      errors.push("Transition preview runtime currently supports stinger transitions only.");
     }
   }
 

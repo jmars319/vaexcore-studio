@@ -4092,11 +4092,6 @@ function DesignerPage(props: {
   }, [activeTransition?.id]);
 
   useEffect(() => {
-    if (activeTransition?.kind !== "stinger") {
-      setTransitionRuntimeFrame(null);
-      setTransitionRuntimeError(null);
-      return;
-    }
     if (!props.config) {
       setTransitionRuntimeFrame(null);
       setTransitionRuntimeError("Runtime API is not ready.");
@@ -4133,7 +4128,7 @@ function DesignerPage(props: {
       .catch((error: Error) => {
         if (cancelled) return;
         setTransitionRuntimeFrame(null);
-        setTransitionRuntimeError(error.message || "Stinger runtime preview unavailable.");
+        setTransitionRuntimeError(error.message || "Transition runtime preview unavailable.");
       });
 
     return () => {
@@ -4935,6 +4930,14 @@ function DesignerPage(props: {
                   value={`${transitionPreviewFrame.frame_index + 1}/${transitionPreviewPlan.frame_count} - ${transitionPreviewFrame.checksum}`}
                 />
                 <KeyValue
+                  label="Runtime"
+                  value={
+                    transitionRuntimeFrame
+                      ? `${Math.round(transitionRuntimeFrame.eased_progress * 100)}% / ${transitionRuntimeFrame.checksum ?? "pending"}`
+                      : transitionRuntimeError ?? "pending"
+                  }
+                />
+                <KeyValue
                   label="Midpoint"
                   value={`${Math.round(
                     (transitionPreviewPlan.sample_frames[1]?.eased_progress ?? 1) * 100,
@@ -4978,9 +4981,7 @@ function DesignerPage(props: {
               <TransitionPreviewFrameView
                 frame={transitionPreviewFrame}
                 runtimeError={transitionRuntimeError}
-                runtimeFrame={
-                  activeTransition.kind === "stinger" ? transitionRuntimeFrame : null
-                }
+                runtimeFrame={transitionRuntimeFrame}
               />
               <StingerTransitionRuntimePanel
                 error={transitionRuntimeError}
@@ -7648,7 +7649,10 @@ function TransitionPreviewFrameView(props: {
             src={runtimeImage}
           />
           <span className="transition-preview-runtime-badge">
-            Runtime {props.runtimeFrame?.stinger?.status ?? "frame"}
+            Runtime {props.runtimeFrame?.transition_kind ?? "frame"}{" "}
+            {props.runtimeFrame
+              ? `${Math.round(props.runtimeFrame.eased_progress * 100)}%`
+              : ""}
           </span>
         </>
       ) : (

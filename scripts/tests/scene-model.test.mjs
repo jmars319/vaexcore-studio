@@ -789,7 +789,7 @@ test("scene runtime contracts validate preview, render, binding, and transition 
       { ...transitionPreview, transition_id: "transition-fade" },
       stingerCollection,
     ).ready,
-    false,
+    true,
   );
 
   const invalidActivation = {

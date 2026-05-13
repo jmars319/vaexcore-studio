@@ -486,8 +486,9 @@ const targets = [
       },
       {
         type: "assert",
-        expression: 'document.querySelectorAll(".transition-preview-layer").length >= 2',
-        message: "Transition preview frame layers did not render.",
+        expression:
+          'Boolean(document.querySelector("[data-testid=\\"transition-preview-runtime-image\\"]")) || document.querySelectorAll(".transition-preview-layer").length >= 2',
+        message: "Transition preview frame did not render runtime or fallback layers.",
       },
     ],
   },
