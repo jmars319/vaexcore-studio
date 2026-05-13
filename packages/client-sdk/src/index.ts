@@ -32,6 +32,8 @@ import type {
   SceneValidationResult,
   StudioStatus,
   StreamDestinationInput,
+  TransitionPreviewFrameRequest,
+  TransitionPreviewFrameResponse,
 } from "@vaexcore/shared-types";
 
 export interface VaexcoreStudioClientOptions {
@@ -155,6 +157,18 @@ export class VaexcoreStudioClient {
       method: "POST",
       body: JSON.stringify(request),
     });
+  }
+
+  transitionPreviewFrame(
+    request: TransitionPreviewFrameRequest,
+  ): Promise<TransitionPreviewFrameResponse> {
+    return this.request<TransitionPreviewFrameResponse>(
+      "/scene-runtime/transition-preview-frame",
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    );
   }
 
   validateRuntimeGraph(

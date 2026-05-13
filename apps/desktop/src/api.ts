@@ -34,6 +34,8 @@ import type {
   SceneValidationResult,
   StudioStatus,
   StreamDestinationInput,
+  TransitionPreviewFrameRequest,
+  TransitionPreviewFrameResponse,
 } from "@vaexcore/shared-types";
 
 export interface RuntimeApiConfig {
@@ -567,6 +569,18 @@ export const StudioApi = {
       method: "POST",
       body: JSON.stringify(request),
     }),
+  transitionPreviewFrame: (
+    config: RuntimeApiConfig,
+    request: TransitionPreviewFrameRequest,
+  ) =>
+    apiRequest<TransitionPreviewFrameResponse>(
+      config,
+      "/scene-runtime/transition-preview-frame",
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    ),
   validateRuntimeGraph: (
     config: RuntimeApiConfig,
     request: CompositorRenderRequest,

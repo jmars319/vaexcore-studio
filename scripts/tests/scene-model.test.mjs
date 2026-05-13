@@ -587,6 +587,7 @@ test("scene runtime contracts validate preview, render, binding, and transition 
     createSceneRuntimeStateUpdateResponse,
     createTransitionExecutionRequest,
     createTransitionExecutionResponse,
+    createTransitionPreviewFrameRequest,
     evaluateCompositorFrame,
     validateCompositorRenderRequest,
     validateCompositorRenderResponse,
@@ -600,6 +601,7 @@ test("scene runtime contracts validate preview, render, binding, and transition 
     validateSceneRuntimeStateUpdateRequest,
     validateSceneRuntimeStateUpdateResponse,
     validateTransitionExecutionRequest,
+    validateTransitionPreviewFrameRequest,
   } = await sharedTypes;
   const collection = createDefaultSceneCollection("2026-05-08T12:00:00.000Z");
   const scene = collection.scenes[0];
@@ -701,6 +703,59 @@ test("scene runtime contracts validate preview, render, binding, and transition 
   assert.equal(validateTransitionExecutionRequest(transition, collection).ready, true);
   assert.equal(transitionResponse.preview_plan.transition.id, "transition-cut");
   assert.equal(transitionResponse.validation.ready, true);
+
+  const toScene = {
+    ...scene,
+    id: "scene-to",
+    name: "To Scene",
+    canvas: { ...scene.canvas, background_color: "#123824" },
+  };
+  const stingerCollection = {
+    ...collection,
+    active_transition_id: "transition-stinger",
+    scenes: [...collection.scenes, toScene],
+    transitions: [
+      ...collection.transitions,
+      {
+        id: "transition-stinger",
+        name: "Stinger",
+        kind: "stinger",
+        duration_ms: 1000,
+        easing: "linear",
+        config: {
+          asset_uri: null,
+          trigger_time_ms: 500,
+        },
+      },
+    ],
+  };
+  const transitionPreview = createTransitionPreviewFrameRequest(
+    stingerCollection,
+    scene.id,
+    toScene.id,
+    {
+      request_id: "transition-preview-test",
+      frame_index: 15,
+      requested_at: requestedAt,
+    },
+  );
+  const transitionPreviewCommand = createSceneRuntimeCommand(
+    "request_transition_preview_frame",
+    transitionPreview,
+    { commandId: "runtime-transition-preview-command-test", requestedAt },
+  );
+  assert.equal(
+    validateTransitionPreviewFrameRequest(transitionPreview, stingerCollection).ready,
+    true,
+  );
+  assert.equal(validateSceneRuntimeCommand(transitionPreviewCommand).ready, true);
+  assert.equal(
+    validateTransitionPreviewFrameRequest(
+      { ...transitionPreview, transition_id: "transition-fade" },
+      stingerCollection,
+    ).ready,
+    false,
+  );
 
   const invalidActivation = {
     ...activation,

@@ -37,8 +37,9 @@ use vaexcore_core::{
     build_audio_graph_runtime_snapshot, build_scene_runtime_bindings_snapshot,
     create_compositor_render_response, create_preview_frame_response,
     create_scene_activation_response, create_scene_runtime_state_update_response,
-    scene_runtime_snapshot, scene_runtime_snapshot_with_options, AudioGraphRuntimeSnapshot,
-    CompositorRenderRequest, CompositorRenderResponse,
+    create_transition_preview_frame_response, scene_runtime_snapshot,
+    scene_runtime_snapshot_with_options, AudioGraphRuntimeSnapshot, CompositorRenderRequest,
+    CompositorRenderResponse,
 };
 use vaexcore_core::{
     new_id, now_utc, scene_capture_sources, ApiResponse, AuditLogEntry, AuditLogSnapshot,
@@ -49,7 +50,8 @@ use vaexcore_core::{
     SceneActivationResponse, SceneCollection, SceneCollectionBundle, SceneCollectionImportResult,
     SceneRuntimeBindingsSnapshot, SceneRuntimeSnapshot, SceneRuntimeStateUpdateRequest,
     SceneRuntimeStateUpdateResponse, SceneRuntimeStatus, SceneValidationResult, SecretStore,
-    StreamDestinationInput, StudioEvent, StudioEventKind, StudioStatus, APP_NAME,
+    StreamDestinationInput, StudioEvent, StudioEventKind, StudioStatus,
+    TransitionPreviewFrameRequest, TransitionPreviewFrameResponse, APP_NAME,
 };
 use vaexcore_media::{
     build_dry_run_pipeline_plan, DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor,
@@ -317,6 +319,10 @@ pub fn router(state: Arc<ApiState>) -> Router {
             post(post_scene_runtime_preview_frame),
         )
         .route(
+            "/scene-runtime/transition-preview-frame",
+            post(post_scene_runtime_transition_preview_frame),
+        )
+        .route(
             "/scene-runtime/validate-graph",
             post(post_scene_runtime_validate_graph),
         )
@@ -491,6 +497,9 @@ fn command_action(method: &Method, path: &str) -> Option<String> {
         ("POST", "/scene-runtime/activate") => "scene_runtime.activate",
         ("PUT", "/scene-runtime/state") => "scene_runtime.state",
         ("POST", "/scene-runtime/preview-frame") => "scene_runtime.preview_frame",
+        ("POST", "/scene-runtime/transition-preview-frame") => {
+            "scene_runtime.transition_preview_frame"
+        }
         ("POST", "/scene-runtime/validate-graph") => "scene_runtime.validate_graph",
         ("POST", "/media/plan") => "media.plan",
         ("POST", "/media/validate") => "media.validate",
@@ -842,6 +851,17 @@ async fn post_scene_runtime_preview_frame(
     let collection = state.store.scene_collection()?;
     let frame_index = state.preview_frame_index.fetch_add(1, Ordering::Relaxed);
     let response = create_preview_frame_response(&request, &collection, frame_index);
+    Ok(Json(ApiResponse::ok(response)))
+}
+
+async fn post_scene_runtime_transition_preview_frame(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(request): Json<TransitionPreviewFrameRequest>,
+) -> Result<Json<ApiResponse<TransitionPreviewFrameResponse>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let collection = state.store.scene_collection()?;
+    let response = create_transition_preview_frame_response(&request, &collection);
     Ok(Json(ApiResponse::ok(response)))
 }
 
@@ -2182,6 +2202,75 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(graph["data"]["scene_id"], "scene-main");
         assert_eq!(graph["data"]["validation"]["ready"], true);
+    }
+
+    #[tokio::test]
+    async fn scene_runtime_transition_preview_frame_smoke_test() {
+        let app = test_app();
+
+        let (status, body) = request_json(app.clone(), "GET", "/scenes".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let mut collection = body["data"].clone();
+        let mut to_scene = collection["scenes"][0].clone();
+        to_scene["id"] = json!("scene-to");
+        to_scene["name"] = json!("To Scene");
+        to_scene["canvas"]["background_color"] = json!("#123824");
+        collection["scenes"].as_array_mut().unwrap().push(to_scene);
+        collection["active_transition_id"] = json!("transition-stinger");
+        collection["transitions"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "id": "transition-stinger",
+                "name": "Stinger",
+                "kind": "stinger",
+                "duration_ms": 1000,
+                "easing": "linear",
+                "config": {
+                    "asset_uri": null,
+                    "trigger_time_ms": 500
+                }
+            }));
+
+        let (status, _) =
+            request_json(app.clone(), "PUT", "/scenes".to_string(), Some(collection)).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, preview) = request_json(
+            app,
+            "POST",
+            "/scene-runtime/transition-preview-frame".to_string(),
+            Some(json!({
+                "version": 1,
+                "request_id": "transition-preview-test",
+                "collection_id": "collection-default",
+                "transition_id": "transition-stinger",
+                "from_scene_id": "scene-main",
+                "to_scene_id": "scene-to",
+                "frame_index": 0,
+                "width": 320,
+                "height": 180,
+                "framerate": 30,
+                "frame_format": "rgba8",
+                "scale_mode": "fit",
+                "encoding": "data_url",
+                "include_debug_overlay": false,
+                "requested_at": "2026-05-09T12:00:04Z"
+            })),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(preview["data"]["transition_kind"], "stinger");
+        assert_eq!(preview["data"]["stinger"]["status"], "no_asset");
+        assert!(preview["data"]["checksum"]
+            .as_str()
+            .unwrap()
+            .starts_with("software-transition:"));
+        assert!(preview["data"]["image_data"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/bmp;base64,"));
     }
 
     #[tokio::test]

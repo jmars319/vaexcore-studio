@@ -660,6 +660,7 @@ export type SceneRuntimeCommandKind =
   | "activate_scene"
   | "update_runtime_state"
   | "request_preview_frame"
+  | "request_transition_preview_frame"
   | "validate_runtime_graph"
   | "execute_transition";
 
@@ -667,6 +668,7 @@ export type SceneRuntimeCommandPayload =
   | SceneActivationRequest
   | SceneRuntimeStateUpdateRequest
   | PreviewFrameRequest
+  | TransitionPreviewFrameRequest
   | CompositorRenderRequest
   | TransitionExecutionRequest;
 
@@ -899,6 +901,77 @@ export interface TransitionExecutionResponse {
   to_scene_id: string;
   started_at: string;
   preview_plan: SceneTransitionPreviewPlan;
+  validation: SceneRuntimeContractValidation;
+}
+
+export interface TransitionPreviewFrameRequest {
+  version: number;
+  request_id: string;
+  collection_id: string;
+  transition_id: string;
+  from_scene_id: string;
+  to_scene_id: string;
+  frame_index: number;
+  width: number;
+  height: number;
+  framerate: number;
+  frame_format: CompositorFrameFormat;
+  scale_mode: CompositorScaleMode;
+  encoding: PreviewFrameEncoding;
+  include_debug_overlay: boolean;
+  requested_at: string;
+}
+
+export type StingerTransitionRuntimeStatus =
+  | "rendered"
+  | "no_asset"
+  | "missing_file"
+  | "unsupported_extension"
+  | "ffmpeg_unavailable"
+  | "decode_failed"
+  | "not_stinger";
+
+export interface StingerTransitionRuntimeMetadata {
+  uri: string;
+  status: StingerTransitionRuntimeStatus;
+  status_detail: string;
+  trigger_time_ms: number;
+  triggered: boolean;
+  format?: string | null;
+  width?: number | null;
+  height?: number | null;
+  checksum?: number | null;
+  modified_unix_ms?: number | null;
+  cache_hit: boolean;
+  sampled_frame_time_ms?: number | null;
+  sample_index?: number | null;
+  decoder_name?: string | null;
+  fallback_reason?: string | null;
+}
+
+export interface TransitionPreviewFrameResponse {
+  version: number;
+  request_id: string;
+  collection_id: string;
+  transition_id: string;
+  transition_kind: SceneTransitionKind;
+  from_scene_id: string;
+  from_scene_name: string;
+  to_scene_id: string;
+  to_scene_name: string;
+  frame_index: number;
+  elapsed_ms: number;
+  trigger_time_ms?: number | null;
+  triggered: boolean;
+  width: number;
+  height: number;
+  frame_format: CompositorFrameFormat;
+  encoding: PreviewFrameEncoding;
+  image_data: string | null;
+  checksum: string | null;
+  render_time_ms: number;
+  generated_at: string;
+  stinger?: StingerTransitionRuntimeMetadata | null;
   validation: SceneRuntimeContractValidation;
 }
 
@@ -4853,6 +4926,109 @@ export function createTransitionExecutionResponse(
   };
 }
 
+export function createTransitionPreviewFrameRequest(
+  collection: SceneCollection,
+  fromSceneId: string,
+  toSceneId: string,
+  options: Partial<
+    Pick<
+      TransitionPreviewFrameRequest,
+      | "request_id"
+      | "transition_id"
+      | "frame_index"
+      | "width"
+      | "height"
+      | "framerate"
+      | "frame_format"
+      | "scale_mode"
+      | "encoding"
+      | "include_debug_overlay"
+      | "requested_at"
+    >
+  > = {},
+): TransitionPreviewFrameRequest {
+  const scene =
+    collection.scenes.find((item) => item.id === fromSceneId) ??
+    collection.scenes.find((item) => item.id === collection.active_scene_id) ??
+    collection.scenes[0];
+  return {
+    version: 1,
+    request_id: options.request_id ?? runtimeId("transition-preview-frame"),
+    collection_id: collection.id,
+    transition_id: options.transition_id ?? collection.active_transition_id,
+    from_scene_id: fromSceneId,
+    to_scene_id: toSceneId,
+    frame_index: options.frame_index ?? 0,
+    width: options.width ?? scene?.canvas.width ?? 1280,
+    height: options.height ?? scene?.canvas.height ?? 720,
+    framerate: options.framerate ?? 60,
+    frame_format: options.frame_format ?? "rgba8",
+    scale_mode: options.scale_mode ?? "fit",
+    encoding: options.encoding ?? "data_url",
+    include_debug_overlay: options.include_debug_overlay ?? false,
+    requested_at: options.requested_at ?? new Date().toISOString(),
+  };
+}
+
+export function validateTransitionPreviewFrameRequest(
+  request: TransitionPreviewFrameRequest,
+  collection?: SceneCollection,
+): SceneRuntimeContractValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+
+  validateRuntimeEnvelope(
+    request.version,
+    request.request_id,
+    request.requested_at,
+    "Transition preview frame request",
+    errors,
+  );
+  if (!request.collection_id.trim()) {
+    errors.push("Transition preview frame collection id is required.");
+  }
+  if (!request.transition_id.trim()) {
+    errors.push("Transition preview frame transition id is required.");
+  }
+  if (!request.from_scene_id.trim()) {
+    errors.push("Transition preview frame from scene id is required.");
+  }
+  if (!request.to_scene_id.trim()) {
+    errors.push("Transition preview frame to scene id is required.");
+  }
+  validateGraphPositiveNumber(request.width, "transition_preview.width", errors);
+  validateGraphPositiveNumber(request.height, "transition_preview.height", errors);
+  validateGraphPositiveNumber(request.framerate, "transition_preview.framerate", errors);
+  if (request.width > 7680 || request.height > 4320) {
+    errors.push("Transition preview frame dimensions must be 8K or smaller.");
+  }
+  if (request.from_scene_id === request.to_scene_id) {
+    warnings.push("Transition preview frame uses the same from and to scene.");
+  }
+
+  if (collection) {
+    const transition = collection.transitions.find(
+      (item) => item.id === request.transition_id,
+    );
+    if (collection.id !== request.collection_id) {
+      errors.push("Transition preview frame collection id does not match collection.");
+    }
+    if (!collection.scenes.some((scene) => scene.id === request.from_scene_id)) {
+      errors.push(`Transition preview from scene "${request.from_scene_id}" does not exist.`);
+    }
+    if (!collection.scenes.some((scene) => scene.id === request.to_scene_id)) {
+      errors.push(`Transition preview to scene "${request.to_scene_id}" does not exist.`);
+    }
+    if (!transition) {
+      errors.push(`Transition preview transition "${request.transition_id}" does not exist.`);
+    } else if (transition.kind !== "stinger") {
+      errors.push("Transition preview runtime currently supports stinger transitions only.");
+    }
+  }
+
+  return runtimeValidation(errors, warnings);
+}
+
 function runtimeId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
@@ -4902,6 +5078,10 @@ function validateSceneRuntimeCommandPayload(
       );
     case "request_preview_frame":
       return validatePreviewFrameRequest(command.payload as PreviewFrameRequest);
+    case "request_transition_preview_frame":
+      return validateTransitionPreviewFrameRequest(
+        command.payload as TransitionPreviewFrameRequest,
+      );
     case "validate_runtime_graph":
       return validateCompositorRenderRequest(command.payload as CompositorRenderRequest);
     case "execute_transition":

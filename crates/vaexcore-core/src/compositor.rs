@@ -881,6 +881,52 @@ pub fn build_software_compositor_input_frames_at_clock(
         .collect()
 }
 
+pub fn stinger_video_input_frame(
+    asset_uri: &str,
+    clock: &CompositorFrameClock,
+    width: u32,
+    height: u32,
+) -> SoftwareCompositorInputFrame {
+    let node = CompositorNode {
+        id: "node-transition-stinger".to_string(),
+        source_id: "transition-stinger".to_string(),
+        name: "Stinger Transition".to_string(),
+        source_kind: SceneSourceKind::ImageMedia,
+        role: CompositorNodeRole::Overlay,
+        parent_source_id: None,
+        group_depth: 0,
+        transform: CompositorTransform {
+            position: ScenePoint { x: 0.0, y: 0.0 },
+            size: SceneSize {
+                width: f64::from(width.max(1)),
+                height: f64::from(height.max(1)),
+            },
+            crop: SceneCrop {
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+                left: 0.0,
+            },
+            rotation_degrees: 0.0,
+            opacity: 1.0,
+        },
+        visible: true,
+        locked: true,
+        z_index: i32::MAX,
+        blend_mode: CompositorBlendMode::Normal,
+        scale_mode: CompositorScaleMode::Stretch,
+        status: CompositorNodeStatus::Placeholder,
+        status_detail: "Stinger transition asset preview.".to_string(),
+        filters: Vec::new(),
+        config: serde_json::json!({
+            "asset_uri": asset_uri,
+            "media_type": "video"
+        }),
+    };
+
+    image_media_input_frame_for_node(&node, clock)
+}
+
 fn default_software_input_clock() -> CompositorFrameClock {
     CompositorFrameClock {
         frame_index: 0,
@@ -4117,6 +4163,10 @@ fn checksum_pixels(pixels: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
+}
+
+pub fn checksum_software_pixels(pixels: &[u8]) -> u64 {
+    checksum_pixels(pixels)
 }
 
 fn alpha_bounds(pixels: &[u8], width: u32, height: u32) -> Option<CompositorRect> {

@@ -5,13 +5,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     build_audio_mixer_plan, build_capture_frame_plan, build_compositor_graph,
-    build_compositor_render_plan, build_scene_transition_preview_plan, evaluate_compositor_frame,
-    render_software_compositor_frame, validate_compositor_render_plan, validate_scene_collection,
-    AudioMixBus, AudioMixBusKind, AudioMixSourceStatus, CaptureFrameBindingStatus,
-    CaptureFrameFormat, CaptureFrameMediaKind, CaptureSourceKind, CompositorFrameClock,
-    CompositorFrameFormat, CompositorRenderPlan, CompositorRenderTarget, CompositorRenderedFrame,
+    build_compositor_render_plan, build_scene_transition_preview_plan, checksum_software_pixels,
+    evaluate_compositor_frame, render_software_compositor_frame, stinger_video_input_frame,
+    validate_compositor_render_plan, validate_scene_collection, AudioMixBus, AudioMixBusKind,
+    AudioMixSourceStatus, CaptureFrameBindingStatus, CaptureFrameFormat, CaptureFrameMediaKind,
+    CaptureSourceKind, CompositorFrameClock, CompositorFrameFormat, CompositorRenderPlan,
+    CompositorRenderTarget, CompositorRenderTargetKind, CompositorRenderedFrame,
     CompositorRendererKind, CompositorScaleMode, Scene, SceneCollection, SceneSourceKind,
-    SceneTransitionPreviewPlan, SoftwareCompositorFrame, SoftwareCompositorRenderResult,
+    SceneTransition, SceneTransitionKind, SceneTransitionPreviewPlan,
+    SoftwareCompositorAssetMetadata, SoftwareCompositorAssetStatus, SoftwareCompositorFrame,
+    SoftwareCompositorInputFrame, SoftwareCompositorRenderResult,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -293,6 +296,95 @@ pub struct TransitionExecutionResponse {
     pub to_scene_id: String,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub preview_plan: SceneTransitionPreviewPlan,
+    pub validation: SceneRuntimeContractValidation,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct TransitionPreviewFrameRequest {
+    pub version: u32,
+    pub request_id: String,
+    pub collection_id: String,
+    pub transition_id: String,
+    pub from_scene_id: String,
+    pub to_scene_id: String,
+    pub frame_index: u64,
+    pub width: u32,
+    pub height: u32,
+    pub framerate: u32,
+    pub frame_format: CompositorFrameFormat,
+    pub scale_mode: CompositorScaleMode,
+    pub encoding: PreviewFrameEncoding,
+    pub include_debug_overlay: bool,
+    pub requested_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum StingerTransitionRuntimeStatus {
+    Rendered,
+    NoAsset,
+    MissingFile,
+    UnsupportedExtension,
+    FfmpegUnavailable,
+    DecodeFailed,
+    NotStinger,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct StingerTransitionRuntimeMetadata {
+    pub uri: String,
+    pub status: StingerTransitionRuntimeStatus,
+    pub status_detail: String,
+    pub trigger_time_ms: u32,
+    pub triggered: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checksum: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_unix_ms: Option<u64>,
+    #[serde(default)]
+    pub cache_hit: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sampled_frame_time_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sample_index: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decoder_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct TransitionPreviewFrameResponse {
+    pub version: u32,
+    pub request_id: String,
+    pub collection_id: String,
+    pub transition_id: String,
+    pub transition_kind: SceneTransitionKind,
+    pub from_scene_id: String,
+    pub from_scene_name: String,
+    pub to_scene_id: String,
+    pub to_scene_name: String,
+    pub frame_index: u64,
+    pub elapsed_ms: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger_time_ms: Option<u32>,
+    pub triggered: bool,
+    pub width: u32,
+    pub height: u32,
+    pub frame_format: CompositorFrameFormat,
+    pub encoding: PreviewFrameEncoding,
+    pub image_data: Option<String>,
+    pub checksum: Option<String>,
+    pub render_time_ms: f64,
+    pub generated_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stinger: Option<StingerTransitionRuntimeMetadata>,
     pub validation: SceneRuntimeContractValidation,
 }
 
@@ -998,6 +1090,268 @@ pub fn create_transition_execution_response(
     }
 }
 
+pub fn validate_transition_preview_frame_request(
+    request: &TransitionPreviewFrameRequest,
+    collection: &SceneCollection,
+) -> SceneRuntimeContractValidation {
+    let mut warnings = Vec::new();
+    let mut errors = Vec::new();
+
+    validate_runtime_envelope(
+        request.version,
+        &request.request_id,
+        "transition preview frame request",
+        &mut errors,
+    );
+    if request.collection_id != collection.id {
+        errors.push(
+            "transition preview frame collection id does not match saved collection".to_string(),
+        );
+    }
+    let transition = collection
+        .transitions
+        .iter()
+        .find(|transition| transition.id == request.transition_id);
+    if transition.is_none() {
+        errors.push(format!(
+            "transition preview frame transition \"{}\" does not exist",
+            request.transition_id
+        ));
+    } else if transition.is_some_and(|transition| transition.kind != SceneTransitionKind::Stinger) {
+        errors.push(
+            "transition preview frame runtime currently supports stinger transitions only"
+                .to_string(),
+        );
+    }
+    if !collection
+        .scenes
+        .iter()
+        .any(|scene| scene.id == request.from_scene_id)
+    {
+        errors.push(format!(
+            "transition preview frame from scene \"{}\" does not exist",
+            request.from_scene_id
+        ));
+    }
+    if !collection
+        .scenes
+        .iter()
+        .any(|scene| scene.id == request.to_scene_id)
+    {
+        errors.push(format!(
+            "transition preview frame to scene \"{}\" does not exist",
+            request.to_scene_id
+        ));
+    }
+    if request.width == 0 || request.height == 0 {
+        errors.push("transition preview frame dimensions must be greater than zero".to_string());
+    }
+    if request.width > 7680 || request.height > 4320 {
+        errors.push("transition preview frame dimensions must be 8K or smaller".to_string());
+    }
+    if request.framerate == 0 {
+        errors.push("transition preview frame framerate must be greater than zero".to_string());
+    }
+    if request.from_scene_id == request.to_scene_id {
+        warnings.push("transition preview frame uses the same from and to scene".to_string());
+    }
+
+    runtime_validation(errors, warnings)
+}
+
+pub fn create_transition_preview_frame_response(
+    request: &TransitionPreviewFrameRequest,
+    collection: &SceneCollection,
+) -> TransitionPreviewFrameResponse {
+    let started_at = Instant::now();
+    let mut validation = validate_transition_preview_frame_request(request, collection);
+    let transition = collection
+        .transitions
+        .iter()
+        .find(|transition| transition.id == request.transition_id);
+    let from_scene = collection
+        .scenes
+        .iter()
+        .find(|scene| scene.id == request.from_scene_id);
+    let to_scene = collection
+        .scenes
+        .iter()
+        .find(|scene| scene.id == request.to_scene_id);
+    let transition_kind = transition
+        .map(|transition| transition.kind.clone())
+        .unwrap_or(SceneTransitionKind::Stinger);
+    let frame_count = transition
+        .map(|transition| transition_preview_frame_count(transition.duration_ms, request.framerate))
+        .unwrap_or(1);
+    let frame_index = request.frame_index.min(frame_count.saturating_sub(1));
+    let elapsed_ms = transition
+        .map(|transition| {
+            transition_preview_elapsed_ms(transition.duration_ms, frame_index, request.framerate)
+        })
+        .unwrap_or(0);
+    let trigger_time_ms = transition.map(stinger_trigger_time_ms);
+    let triggered = trigger_time_ms.is_some_and(|trigger| elapsed_ms >= trigger);
+
+    let mut rendered_pixel_frame = None;
+    let mut stinger_metadata = None;
+
+    if validation.errors.is_empty() {
+        if let (Some(transition), Some(from_scene), Some(to_scene)) =
+            (transition, from_scene, to_scene)
+        {
+            let rendered =
+                render_stinger_transition_preview_frame(StingerTransitionRenderContext {
+                    request,
+                    transition,
+                    from_scene,
+                    to_scene,
+                    frame_index,
+                    elapsed_ms,
+                    trigger_time_ms: trigger_time_ms.unwrap_or(0),
+                    triggered,
+                });
+            validation.warnings.extend(rendered.validation.warnings);
+            validation.errors.extend(rendered.validation.errors);
+            validation.ready = validation.errors.is_empty();
+            stinger_metadata = Some(rendered.stinger);
+            rendered_pixel_frame = Some(rendered.frame);
+        }
+    }
+
+    let image_data = rendered_pixel_frame
+        .as_ref()
+        .and_then(|frame| preview_image_data(frame, &request.encoding));
+    let checksum = rendered_pixel_frame
+        .as_ref()
+        .map(|frame| format!("software-transition:{:016x}", frame.checksum));
+
+    TransitionPreviewFrameResponse {
+        version: 1,
+        request_id: request.request_id.clone(),
+        collection_id: request.collection_id.clone(),
+        transition_id: request.transition_id.clone(),
+        transition_kind,
+        from_scene_id: request.from_scene_id.clone(),
+        from_scene_name: from_scene
+            .map(|scene| scene.name.clone())
+            .unwrap_or_default(),
+        to_scene_id: request.to_scene_id.clone(),
+        to_scene_name: to_scene.map(|scene| scene.name.clone()).unwrap_or_default(),
+        frame_index,
+        elapsed_ms,
+        trigger_time_ms,
+        triggered,
+        width: request.width,
+        height: request.height,
+        frame_format: request.frame_format.clone(),
+        encoding: request.encoding.clone(),
+        image_data,
+        checksum,
+        render_time_ms: started_at.elapsed().as_secs_f64() * 1000.0,
+        generated_at: crate::now_utc(),
+        stinger: stinger_metadata,
+        validation,
+    }
+}
+
+struct RenderedStingerTransitionFrame {
+    frame: SoftwareCompositorFrame,
+    stinger: StingerTransitionRuntimeMetadata,
+    validation: SceneRuntimeContractValidation,
+}
+
+struct StingerTransitionRenderContext<'a> {
+    request: &'a TransitionPreviewFrameRequest,
+    transition: &'a SceneTransition,
+    from_scene: &'a Scene,
+    to_scene: &'a Scene,
+    frame_index: u64,
+    elapsed_ms: u32,
+    trigger_time_ms: u32,
+    triggered: bool,
+}
+
+fn render_stinger_transition_preview_frame(
+    context: StingerTransitionRenderContext<'_>,
+) -> RenderedStingerTransitionFrame {
+    let StingerTransitionRenderContext {
+        request,
+        transition,
+        from_scene,
+        to_scene,
+        frame_index,
+        elapsed_ms,
+        trigger_time_ms,
+        triggered,
+    } = context;
+    let mut validation = runtime_validation(Vec::new(), Vec::new());
+    let base_scene = if triggered { to_scene } else { from_scene };
+    let scene_request = PreviewFrameRequest {
+        version: 1,
+        request_id: format!("{}-scene", request.request_id),
+        scene_id: base_scene.id.clone(),
+        width: request.width,
+        height: request.height,
+        framerate: request.framerate,
+        frame_format: request.frame_format.clone(),
+        scale_mode: request.scale_mode.clone(),
+        encoding: PreviewFrameEncoding::None,
+        include_debug_overlay: request.include_debug_overlay,
+        requested_at: request.requested_at,
+    };
+    let base_render = preview_render_result(base_scene, &scene_request, 0);
+    validation
+        .warnings
+        .extend(base_render.frame.validation.warnings.clone());
+    validation
+        .errors
+        .extend(base_render.frame.validation.errors.clone());
+    validation.ready = validation.errors.is_empty();
+
+    let mut frame = base_render
+        .pixel_frames
+        .first()
+        .cloned()
+        .unwrap_or_else(|| blank_software_preview_frame(request));
+    frame.target_id = "target-transition-preview".to_string();
+    frame.target_kind = CompositorRenderTargetKind::Preview;
+
+    let asset_uri = transition
+        .config
+        .get("asset_uri")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string();
+    let clock = transition_frame_clock(request.framerate, frame_index, elapsed_ms);
+    let stinger_input =
+        stinger_video_input_frame(&asset_uri, &clock, request.width, request.height);
+    let stinger = stinger_metadata_from_input(
+        asset_uri,
+        trigger_time_ms,
+        triggered,
+        stinger_input.asset.as_ref(),
+    );
+
+    if stinger.status == StingerTransitionRuntimeStatus::Rendered {
+        composite_scaled_rgba(&mut frame.pixels, frame.width, frame.height, &stinger_input);
+    } else {
+        paint_stinger_placeholder(&mut frame.pixels, frame.width, frame.height, triggered);
+        validation.warnings.push(format!(
+            "stinger transition preview is using a placeholder: {}",
+            stinger.status_detail
+        ));
+        validation.ready = validation.errors.is_empty();
+    }
+    frame.checksum = checksum_software_pixels(&frame.pixels);
+
+    RenderedStingerTransitionFrame {
+        frame,
+        stinger,
+        validation,
+    }
+}
+
 fn preview_render_result(
     scene: &Scene,
     request: &PreviewFrameRequest,
@@ -1017,6 +1371,203 @@ fn preview_render_result(
     };
     let plan = build_compositor_render_plan(&graph, vec![target]);
     render_software_compositor_frame(&plan, frame_index)
+}
+
+fn transition_preview_frame_count(duration_ms: u32, framerate: u32) -> u64 {
+    if duration_ms == 0 || framerate == 0 {
+        return 1;
+    }
+    ((u64::from(duration_ms) * u64::from(framerate)).div_ceil(1_000)).max(1)
+}
+
+fn transition_preview_elapsed_ms(duration_ms: u32, frame_index: u64, framerate: u32) -> u32 {
+    if framerate == 0 {
+        return 0;
+    }
+    let elapsed = (frame_index.saturating_mul(1_000)) / u64::from(framerate);
+    elapsed.min(u64::from(duration_ms)) as u32
+}
+
+fn stinger_trigger_time_ms(transition: &SceneTransition) -> u32 {
+    let fallback = transition.duration_ms / 2;
+    let value = transition
+        .config
+        .get("trigger_time_ms")
+        .and_then(|value| {
+            value.as_u64().or_else(|| {
+                value
+                    .as_f64()
+                    .filter(|number| number.is_finite() && *number >= 0.0)
+                    .map(|number| number.round() as u64)
+            })
+        })
+        .unwrap_or(u64::from(fallback));
+    value.min(u64::from(transition.duration_ms)) as u32
+}
+
+fn transition_frame_clock(
+    framerate: u32,
+    frame_index: u64,
+    elapsed_ms: u32,
+) -> CompositorFrameClock {
+    let framerate = framerate.max(1);
+    CompositorFrameClock {
+        frame_index,
+        framerate,
+        pts_nanos: u64::from(elapsed_ms) * 1_000_000,
+        duration_nanos: 1_000_000_000_u64 / u64::from(framerate),
+    }
+}
+
+fn stinger_metadata_from_input(
+    asset_uri: String,
+    trigger_time_ms: u32,
+    triggered: bool,
+    asset: Option<&SoftwareCompositorAssetMetadata>,
+) -> StingerTransitionRuntimeMetadata {
+    let Some(asset) = asset else {
+        return StingerTransitionRuntimeMetadata {
+            uri: asset_uri,
+            status: StingerTransitionRuntimeStatus::NoAsset,
+            status_detail: "No local stinger asset has been selected.".to_string(),
+            trigger_time_ms,
+            triggered,
+            format: None,
+            width: None,
+            height: None,
+            checksum: None,
+            modified_unix_ms: None,
+            cache_hit: false,
+            sampled_frame_time_ms: None,
+            sample_index: None,
+            decoder_name: None,
+            fallback_reason: Some("No local stinger asset has been selected.".to_string()),
+        };
+    };
+    let status = match asset.status {
+        SoftwareCompositorAssetStatus::Decoded => StingerTransitionRuntimeStatus::Rendered,
+        SoftwareCompositorAssetStatus::MissingFile => StingerTransitionRuntimeStatus::MissingFile,
+        SoftwareCompositorAssetStatus::UnsupportedExtension => {
+            StingerTransitionRuntimeStatus::UnsupportedExtension
+        }
+        SoftwareCompositorAssetStatus::DecodeFailed => StingerTransitionRuntimeStatus::DecodeFailed,
+        SoftwareCompositorAssetStatus::VideoPlaceholder => {
+            StingerTransitionRuntimeStatus::FfmpegUnavailable
+        }
+        SoftwareCompositorAssetStatus::NoAsset => StingerTransitionRuntimeStatus::NoAsset,
+    };
+    let fallback_reason = if status == StingerTransitionRuntimeStatus::Rendered {
+        None
+    } else {
+        Some(asset.status_detail.clone())
+    };
+
+    StingerTransitionRuntimeMetadata {
+        uri: asset.uri.clone(),
+        status,
+        status_detail: asset.status_detail.clone(),
+        trigger_time_ms,
+        triggered,
+        format: asset.format.clone(),
+        width: asset.width,
+        height: asset.height,
+        checksum: asset.checksum,
+        modified_unix_ms: asset.modified_unix_ms,
+        cache_hit: asset.cache_hit,
+        sampled_frame_time_ms: asset.sampled_frame_time_ms,
+        sample_index: asset.sample_index,
+        decoder_name: asset.decoder_name.clone(),
+        fallback_reason,
+    }
+}
+
+fn blank_software_preview_frame(
+    request: &TransitionPreviewFrameRequest,
+) -> SoftwareCompositorFrame {
+    let width = request.width.max(1);
+    let height = request.height.max(1);
+    let mut pixels = vec![0; width as usize * height as usize * 4];
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel.copy_from_slice(&[16, 20, 29, 255]);
+    }
+    SoftwareCompositorFrame {
+        target_id: "target-transition-preview".to_string(),
+        target_kind: CompositorRenderTargetKind::Preview,
+        width,
+        height,
+        frame_format: CompositorFrameFormat::Rgba8,
+        bytes_per_row: width as usize * 4,
+        checksum: checksum_software_pixels(&pixels),
+        pixels,
+    }
+}
+
+fn composite_scaled_rgba(
+    destination: &mut [u8],
+    destination_width: u32,
+    destination_height: u32,
+    source: &SoftwareCompositorInputFrame,
+) {
+    let destination_width = destination_width.max(1) as usize;
+    let destination_height = destination_height.max(1) as usize;
+    let source_width = source.width.max(1) as usize;
+    let source_height = source.height.max(1) as usize;
+
+    for y in 0..destination_height {
+        let source_y = ((y * source_height) / destination_height).min(source_height - 1);
+        for x in 0..destination_width {
+            let source_x = ((x * source_width) / destination_width).min(source_width - 1);
+            let source_offset = (source_y * source_width + source_x) * 4;
+            let destination_offset = (y * destination_width + x) * 4;
+            blend_rgba_pixel(
+                &mut destination[destination_offset..destination_offset + 4],
+                [
+                    source.pixels[source_offset],
+                    source.pixels[source_offset + 1],
+                    source.pixels[source_offset + 2],
+                    source.pixels[source_offset + 3],
+                ],
+            );
+        }
+    }
+}
+
+fn paint_stinger_placeholder(destination: &mut [u8], width: u32, height: u32, triggered: bool) {
+    let width = width.max(1) as usize;
+    let height = height.max(1) as usize;
+    let color = if triggered {
+        [64, 205, 150, 150]
+    } else {
+        [242, 151, 76, 150]
+    };
+
+    for y in 0..height {
+        for x in 0..width {
+            let border = x < 8 || y < 8 || x + 8 >= width || y + 8 >= height;
+            let diagonal = ((x + y) / 18) % 6 == 0;
+            let center_band = y > height / 2 - height / 16 && y < height / 2 + height / 16;
+            if border || diagonal || center_band {
+                let offset = (y * width + x) * 4;
+                blend_rgba_pixel(&mut destination[offset..offset + 4], color);
+            }
+        }
+    }
+}
+
+fn blend_rgba_pixel(pixel: &mut [u8], color: [u8; 4]) {
+    let alpha = u16::from(color[3]);
+    if alpha == 0 {
+        return;
+    }
+    let inverse_alpha = 255 - alpha;
+    pixel[0] = blend_rgba_channel(color[0], pixel[0], alpha, inverse_alpha);
+    pixel[1] = blend_rgba_channel(color[1], pixel[1], alpha, inverse_alpha);
+    pixel[2] = blend_rgba_channel(color[2], pixel[2], alpha, inverse_alpha);
+    pixel[3] = (alpha + u16::from(pixel[3]) * inverse_alpha / 255).min(255) as u8;
+}
+
+fn blend_rgba_channel(source: u8, destination: u8, alpha: u16, inverse_alpha: u16) -> u8 {
+    ((u16::from(source) * alpha + u16::from(destination) * inverse_alpha + 127) / 255) as u8
 }
 
 fn preview_frame_checksum(
@@ -1167,6 +1718,10 @@ fn validate_optional_positive(value: Option<u32>, label: &str, errors: &mut Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        path::{Path, PathBuf},
+        process::Command,
+    };
 
     #[test]
     fn scene_runtime_snapshot_tracks_active_scene_and_transition() {
@@ -1238,5 +1793,190 @@ mod tests {
             .buses
             .iter()
             .any(|bus| bus.kind == AudioMixBusKind::Master));
+    }
+
+    #[test]
+    fn stinger_transition_preview_uses_placeholder_without_asset() {
+        let collection = stinger_test_collection(None);
+        let request = stinger_preview_request(&collection, 0);
+        let response = create_transition_preview_frame_response(&request, &collection);
+
+        assert!(
+            response.validation.ready,
+            "{:?}",
+            response.validation.errors
+        );
+        assert!(response
+            .image_data
+            .as_deref()
+            .is_some_and(|data| data.starts_with("data:image/bmp;base64,")));
+        assert_eq!(
+            response.stinger.as_ref().unwrap().status,
+            StingerTransitionRuntimeStatus::NoAsset
+        );
+        assert!(response
+            .validation
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("placeholder")));
+    }
+
+    #[test]
+    fn stinger_transition_preview_reports_missing_and_unsupported_assets() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing_path = dir.path().join("missing.mp4");
+        let missing_collection = stinger_test_collection(Some(missing_path.display().to_string()));
+        let missing = create_transition_preview_frame_response(
+            &stinger_preview_request(&missing_collection, 0),
+            &missing_collection,
+        );
+        assert_eq!(
+            missing.stinger.as_ref().unwrap().status,
+            StingerTransitionRuntimeStatus::MissingFile
+        );
+
+        let unsupported_path = dir.path().join("stinger.txt");
+        std::fs::write(&unsupported_path, b"not video").unwrap();
+        let unsupported_collection =
+            stinger_test_collection(Some(unsupported_path.display().to_string()));
+        let unsupported = create_transition_preview_frame_response(
+            &stinger_preview_request(&unsupported_collection, 0),
+            &unsupported_collection,
+        );
+        assert_eq!(
+            unsupported.stinger.as_ref().unwrap().status,
+            StingerTransitionRuntimeStatus::UnsupportedExtension
+        );
+        assert!(unsupported.checksum.is_some());
+    }
+
+    #[test]
+    fn stinger_transition_preview_switches_scene_at_trigger_time() {
+        let collection = stinger_test_collection(None);
+        let before = create_transition_preview_frame_response(
+            &stinger_preview_request(&collection, 0),
+            &collection,
+        );
+        let after = create_transition_preview_frame_response(
+            &stinger_preview_request(&collection, 20),
+            &collection,
+        );
+
+        assert!(!before.triggered);
+        assert!(after.triggered);
+        assert_ne!(before.checksum, after.checksum);
+    }
+
+    #[test]
+    fn stinger_transition_preview_decodes_and_caches_video_when_ffmpeg_is_available() {
+        let Some(ffmpeg_path) = find_ffmpeg_for_test() else {
+            eprintln!("skipping stinger video preview test because ffmpeg is unavailable");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("stinger.mp4");
+        if !write_test_video(&ffmpeg_path, &path, "cyan") {
+            eprintln!("skipping stinger video preview test because fixture generation failed");
+            return;
+        }
+
+        let collection = stinger_test_collection(Some(path.display().to_string()));
+        let request = stinger_preview_request(&collection, 0);
+        let first = create_transition_preview_frame_response(&request, &collection);
+        let second = create_transition_preview_frame_response(&request, &collection);
+
+        assert_eq!(
+            first.stinger.as_ref().unwrap().status,
+            StingerTransitionRuntimeStatus::Rendered
+        );
+        assert_eq!(
+            first.stinger.as_ref().unwrap().decoder_name.as_deref(),
+            Some("ffmpeg")
+        );
+        assert!(!first.stinger.as_ref().unwrap().cache_hit);
+        assert!(second.stinger.as_ref().unwrap().cache_hit);
+        assert_ne!(first.checksum, None);
+    }
+
+    fn stinger_test_collection(asset_uri: Option<String>) -> SceneCollection {
+        let mut collection = SceneCollection::default_collection(crate::now_utc());
+        let mut to_scene = collection.scenes[0].clone();
+        to_scene.id = "scene-to".to_string();
+        to_scene.name = "To Scene".to_string();
+        to_scene.canvas.background_color = "#123824".to_string();
+        collection.scenes.push(to_scene);
+        collection.active_transition_id = "transition-stinger".to_string();
+        collection.transitions.push(SceneTransition {
+            id: "transition-stinger".to_string(),
+            name: "Stinger".to_string(),
+            kind: SceneTransitionKind::Stinger,
+            duration_ms: 1_000,
+            easing: crate::SceneTransitionEasing::Linear,
+            config: serde_json::json!({
+                "asset_uri": asset_uri,
+                "trigger_time_ms": 500
+            }),
+        });
+        collection
+    }
+
+    fn stinger_preview_request(
+        collection: &SceneCollection,
+        frame_index: u64,
+    ) -> TransitionPreviewFrameRequest {
+        TransitionPreviewFrameRequest {
+            version: 1,
+            request_id: format!("stinger-{frame_index}"),
+            collection_id: collection.id.clone(),
+            transition_id: "transition-stinger".to_string(),
+            from_scene_id: "scene-main".to_string(),
+            to_scene_id: "scene-to".to_string(),
+            frame_index,
+            width: 320,
+            height: 180,
+            framerate: 30,
+            frame_format: CompositorFrameFormat::Rgba8,
+            scale_mode: CompositorScaleMode::Fit,
+            encoding: PreviewFrameEncoding::DataUrl,
+            include_debug_overlay: false,
+            requested_at: crate::now_utc(),
+        }
+    }
+
+    fn find_ffmpeg_for_test() -> Option<PathBuf> {
+        [
+            std::env::var_os("VAEXCORE_FFMPEG_PATH").map(PathBuf::from),
+            Some(PathBuf::from("ffmpeg")),
+            Some(PathBuf::from("/opt/homebrew/bin/ffmpeg")),
+            Some(PathBuf::from("/usr/local/bin/ffmpeg")),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|candidate| {
+            Command::new(candidate)
+                .arg("-version")
+                .output()
+                .is_ok_and(|output| output.status.success())
+        })
+    }
+
+    fn write_test_video(ffmpeg_path: &Path, path: &Path, color: &str) -> bool {
+        Command::new(ffmpeg_path)
+            .arg("-v")
+            .arg("error")
+            .arg("-y")
+            .arg("-f")
+            .arg("lavfi")
+            .arg("-i")
+            .arg(format!("color=c={color}:s=16x16:d=1:r=30"))
+            .arg("-frames:v")
+            .arg("30")
+            .arg("-c:v")
+            .arg("mpeg4")
+            .arg("-pix_fmt")
+            .arg("yuv420p")
+            .arg(path)
+            .status()
+            .is_ok_and(|status| status.success())
     }
 }
