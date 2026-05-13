@@ -1095,6 +1095,34 @@ nav {
   background: #0b0c13;
 }
 
+.source-config-section {
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.toolbar-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-mini .icon-button {
+  min-height: 30px;
+  width: 30px;
+}
+
 .group-child-manager {
   display: grid;
   gap: 10px;

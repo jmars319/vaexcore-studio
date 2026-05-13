@@ -51,13 +51,16 @@ frame of GIF files, caches decoded pixels by normalized path plus file modified
 time, and reports asset readiness metadata to Designer. It can also extract
 local video preview frames for `image_media` sources when `media_type = "video"`
 and FFmpeg is available. Video V1 supports MP4, MOV, WebM, and MKV files,
-samples the preview clock at a conservative deterministic interval, and caches
-decoded frames by normalized path, file modified time, and sampled time. Missing
-FFmpeg, missing files, unsupported extensions, and extraction failures remain
-explicit placeholder states. Transition previews render `cut`, `fade`, and
-`swipe` pixels in the backend software path, and stinger previews reuse optional
-video extraction to composite sampled local transition video over still from/to
-scene software frames and report trigger, decoder, cache, and fallback metadata.
+samples a deterministic media timeline at a conservative interval, supports
+play/pause/stop, playback rate, looped extraction, and restart-on-scene-activate
+metadata, and caches decoded frames by normalized path, file modified time,
+sampled time, and loop mode. Missing FFmpeg, missing files, unsupported
+extensions, and extraction failures remain explicit placeholder states.
+Transition previews render `cut`, `fade`, and `swipe` pixels in the backend
+software path, and stinger previews reuse the same timeline-aware optional video
+extraction to composite sampled local transition video over still from/to scene
+software frames and report trigger, decoder, cache, timeline, and fallback
+metadata.
 The compositor also rasterizes single-line `text` sources with the
 bundled Inter font and reports font fallback, color fallback, rendered bounds,
 and checksum metadata. Browser overlay sources can render preview frames through
@@ -70,8 +73,8 @@ diagnostics when no compatible browser is available or capture fails. Filter
 diagnostics report applied, skipped, deferred, or failed runtime state plus
 filtered checksums.
 Mask images use the same still-image decode/cache path, and LUT files are
-parsed and cached by normalized path plus modified time. Stinger video playback,
-live capture, recording, and streaming output remain outside this path.
+parsed and cached by normalized path plus modified time. Video audio playback,
+recording, and streaming output remain outside this path.
 
 `CaptureFramePlan` maps visible capture-backed scene sources to the video or
 audio frame stream the compositor will eventually consume. Each binding records

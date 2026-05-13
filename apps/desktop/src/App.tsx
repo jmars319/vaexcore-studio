@@ -7431,6 +7431,29 @@ function ImageAssetRuntimePanel(props: {
               label="Decoder"
               value={asset?.decoder_name ?? "ffmpeg optional"}
             />
+            <KeyValue
+              label="Timeline"
+              value={
+                asset?.timeline_position_ms != null
+                  ? `${(asset.timeline_position_ms / 1000).toFixed(2)}s ${
+                      asset.media_timeline_state ?? props.source.config.playback_state ?? "playing"
+                    }`
+                  : `${props.source.config.playback_state ?? "playing"} at ${(
+                      (props.source.config.timeline_position_ms ?? 0) / 1000
+                    ).toFixed(2)}s`
+              }
+            />
+            <KeyValue
+              label="Playback"
+              value={`${asset?.playback_rate ?? props.source.config.playback_rate ?? 1}x, ${
+                (asset?.loop_enabled ?? props.source.config.loop) ? "loop" : "no loop"
+              }, ${
+                (asset?.restart_on_scene_activate ??
+                props.source.config.restart_on_scene_activate)
+                  ? "restart on activate"
+                  : "continue timeline"
+              }`}
+            />
           </>
         )}
         <KeyValue
@@ -9347,6 +9370,97 @@ function SourceConfigEditor(props: {
               Loop
             </label>
           </div>
+          {source.config.media_type === "video" && (
+            <div className="source-config-section">
+              <div className="section-heading">
+                <span>Timeline</span>
+                <div className="toolbar-mini">
+                  <button
+                    className="icon-button"
+                    data-testid="designer-video-play"
+                    onClick={() => props.onChange({ playback_state: "playing" })}
+                    title="Play video preview timeline"
+                    type="button"
+                  >
+                    <Play size={14} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    data-testid="designer-video-pause"
+                    onClick={() => props.onChange({ playback_state: "paused" })}
+                    title="Pause video preview timeline"
+                    type="button"
+                  >
+                    <Pause size={14} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    data-testid="designer-video-stop"
+                    onClick={() =>
+                      props.onChange({
+                        playback_state: "stopped",
+                        timeline_position_ms: 0,
+                      })
+                    }
+                    title="Stop video preview timeline"
+                    type="button"
+                  >
+                    <Square size={14} />
+                  </button>
+                </div>
+              </div>
+              <div className="form-grid">
+                <label>
+                  Playback
+                  <select
+                    data-testid="designer-video-playback-state"
+                    value={source.config.playback_state ?? "playing"}
+                    onChange={(event) =>
+                      props.onChange({
+                        playback_state: event.target.value as
+                          | "playing"
+                          | "paused"
+                          | "stopped",
+                      })
+                    }
+                  >
+                    <option value="playing">Playing</option>
+                    <option value="paused">Paused</option>
+                    <option value="stopped">Stopped</option>
+                  </select>
+                </label>
+                <SceneNumberInput
+                  label="Timeline Position MS"
+                  min={0}
+                  onChange={(timeline_position_ms) =>
+                    props.onChange({ timeline_position_ms })
+                  }
+                  step={100}
+                  value={source.config.timeline_position_ms ?? 0}
+                />
+                <SceneNumberInput
+                  label="Playback Rate"
+                  min={0}
+                  max={4}
+                  onChange={(playback_rate) => props.onChange({ playback_rate })}
+                  step={0.25}
+                  value={source.config.playback_rate ?? 1}
+                />
+                <label className="check-row">
+                  <input
+                    checked={source.config.restart_on_scene_activate ?? true}
+                    onChange={(event) =>
+                      props.onChange({
+                        restart_on_scene_activate: event.target.checked,
+                      })
+                    }
+                    type="checkbox"
+                  />
+                  Restart on scene activate
+                </label>
+              </div>
+            </div>
+          )}
         </div>
       );
     case "browser_overlay":

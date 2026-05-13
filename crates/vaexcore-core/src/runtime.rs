@@ -14,7 +14,8 @@ use crate::{
     CompositorRendererKind, CompositorScaleMode, Scene, SceneCollection, SceneSourceKind,
     SceneTransition, SceneTransitionEasing, SceneTransitionKind, SceneTransitionPreviewPlan,
     SoftwareCompositorAssetMetadata, SoftwareCompositorAssetStatus, SoftwareCompositorFrame,
-    SoftwareCompositorInputFrame, SoftwareCompositorRenderResult,
+    SoftwareCompositorInputFrame, SoftwareCompositorMediaPlaybackState,
+    SoftwareCompositorRenderResult,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -395,6 +396,18 @@ pub struct StingerTransitionRuntimeMetadata {
     pub sample_index: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decoder_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_timeline_state: Option<SoftwareCompositorMediaPlaybackState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline_position_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline_base_position_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playback_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_on_scene_activate: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_reason: Option<String>,
 }
@@ -1908,6 +1921,12 @@ fn stinger_metadata_from_input(
             sampled_frame_time_ms: None,
             sample_index: None,
             decoder_name: None,
+            media_timeline_state: None,
+            timeline_position_ms: None,
+            timeline_base_position_ms: None,
+            playback_rate: None,
+            loop_enabled: None,
+            restart_on_scene_activate: None,
             fallback_reason: Some("No local stinger asset has been selected.".to_string()),
         };
     };
@@ -1944,6 +1963,12 @@ fn stinger_metadata_from_input(
         sampled_frame_time_ms: asset.sampled_frame_time_ms,
         sample_index: asset.sample_index,
         decoder_name: asset.decoder_name.clone(),
+        media_timeline_state: asset.media_timeline_state.clone(),
+        timeline_position_ms: asset.timeline_position_ms,
+        timeline_base_position_ms: asset.timeline_base_position_ms,
+        playback_rate: asset.playback_rate,
+        loop_enabled: asset.loop_enabled,
+        restart_on_scene_activate: asset.restart_on_scene_activate,
         fallback_reason,
     }
 }

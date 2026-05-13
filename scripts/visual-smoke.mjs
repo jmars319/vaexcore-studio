@@ -294,6 +294,16 @@ const targets = [
         expression: 'document.querySelector("[data-testid=\\"designer-image-asset-runtime\\"]")?.textContent?.includes("Decoder")',
         message: "Designer video runtime panel did not show decoder metadata.",
       },
+      {
+        type: "assert",
+        expression: 'document.querySelector("[data-testid=\\"designer-image-asset-runtime\\"]")?.textContent?.includes("Timeline")',
+        message: "Designer video runtime panel did not show timeline metadata.",
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-video-playback-state\\"]"))',
+        message: "Designer video timeline controls did not render.",
+      },
     ],
   },
   {

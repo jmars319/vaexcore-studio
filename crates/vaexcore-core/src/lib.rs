@@ -42,7 +42,8 @@ pub use compositor::{
     SoftwareCompositorAssetStatus, SoftwareCompositorBrowserMetadata,
     SoftwareCompositorBrowserStatus, SoftwareCompositorFilterMetadata,
     SoftwareCompositorFilterStatus, SoftwareCompositorFrame, SoftwareCompositorInputFrame,
-    SoftwareCompositorRenderResult, SoftwareCompositorTextMetadata, SoftwareCompositorTextStatus,
+    SoftwareCompositorMediaPlaybackState, SoftwareCompositorRenderResult,
+    SoftwareCompositorTextMetadata, SoftwareCompositorTextStatus,
 };
 pub use events::{StudioEvent, StudioEventKind};
 pub use performance::{

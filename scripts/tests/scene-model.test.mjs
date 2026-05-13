@@ -126,6 +126,10 @@ test("scene validation accepts current video media source configs", async () => 
         asset_uri: "/tmp/vaexcore-preview.mp4",
         media_type: "video",
         loop: true,
+        playback_state: "playing",
+        timeline_position_ms: 0,
+        playback_rate: 1,
+        restart_on_scene_activate: true,
         availability: {
           state: "available",
           detail: "Video preview source selected.",

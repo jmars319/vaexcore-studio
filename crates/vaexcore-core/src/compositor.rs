@@ -258,6 +258,14 @@ pub enum SoftwareCompositorAssetStatus {
     NoAsset,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SoftwareCompositorMediaPlaybackState {
+    Playing,
+    Paused,
+    Stopped,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SoftwareCompositorAssetMetadata {
     pub uri: String,
@@ -281,6 +289,18 @@ pub struct SoftwareCompositorAssetMetadata {
     pub sample_index: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decoder_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_timeline_state: Option<SoftwareCompositorMediaPlaybackState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline_position_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline_base_position_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playback_rate: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_on_scene_activate: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -544,6 +564,17 @@ struct VideoAssetCacheKey {
     path: String,
     modified_unix_ms: u64,
     sample_time_ms: u64,
+    loop_enabled: bool,
+}
+
+#[derive(Clone, Debug)]
+struct MediaTimelineState {
+    playback_state: SoftwareCompositorMediaPlaybackState,
+    base_position_ms: u64,
+    timeline_position_ms: u64,
+    playback_rate: f64,
+    loop_enabled: bool,
+    restart_on_scene_activate: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -553,6 +584,7 @@ struct DecodedVideoAsset {
     sample_index: u64,
     decoder_name: String,
     cache_hit: bool,
+    timeline: MediaTimelineState,
     image: CachedDecodedImage,
 }
 
@@ -1009,7 +1041,12 @@ pub fn stinger_video_input_frame(
         filters: Vec::new(),
         config: serde_json::json!({
             "asset_uri": asset_uri,
-            "media_type": "video"
+            "media_type": "video",
+            "loop": false,
+            "playback_state": "playing",
+            "timeline_position_ms": 0,
+            "playback_rate": 1.0,
+            "restart_on_scene_activate": true
         }),
     };
 
@@ -2028,7 +2065,8 @@ fn image_media_input_frame_for_node(
     let media_type =
         config_value_string(&node.config, "media_type").unwrap_or_else(|| "image".into());
     if media_type != "image" {
-        return match decode_video_asset(&asset_uri, clock) {
+        let timeline = media_timeline_for_node(node, clock);
+        return match decode_video_asset(&asset_uri, clock, timeline) {
             Ok(decoded) => decoded_video_input_frame(node, asset_uri, decoded),
             Err(metadata) => {
                 let metadata = *metadata;
@@ -2083,6 +2121,12 @@ fn decoded_image_input_frame(
         sampled_frame_time_ms: None,
         sample_index: None,
         decoder_name: None,
+        media_timeline_state: None,
+        timeline_position_ms: None,
+        timeline_base_position_ms: None,
+        playback_rate: None,
+        loop_enabled: None,
+        restart_on_scene_activate: None,
     };
 
     SoftwareCompositorInputFrame {
@@ -2112,12 +2156,15 @@ fn decoded_video_input_frame(
         uri: asset_uri,
         status: SoftwareCompositorAssetStatus::Decoded,
         status_detail: format!(
-            "Decoded {} video preview frame {}x{} at {:.2}s using {}.",
+            "Decoded {} video preview frame {}x{} at {:.2}s using {} ({} at {:.2}s, {:.2}x).",
             decoded.image.format,
             decoded.image.width,
             decoded.image.height,
             decoded.sample_time_ms as f64 / 1000.0,
-            decoded.decoder_name
+            decoded.decoder_name,
+            media_playback_state_label(&decoded.timeline.playback_state),
+            decoded.timeline.timeline_position_ms as f64 / 1000.0,
+            decoded.timeline.playback_rate
         ),
         format: Some(format!("video:{}", decoded.image.format)),
         width: Some(decoded.image.width),
@@ -2128,6 +2175,12 @@ fn decoded_video_input_frame(
         sampled_frame_time_ms: Some(decoded.sample_time_ms),
         sample_index: Some(decoded.sample_index),
         decoder_name: Some(decoded.decoder_name),
+        media_timeline_state: Some(decoded.timeline.playback_state.clone()),
+        timeline_position_ms: Some(decoded.timeline.timeline_position_ms),
+        timeline_base_position_ms: Some(decoded.timeline.base_position_ms),
+        playback_rate: Some(decoded.timeline.playback_rate),
+        loop_enabled: Some(decoded.timeline.loop_enabled),
+        restart_on_scene_activate: Some(decoded.timeline.restart_on_scene_activate),
     };
 
     SoftwareCompositorInputFrame {
@@ -3570,13 +3623,15 @@ fn decode_image_asset(
 fn decode_video_asset(
     asset_uri: &str,
     clock: &CompositorFrameClock,
+    timeline: MediaTimelineState,
 ) -> Result<DecodedVideoAsset, Box<SoftwareCompositorAssetMetadata>> {
-    decode_video_asset_with_decoder(asset_uri, clock, find_ffmpeg_binary())
+    decode_video_asset_with_decoder(asset_uri, clock, timeline, find_ffmpeg_binary())
 }
 
 fn decode_video_asset_with_decoder(
     asset_uri: &str,
-    clock: &CompositorFrameClock,
+    _clock: &CompositorFrameClock,
+    timeline: MediaTimelineState,
     ffmpeg_path: Option<PathBuf>,
 ) -> Result<DecodedVideoAsset, Box<SoftwareCompositorAssetMetadata>> {
     let Some(path) = asset_uri_path(asset_uri) else {
@@ -3630,12 +3685,13 @@ fn decode_video_asset_with_decoder(
         .ok()
         .and_then(system_time_unix_ms)
         .unwrap_or(0);
-    let sample_time_ms = quantized_video_sample_time_ms(clock);
+    let sample_time_ms = quantized_video_sample_time_ms(timeline.timeline_position_ms);
     let sample_index = sample_time_ms / VIDEO_SAMPLE_INTERVAL_MS;
     let key = VideoAssetCacheKey {
         path: normalized_path.clone(),
         modified_unix_ms,
         sample_time_ms,
+        loop_enabled: timeline.loop_enabled,
     };
     if let Some(image) = cached_video_asset(&key) {
         return Ok(DecodedVideoAsset {
@@ -3644,19 +3700,21 @@ fn decode_video_asset_with_decoder(
             sample_index,
             decoder_name: "ffmpeg".to_string(),
             cache_hit: true,
+            timeline,
             image,
         });
     }
 
-    let mut decoded = extract_video_frame_with_ffmpeg(&ffmpeg_path, &path, sample_time_ms)
-        .map_err(|error| {
-            Box::new(asset_metadata(
-                asset_uri.to_string(),
-                SoftwareCompositorAssetStatus::DecodeFailed,
-                format!("Video preview frame could not be decoded: {error}"),
-                Some(format.clone()),
-            ))
-        })?;
+    let mut decoded =
+        extract_video_frame_with_ffmpeg(&ffmpeg_path, &path, sample_time_ms, timeline.loop_enabled)
+            .map_err(|error| {
+                Box::new(asset_metadata(
+                    asset_uri.to_string(),
+                    SoftwareCompositorAssetStatus::DecodeFailed,
+                    format!("Video preview frame could not be decoded: {error}"),
+                    Some(format.clone()),
+                ))
+            })?;
     decoded.format = format;
     store_cached_video_asset(key, decoded.clone());
 
@@ -3666,6 +3724,7 @@ fn decode_video_asset_with_decoder(
         sample_index,
         decoder_name: "ffmpeg".to_string(),
         cache_hit: false,
+        timeline,
         image: decoded,
     })
 }
@@ -3674,12 +3733,15 @@ fn extract_video_frame_with_ffmpeg(
     ffmpeg_path: &Path,
     path: &Path,
     sample_time_ms: u64,
+    loop_enabled: bool,
 ) -> Result<CachedDecodedImage, String> {
     let sample_seconds = format!("{:.3}", sample_time_ms as f64 / 1000.0);
-    let output = Command::new(ffmpeg_path)
-        .arg("-v")
-        .arg("error")
-        .arg("-nostdin")
+    let mut command = Command::new(ffmpeg_path);
+    command.arg("-v").arg("error").arg("-nostdin");
+    if loop_enabled {
+        command.arg("-stream_loop").arg("-1");
+    }
+    let output = command
         .arg("-ss")
         .arg(sample_seconds)
         .arg("-i")
@@ -4413,9 +4475,61 @@ fn supported_video_extension(path: &Path) -> Option<String> {
     }
 }
 
-fn quantized_video_sample_time_ms(clock: &CompositorFrameClock) -> u64 {
-    let pts_ms = clock.pts_nanos / 1_000_000;
-    (pts_ms / VIDEO_SAMPLE_INTERVAL_MS) * VIDEO_SAMPLE_INTERVAL_MS
+fn quantized_video_sample_time_ms(timeline_position_ms: u64) -> u64 {
+    (timeline_position_ms / VIDEO_SAMPLE_INTERVAL_MS) * VIDEO_SAMPLE_INTERVAL_MS
+}
+
+fn media_timeline_for_node(
+    node: &CompositorNode,
+    clock: &CompositorFrameClock,
+) -> MediaTimelineState {
+    let playback_state = media_playback_state_from_config(&node.config)
+        .unwrap_or(SoftwareCompositorMediaPlaybackState::Playing);
+    let base_position_ms = config_value_number(&node.config, "timeline_position_ms")
+        .unwrap_or(0.0)
+        .max(0.0)
+        .round() as u64;
+    let playback_rate = config_value_number(&node.config, "playback_rate")
+        .unwrap_or(1.0)
+        .clamp(0.0, 4.0);
+    let loop_enabled = config_bool(&node.config, "loop").unwrap_or(true);
+    let restart_on_scene_activate =
+        config_bool(&node.config, "restart_on_scene_activate").unwrap_or(true);
+    let clock_elapsed_ms = clock.pts_nanos / 1_000_000;
+    let timeline_position_ms = match playback_state {
+        SoftwareCompositorMediaPlaybackState::Playing => base_position_ms
+            .saturating_add((clock_elapsed_ms as f64 * playback_rate).round() as u64),
+        SoftwareCompositorMediaPlaybackState::Paused => base_position_ms,
+        SoftwareCompositorMediaPlaybackState::Stopped => 0,
+    };
+
+    MediaTimelineState {
+        playback_state,
+        base_position_ms,
+        timeline_position_ms,
+        playback_rate,
+        loop_enabled,
+        restart_on_scene_activate,
+    }
+}
+
+fn media_playback_state_from_config(
+    config: &serde_json::Value,
+) -> Option<SoftwareCompositorMediaPlaybackState> {
+    match config_value_string(config, "playback_state")?.as_str() {
+        "playing" => Some(SoftwareCompositorMediaPlaybackState::Playing),
+        "paused" => Some(SoftwareCompositorMediaPlaybackState::Paused),
+        "stopped" => Some(SoftwareCompositorMediaPlaybackState::Stopped),
+        _ => None,
+    }
+}
+
+fn media_playback_state_label(state: &SoftwareCompositorMediaPlaybackState) -> &'static str {
+    match state {
+        SoftwareCompositorMediaPlaybackState::Playing => "playing",
+        SoftwareCompositorMediaPlaybackState::Paused => "paused",
+        SoftwareCompositorMediaPlaybackState::Stopped => "stopped",
+    }
 }
 
 fn find_ffmpeg_binary() -> Option<PathBuf> {
@@ -4669,6 +4783,12 @@ fn asset_metadata(
         sampled_frame_time_ms: None,
         sample_index: None,
         decoder_name: None,
+        media_timeline_state: None,
+        timeline_position_ms: None,
+        timeline_base_position_ms: None,
+        playback_rate: None,
+        loop_enabled: None,
+        restart_on_scene_activate: None,
     }
 }
 
@@ -5721,6 +5841,7 @@ mod tests {
         let unavailable = decode_video_asset_with_decoder(
             &unavailable_path.display().to_string(),
             &default_software_input_clock(),
+            test_media_timeline(0, SoftwareCompositorMediaPlaybackState::Playing),
             None,
         )
         .unwrap_err();
@@ -5833,6 +5954,62 @@ mod tests {
         }
         let rewritten = render_test_scene_with_target_at_frame(scene, 8, 8, 17);
         assert!(!rewritten.input_frames[0].asset.as_ref().unwrap().cache_hit);
+    }
+
+    #[test]
+    fn software_compositor_uses_video_timeline_state_for_sampling() {
+        let Some(ffmpeg_path) = find_ffmpeg_binary() else {
+            eprintln!("skipping video timeline test because ffmpeg is unavailable");
+            return;
+        };
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("clip.mp4");
+        if !write_test_video(&ffmpeg_path, &path, "purple") {
+            eprintln!("skipping video timeline test because ffmpeg could not create fixture");
+            return;
+        }
+
+        let mut paused_scene = test_image_scene(&path.display().to_string(), Some("video"));
+        paused_scene.sources[0].config = serde_json::json!({
+            "asset_uri": path.display().to_string(),
+            "media_type": "video",
+            "loop": true,
+            "playback_state": "paused",
+            "timeline_position_ms": 1_000,
+            "playback_rate": 1.0,
+            "restart_on_scene_activate": true
+        });
+        let paused_late = render_test_scene_with_target_at_frame(paused_scene, 8, 8, 60);
+        let paused_asset = paused_late.input_frames[0].asset.as_ref().unwrap();
+        assert_eq!(
+            paused_asset.media_timeline_state,
+            Some(SoftwareCompositorMediaPlaybackState::Paused)
+        );
+        assert_eq!(paused_asset.timeline_position_ms, Some(1_000));
+        assert_eq!(paused_asset.sampled_frame_time_ms, Some(1_000));
+
+        let mut playing_scene = test_image_scene(&path.display().to_string(), Some("video"));
+        playing_scene.sources[0].config = serde_json::json!({
+            "asset_uri": path.display().to_string(),
+            "media_type": "video",
+            "loop": true,
+            "playback_state": "playing",
+            "timeline_position_ms": 500,
+            "playback_rate": 2.0,
+            "restart_on_scene_activate": false
+        });
+        let playing_late = render_test_scene_with_target_at_frame(playing_scene, 8, 8, 30);
+        let playing_asset = playing_late.input_frames[0].asset.as_ref().unwrap();
+        assert_eq!(
+            playing_asset.media_timeline_state,
+            Some(SoftwareCompositorMediaPlaybackState::Playing)
+        );
+        assert_eq!(playing_asset.timeline_base_position_ms, Some(500));
+        assert_eq!(playing_asset.timeline_position_ms, Some(2_498));
+        assert_eq!(playing_asset.sampled_frame_time_ms, Some(2_000));
+        assert_eq!(playing_asset.playback_rate, Some(2.0));
+        assert_eq!(playing_asset.loop_enabled, Some(true));
+        assert_eq!(playing_asset.restart_on_scene_activate, Some(false));
     }
 
     #[test]
@@ -7218,9 +7395,28 @@ mod tests {
                 filters: Vec::new(),
                 config: serde_json::json!({
                     "asset_uri": asset_uri,
-                    "media_type": media_type.unwrap_or("image")
+                    "media_type": media_type.unwrap_or("image"),
+                    "loop": true,
+                    "playback_state": "playing",
+                    "timeline_position_ms": 0,
+                    "playback_rate": 1.0,
+                    "restart_on_scene_activate": true
                 }),
             }],
+        }
+    }
+
+    fn test_media_timeline(
+        timeline_position_ms: u64,
+        playback_state: SoftwareCompositorMediaPlaybackState,
+    ) -> MediaTimelineState {
+        MediaTimelineState {
+            playback_state,
+            base_position_ms: timeline_position_ms,
+            timeline_position_ms,
+            playback_rate: 1.0,
+            loop_enabled: true,
+            restart_on_scene_activate: true,
         }
     }
 

@@ -51,8 +51,10 @@ foundation to OBS-class scene editing and output.
 16. Image and media source engine: started with real local still-image decode
     for PNG, JPEG, WebP, and first-frame GIF preview rendering plus optional
     FFmpeg-backed local video preview frame extraction for MP4, MOV, WebM, and
-    MKV assets. Video audio playback and long-running media timelines are not
-    started.
+    MKV assets. Full Scene Designer Pass 8 adds deterministic media timelines
+    for local video preview with play/pause/stop, playback rate, looped
+    extraction, restart-on-scene-activate metadata, and matching stinger
+    timebase. Video audio playback is not started.
 17. Browser/web overlay source engine: started with optional local
     Chrome/Chromium/Edge DevTools rendering for HTTP, HTTPS, and file URLs.
     Full Scene Designer Pass 7 adds managed preview sessions, refresh interval,
@@ -210,13 +212,14 @@ editing, grouping, numeric transforms, local asset URI selection, explicit
 bundle import/export, app-data fallback bundles, validation, runtime refresh,
 deterministic placeholder transition preview, real local still-image preview
 pixels, FFmpeg-backed local video preview frames when FFmpeg is available,
-backend-rendered single-line text pixels, optional browser overlay preview
-snapshots, software visual filter preview pixels, one-shot macOS display/window
-capture snapshots, and one-shot macOS camera snapshots through optional FFmpeg
-when source bindings and permissions are available. The remaining Scene Designer
-work starts persistent capture sessions, interactive browser lifecycle, live
-audio, timeline playback, and the output handoff path; offline editor completion
-does not imply OBS-level capture, encoder, plugin, or live-output parity.
+timeline-aware local video preview playback controls, backend-rendered
+single-line text pixels, optional browser overlay preview snapshots, software
+visual filter preview pixels, one-shot macOS display/window capture snapshots,
+and one-shot macOS camera snapshots through optional FFmpeg when source bindings
+and permissions are available. The remaining Scene Designer work starts
+persistent capture sessions, richer editor parity, readiness/soak validation,
+and the output handoff path; offline editor completion does not imply OBS-level
+encoder, plugin, or live-output parity.
 
 ## Validation Contract
 

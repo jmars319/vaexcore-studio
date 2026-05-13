@@ -113,6 +113,10 @@ export interface ImageMediaSceneSourceConfig {
   asset_uri: string | null;
   media_type: "image" | "video";
   loop: boolean;
+  playback_state: "playing" | "paused" | "stopped";
+  timeline_position_ms: number;
+  playback_rate: number;
+  restart_on_scene_activate: boolean;
   availability: SceneSourceAvailability;
 }
 
@@ -557,6 +561,12 @@ export interface SoftwareCompositorAssetMetadata {
   sampled_frame_time_ms?: number | null;
   sample_index?: number | null;
   decoder_name?: string | null;
+  media_timeline_state?: "playing" | "paused" | "stopped" | null;
+  timeline_position_ms?: number | null;
+  timeline_base_position_ms?: number | null;
+  playback_rate?: number | null;
+  loop_enabled?: boolean | null;
+  restart_on_scene_activate?: boolean | null;
 }
 
 export type SoftwareCompositorTextStatus =
@@ -1027,6 +1037,12 @@ export interface StingerTransitionRuntimeMetadata {
   sampled_frame_time_ms?: number | null;
   sample_index?: number | null;
   decoder_name?: string | null;
+  media_timeline_state?: "playing" | "paused" | "stopped" | null;
+  timeline_position_ms?: number | null;
+  timeline_base_position_ms?: number | null;
+  playback_rate?: number | null;
+  loop_enabled?: boolean | null;
+  restart_on_scene_activate?: boolean | null;
   fallback_reason?: string | null;
 }
 
@@ -1809,6 +1825,10 @@ export function defaultSceneSourceConfig(
         asset_uri: null,
         media_type: "image",
         loop: true,
+        playback_state: "playing",
+        timeline_position_ms: 0,
+        playback_rate: 1,
+        restart_on_scene_activate: true,
         availability: defaultAvailability(
           "unavailable",
           "No local media asset has been selected.",
