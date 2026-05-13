@@ -16,6 +16,7 @@ repository = "https://github.com/jmars319/vaexcore-studio"
 rust-version = "1.82"
 
 [workspace.dependencies]
+ab_glyph = "0.2"
 anyhow = "1.0"
 async-trait = "0.1"
 axum = { version = "0.8.9", features = ["json", "ws"] }

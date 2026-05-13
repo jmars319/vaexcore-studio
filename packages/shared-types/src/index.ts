@@ -505,6 +505,7 @@ export interface CompositorEvaluatedNode {
   status: CompositorNodeStatus;
   status_detail: string;
   asset?: SoftwareCompositorAssetMetadata | null;
+  text?: SoftwareCompositorTextMetadata | null;
   rect: CompositorRect;
   crop: SceneCrop;
   rotation_degrees: number;
@@ -550,6 +551,25 @@ export interface SoftwareCompositorAssetMetadata {
   cache_hit: boolean;
 }
 
+export type SoftwareCompositorTextStatus =
+  | "rendered"
+  | "font_fallback"
+  | "empty"
+  | "invalid_color";
+
+export interface SoftwareCompositorTextMetadata {
+  status: SoftwareCompositorTextStatus;
+  status_detail: string;
+  requested_font_family: string;
+  used_font_family: string;
+  font_size: number;
+  color: string;
+  align: string;
+  text_length: number;
+  rendered_bounds?: CompositorRect | null;
+  checksum?: number | null;
+}
+
 export interface SoftwareCompositorInputFrame {
   source_id: string;
   source_kind: SceneSourceKind;
@@ -559,6 +579,7 @@ export interface SoftwareCompositorInputFrame {
   status: CompositorNodeStatus;
   status_detail: string;
   asset?: SoftwareCompositorAssetMetadata | null;
+  text?: SoftwareCompositorTextMetadata | null;
   checksum: number;
   pixels: number[];
 }
@@ -4405,6 +4426,7 @@ function evaluateNodeForTarget(
     status: node.status,
     status_detail: node.status_detail,
     asset: null,
+    text: null,
     rect: {
       x: offsetX + sourceRect.x * scaleX,
       y: offsetY + sourceRect.y * scaleY,

@@ -34,7 +34,7 @@ pub use compositor::{
     CompositorRenderedFrame, CompositorRenderedTarget, CompositorRendererKind, CompositorScaleMode,
     CompositorTransform, CompositorValidation, SoftwareCompositorAssetMetadata,
     SoftwareCompositorAssetStatus, SoftwareCompositorFrame, SoftwareCompositorInputFrame,
-    SoftwareCompositorRenderResult,
+    SoftwareCompositorRenderResult, SoftwareCompositorTextMetadata, SoftwareCompositorTextStatus,
 };
 pub use events::{StudioEvent, StudioEventKind};
 pub use performance::{

@@ -6,6 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use ab_glyph::{point, Font, FontArc, Glyph, PxScale, ScaleFont};
 use image::ImageReader;
 use serde::{Deserialize, Serialize};
 
@@ -170,6 +171,8 @@ pub struct CompositorEvaluatedNode {
     pub status_detail: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asset: Option<SoftwareCompositorAssetMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<SoftwareCompositorTextMetadata>,
     pub rect: CompositorRect,
     pub crop: SceneCrop,
     pub rotation_degrees: f64,
@@ -220,6 +223,8 @@ pub struct SoftwareCompositorInputFrame {
     pub status_detail: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asset: Option<SoftwareCompositorAssetMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<SoftwareCompositorTextMetadata>,
     pub checksum: u64,
     pub pixels: Vec<u8>,
 }
@@ -254,6 +259,31 @@ pub struct SoftwareCompositorAssetMetadata {
     pub cache_hit: bool,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SoftwareCompositorTextStatus {
+    Rendered,
+    FontFallback,
+    Empty,
+    InvalidColor,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SoftwareCompositorTextMetadata {
+    pub status: SoftwareCompositorTextStatus,
+    pub status_detail: String,
+    pub requested_font_family: String,
+    pub used_font_family: String,
+    pub font_size: f64,
+    pub color: String,
+    pub align: String,
+    pub text_length: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rendered_bounds: Option<CompositorRect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checksum: Option<u64>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SoftwareCompositorRenderResult {
     pub frame: CompositorRenderedFrame,
@@ -283,8 +313,29 @@ struct DecodedImageAsset {
     image: CachedDecodedImage,
 }
 
+#[derive(Clone, Debug)]
+struct TextRenderRequest {
+    text: String,
+    requested_font_family: String,
+    font_size: f64,
+    color: [u8; 4],
+    color_string: String,
+    invalid_color: bool,
+    align: TextAlign,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum TextAlign {
+    Left,
+    Center,
+    Right,
+}
+
 static IMAGE_ASSET_CACHE: OnceLock<Mutex<HashMap<ImageAssetCacheKey, CachedDecodedImage>>> =
     OnceLock::new();
+static INTER_FONT: OnceLock<Result<FontArc, String>> = OnceLock::new();
+const INTER_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/Inter.ttf");
+const SOFTWARE_TEXT_FONT_FAMILY: &str = "Inter";
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct CompositorValidation {
@@ -698,6 +749,7 @@ fn evaluate_node_for_target_with_input(
         .map(|frame| frame.status_detail.clone())
         .unwrap_or_else(|| node.status_detail.clone());
     let asset = input_frame.and_then(|frame| frame.asset.clone());
+    let text = input_frame.and_then(|frame| frame.text.clone());
     CompositorEvaluatedNode {
         node_id: node.id.clone(),
         source_id: node.source_id.clone(),
@@ -706,6 +758,7 @@ fn evaluate_node_for_target_with_input(
         status,
         status_detail,
         asset,
+        text,
         rect: CompositorRect {
             x: offset_x + source_rect.x * scale_x,
             y: offset_y + source_rect.y * scale_y,
@@ -824,6 +877,13 @@ fn config_value_string(config: &serde_json::Value, key: &str) -> Option<String> 
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn config_value_number(config: &serde_json::Value, key: &str) -> Option<f64> {
+    config
+        .get(key)
+        .and_then(serde_json::Value::as_f64)
+        .filter(|value| value.is_finite())
 }
 
 fn effective_node_transform(node: &CompositorNode, graph: &CompositorGraph) -> CompositorTransform {
@@ -982,8 +1042,17 @@ fn software_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInp
     if node.source_kind == SceneSourceKind::ImageMedia {
         return image_media_input_frame_for_node(node);
     }
+    if node.source_kind == SceneSourceKind::Text {
+        return text_input_frame_for_node(node);
+    }
 
-    placeholder_input_frame_for_node(node, node.status.clone(), node.status_detail.clone(), None)
+    placeholder_input_frame_for_node(
+        node,
+        node.status.clone(),
+        node.status_detail.clone(),
+        None,
+        None,
+    )
 }
 
 fn image_media_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFrame {
@@ -1000,6 +1069,7 @@ fn image_media_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositor
             CompositorNodeStatus::Placeholder,
             "No local image asset has been selected.".to_string(),
             Some(metadata),
+            None,
         );
     }
 
@@ -1017,6 +1087,7 @@ fn image_media_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositor
             CompositorNodeStatus::Placeholder,
             "Video media decode/playback is deferred for this source.".to_string(),
             Some(metadata),
+            None,
         );
     }
 
@@ -1029,6 +1100,7 @@ fn image_media_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositor
                 CompositorNodeStatus::Placeholder,
                 metadata.status_detail.clone(),
                 Some(metadata),
+                None,
             )
         }
     }
@@ -1063,8 +1135,246 @@ fn decoded_image_input_frame(
         status: CompositorNodeStatus::Ready,
         status_detail: metadata.status_detail.clone(),
         asset: Some(metadata),
+        text: None,
         checksum: decoded.image.checksum,
         pixels: decoded.image.pixels,
+    }
+}
+
+fn text_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFrame {
+    let request = text_render_request(node);
+    if request.text.is_empty() {
+        let metadata = text_metadata(
+            SoftwareCompositorTextStatus::Empty,
+            "Text source is empty.".to_string(),
+            &request,
+            None,
+            None,
+        );
+        return placeholder_input_frame_for_node(
+            node,
+            CompositorNodeStatus::Placeholder,
+            metadata.status_detail.clone(),
+            None,
+            Some(metadata),
+        );
+    }
+
+    match render_text_source(node, &request) {
+        Ok(frame) => frame,
+        Err(detail) => {
+            let metadata = text_metadata(
+                SoftwareCompositorTextStatus::Empty,
+                detail,
+                &request,
+                None,
+                None,
+            );
+            placeholder_input_frame_for_node(
+                node,
+                CompositorNodeStatus::Placeholder,
+                metadata.status_detail.clone(),
+                None,
+                Some(metadata),
+            )
+        }
+    }
+}
+
+fn render_text_source(
+    node: &CompositorNode,
+    request: &TextRenderRequest,
+) -> Result<SoftwareCompositorInputFrame, String> {
+    let size = input_frame_size(node);
+    let width = size.width.max(1.0).round().min(3840.0) as u32;
+    let height = size.height.max(1.0).round().min(2160.0) as u32;
+    let mut pixels = vec![0; width as usize * height as usize * 4];
+    let font = inter_font()?;
+    let glyphs = layout_text_glyphs(&font, request, width, height);
+
+    for glyph in glyphs {
+        let Some(outlined) = font.outline_glyph(glyph) else {
+            continue;
+        };
+        let bounds = outlined.px_bounds();
+        outlined.draw(|glyph_x, glyph_y, coverage| {
+            if coverage <= 0.0 {
+                return;
+            }
+            let x = glyph_x as i32 + bounds.min.x.floor() as i32;
+            let y = glyph_y as i32 + bounds.min.y.floor() as i32;
+            if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+                return;
+            }
+            let offset = (y as usize * width as usize + x as usize) * 4;
+            let mut color = request.color;
+            color[3] = ((coverage * f32::from(color[3])).round()).clamp(0.0, 255.0) as u8;
+            blend_pixel(&mut pixels[offset..offset + 4], color);
+        });
+    }
+
+    let checksum = checksum_pixels(&pixels);
+    let rendered_bounds = alpha_bounds(&pixels, width, height);
+    let status = if request.invalid_color {
+        SoftwareCompositorTextStatus::InvalidColor
+    } else if uses_font_fallback(&request.requested_font_family) {
+        SoftwareCompositorTextStatus::FontFallback
+    } else {
+        SoftwareCompositorTextStatus::Rendered
+    };
+    let metadata = text_metadata(
+        status,
+        text_status_detail(request),
+        request,
+        rendered_bounds,
+        Some(checksum),
+    );
+    let status_detail = metadata.status_detail.clone();
+
+    Ok(SoftwareCompositorInputFrame {
+        source_id: node.source_id.clone(),
+        source_kind: node.source_kind.clone(),
+        width,
+        height,
+        frame_format: CompositorFrameFormat::Rgba8,
+        status: CompositorNodeStatus::Ready,
+        status_detail,
+        asset: None,
+        text: Some(metadata),
+        checksum,
+        pixels,
+    })
+}
+
+fn layout_text_glyphs(
+    font: &FontArc,
+    request: &TextRenderRequest,
+    width: u32,
+    height: u32,
+) -> Vec<Glyph> {
+    let scale = PxScale::from(request.font_size as f32);
+    let scaled_font = font.as_scaled(scale);
+    let mut cursor_x = 0.0_f32;
+    let mut previous = None;
+    let mut glyphs = Vec::new();
+
+    for character in request.text.chars() {
+        let glyph_id = font.glyph_id(character);
+        if let Some(previous_id) = previous {
+            cursor_x += scaled_font.kern(previous_id, glyph_id);
+        }
+        glyphs.push(Glyph {
+            id: glyph_id,
+            scale,
+            position: point(cursor_x, 0.0),
+        });
+        cursor_x += scaled_font.h_advance(glyph_id);
+        previous = Some(glyph_id);
+    }
+
+    let text_width = cursor_x.max(1.0);
+    let inset = (width as f32 * 0.08).clamp(2.0, 24.0);
+    let start_x = match request.align {
+        TextAlign::Left => inset,
+        TextAlign::Center => (width as f32 - text_width) / 2.0,
+        TextAlign::Right => width as f32 - inset - text_width,
+    };
+    let ascent = scaled_font.ascent();
+    let descent = scaled_font.descent();
+    let text_height = (ascent - descent).max(1.0);
+    let baseline = ((height as f32 - text_height) / 2.0) + ascent;
+
+    for glyph in &mut glyphs {
+        glyph.position.x += start_x;
+        glyph.position.y += baseline;
+    }
+
+    glyphs
+}
+
+fn text_render_request(node: &CompositorNode) -> TextRenderRequest {
+    let text = config_value_string(&node.config, "text").unwrap_or_default();
+    let requested_font_family = config_value_string(&node.config, "font_family")
+        .unwrap_or_else(|| SOFTWARE_TEXT_FONT_FAMILY.to_string());
+    let font_size = config_value_number(&node.config, "font_size")
+        .filter(|value| *value > 0.0)
+        .unwrap_or_else(|| node.transform.size.height.max(1.0) * 0.58)
+        .clamp(1.0, 512.0);
+    let color_value =
+        config_value_string(&node.config, "color").unwrap_or_else(|| "#f4f8ff".to_string());
+    let (color, color_string, invalid_color) = parse_text_color(&color_value)
+        .map(|color| (color, normalized_hex_color(color), false))
+        .unwrap_or_else(|| ([244, 248, 255, 255], "#f4f8ff".to_string(), true));
+    let align = match config_value_string(&node.config, "align")
+        .unwrap_or_else(|| "center".to_string())
+        .as_str()
+    {
+        "left" => TextAlign::Left,
+        "right" => TextAlign::Right,
+        _ => TextAlign::Center,
+    };
+
+    TextRenderRequest {
+        text,
+        requested_font_family,
+        font_size,
+        color,
+        color_string,
+        invalid_color,
+        align,
+    }
+}
+
+fn text_metadata(
+    status: SoftwareCompositorTextStatus,
+    status_detail: String,
+    request: &TextRenderRequest,
+    rendered_bounds: Option<CompositorRect>,
+    checksum: Option<u64>,
+) -> SoftwareCompositorTextMetadata {
+    SoftwareCompositorTextMetadata {
+        status,
+        status_detail,
+        requested_font_family: request.requested_font_family.clone(),
+        used_font_family: SOFTWARE_TEXT_FONT_FAMILY.to_string(),
+        font_size: request.font_size,
+        color: request.color_string.clone(),
+        align: request.align.as_str().to_string(),
+        text_length: request.text.chars().count(),
+        rendered_bounds,
+        checksum,
+    }
+}
+
+fn text_status_detail(request: &TextRenderRequest) -> String {
+    if request.invalid_color {
+        return format!(
+            "Text rendered with fallback color {} because the configured color is invalid.",
+            request.color_string
+        );
+    }
+    if uses_font_fallback(&request.requested_font_family) {
+        return format!(
+            "Text rendered with bundled Inter because requested font \"{}\" is not bundled.",
+            request.requested_font_family
+        );
+    }
+    "Text rendered with bundled Inter.".to_string()
+}
+
+fn uses_font_fallback(requested_font_family: &str) -> bool {
+    !requested_font_family
+        .trim()
+        .eq_ignore_ascii_case(SOFTWARE_TEXT_FONT_FAMILY)
+}
+
+impl TextAlign {
+    fn as_str(&self) -> &'static str {
+        match self {
+            TextAlign::Left => "left",
+            TextAlign::Center => "center",
+            TextAlign::Right => "right",
+        }
     }
 }
 
@@ -1073,6 +1383,7 @@ fn placeholder_input_frame_for_node(
     status: CompositorNodeStatus,
     status_detail: String,
     asset: Option<SoftwareCompositorAssetMetadata>,
+    text: Option<SoftwareCompositorTextMetadata>,
 ) -> SoftwareCompositorInputFrame {
     let size = input_frame_size(node);
     let width = size.width.max(1.0).round().min(3840.0) as u32;
@@ -1117,6 +1428,7 @@ fn placeholder_input_frame_for_node(
         status,
         status_detail,
         asset,
+        text,
         checksum,
         pixels,
     }
@@ -1127,20 +1439,37 @@ fn apply_software_input_validation(
     input_frames: &[SoftwareCompositorInputFrame],
 ) {
     for input in input_frames {
-        let Some(asset) = &input.asset else {
-            continue;
-        };
-        match asset.status {
-            SoftwareCompositorAssetStatus::Decoded => {}
-            SoftwareCompositorAssetStatus::MissingFile
-            | SoftwareCompositorAssetStatus::UnsupportedExtension
-            | SoftwareCompositorAssetStatus::DecodeFailed
-            | SoftwareCompositorAssetStatus::VideoPlaceholder
-            | SoftwareCompositorAssetStatus::NoAsset => {
-                validation.warnings.push(format!(
-                    "{} image/media asset is using a placeholder: {}",
-                    input.source_id, asset.status_detail
-                ));
+        if let Some(asset) = &input.asset {
+            match asset.status {
+                SoftwareCompositorAssetStatus::Decoded => {}
+                SoftwareCompositorAssetStatus::MissingFile
+                | SoftwareCompositorAssetStatus::UnsupportedExtension
+                | SoftwareCompositorAssetStatus::DecodeFailed
+                | SoftwareCompositorAssetStatus::VideoPlaceholder
+                | SoftwareCompositorAssetStatus::NoAsset => {
+                    validation.warnings.push(format!(
+                        "{} image/media asset is using a placeholder: {}",
+                        input.source_id, asset.status_detail
+                    ));
+                }
+            }
+        }
+        if let Some(text) = &input.text {
+            match text.status {
+                SoftwareCompositorTextStatus::Rendered => {}
+                SoftwareCompositorTextStatus::FontFallback
+                | SoftwareCompositorTextStatus::InvalidColor => {
+                    validation.warnings.push(format!(
+                        "{} text rendered with fallback behavior: {}",
+                        input.source_id, text.status_detail
+                    ));
+                }
+                SoftwareCompositorTextStatus::Empty => {
+                    validation.warnings.push(format!(
+                        "{} text source is using a placeholder: {}",
+                        input.source_id, text.status_detail
+                    ));
+                }
             }
         }
     }
@@ -1320,6 +1649,15 @@ fn asset_metadata(
         modified_unix_ms: None,
         cache_hit: false,
     }
+}
+
+fn inter_font() -> Result<FontArc, String> {
+    INTER_FONT
+        .get_or_init(|| {
+            FontArc::try_from_slice(INTER_FONT_BYTES)
+                .map_err(|error| format!("Bundled Inter font could not be loaded: {error:?}"))
+        })
+        .clone()
 }
 
 fn system_time_unix_ms(value: SystemTime) -> Option<u64> {
@@ -1568,6 +1906,25 @@ fn parse_background_color(value: &str) -> [u8; 4] {
     [red, green, blue, 255]
 }
 
+fn parse_text_color(value: &str) -> Option<[u8; 4]> {
+    let trimmed = value.trim();
+    let hex = trimmed.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+
+    Some([
+        parse_hex_channel(&hex[0..2])?,
+        parse_hex_channel(&hex[2..4])?,
+        parse_hex_channel(&hex[4..6])?,
+        255,
+    ])
+}
+
+fn normalized_hex_color(color: [u8; 4]) -> String {
+    format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2])
+}
+
 fn parse_hex_channel(value: &str) -> Option<u8> {
     u8::from_str_radix(value, 16).ok()
 }
@@ -1579,6 +1936,37 @@ fn checksum_pixels(pixels: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
+}
+
+fn alpha_bounds(pixels: &[u8], width: u32, height: u32) -> Option<CompositorRect> {
+    let width = width.max(1) as usize;
+    let height = height.max(1) as usize;
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0_usize;
+    let mut max_y = 0_usize;
+    let mut found = false;
+
+    for y in 0..height {
+        for x in 0..width {
+            let alpha = pixels[(y * width + x) * 4 + 3];
+            if alpha == 0 {
+                continue;
+            }
+            found = true;
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+
+    found.then(|| CompositorRect {
+        x: min_x as f64,
+        y: min_y as f64,
+        width: (max_x - min_x + 1) as f64,
+        height: (max_y - min_y + 1) as f64,
+    })
 }
 
 fn build_compositor_node(
@@ -2184,6 +2572,169 @@ mod tests {
     }
 
     #[test]
+    fn software_compositor_renders_text_source_pixels() {
+        let result = render_test_text_source("VAEX", "Inter", "#f4f8ff", "center", 42.0);
+        let input = result
+            .input_frames
+            .iter()
+            .find(|frame| frame.source_id == "source-text")
+            .unwrap();
+        let text = input.text.as_ref().unwrap();
+
+        assert_eq!(input.status, CompositorNodeStatus::Ready);
+        assert_eq!(text.status, SoftwareCompositorTextStatus::Rendered);
+        assert_eq!(text.used_font_family, "Inter");
+        assert_eq!(text.text_length, 4);
+        assert!(text.rendered_bounds.is_some());
+        assert!(text.checksum.is_some_and(|checksum| checksum > 0));
+        assert!(alpha_pixel_count(input) > 0);
+        assert_ne!(result.pixel_frames[0].checksum, 0);
+    }
+
+    #[test]
+    fn software_compositor_reports_empty_text_placeholder_state() {
+        let result = render_test_text_source(" ", "Inter", "#f4f8ff", "center", 42.0);
+        let input = result
+            .input_frames
+            .iter()
+            .find(|frame| frame.source_id == "source-text")
+            .unwrap();
+        let text = input.text.as_ref().unwrap();
+
+        assert_eq!(input.status, CompositorNodeStatus::Placeholder);
+        assert_eq!(text.status, SoftwareCompositorTextStatus::Empty);
+        assert!(result
+            .frame
+            .validation
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Text source is empty")));
+    }
+
+    #[test]
+    fn software_compositor_reports_invalid_text_color_fallback() {
+        let result = render_test_text_source("VAEX", "Inter", "not-a-color", "center", 42.0);
+        let input = result
+            .input_frames
+            .iter()
+            .find(|frame| frame.source_id == "source-text")
+            .unwrap();
+        let text = input.text.as_ref().unwrap();
+
+        assert_eq!(input.status, CompositorNodeStatus::Ready);
+        assert_eq!(text.status, SoftwareCompositorTextStatus::InvalidColor);
+        assert_eq!(text.color, "#f4f8ff");
+        assert!(result
+            .frame
+            .validation
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("fallback color")));
+    }
+
+    #[test]
+    fn software_compositor_applies_text_alignment() {
+        let left = render_test_text_source("VAEX", "Inter", "#f4f8ff", "left", 42.0);
+        let center = render_test_text_source("VAEX", "Inter", "#f4f8ff", "center", 42.0);
+        let right = render_test_text_source("VAEX", "Inter", "#f4f8ff", "right", 42.0);
+
+        let left_bounds = non_background_bounds(&left.pixel_frames[0], [5, 7, 17, 255]).unwrap();
+        let center_bounds =
+            non_background_bounds(&center.pixel_frames[0], [5, 7, 17, 255]).unwrap();
+        let right_bounds = non_background_bounds(&right.pixel_frames[0], [5, 7, 17, 255]).unwrap();
+
+        assert!(left_bounds.x < center_bounds.x);
+        assert!(center_bounds.x < right_bounds.x);
+    }
+
+    #[test]
+    fn software_compositor_text_font_size_changes_bounds_and_checksum() {
+        let small = render_test_text_source("VAEX", "Inter", "#f4f8ff", "center", 20.0);
+        let large = render_test_text_source("VAEX", "Inter", "#f4f8ff", "center", 48.0);
+        let small_text = small.input_frames[0].text.as_ref().unwrap();
+        let large_text = large.input_frames[0].text.as_ref().unwrap();
+
+        assert!(
+            small_text.rendered_bounds.as_ref().unwrap().height
+                < large_text.rendered_bounds.as_ref().unwrap().height
+        );
+        assert_ne!(
+            small.input_frames[0].checksum,
+            large.input_frames[0].checksum
+        );
+    }
+
+    #[test]
+    fn software_compositor_applies_crop_opacity_and_z_order_to_text() {
+        let dir = tempdir().unwrap();
+        let bottom_path = dir.path().join("bottom.png");
+        write_test_image(&bottom_path, ImageFormat::Png, [0, 0, 255, 255]);
+
+        let mut scene = test_image_scene(&bottom_path.display().to_string(), None);
+        scene.canvas.width = 96;
+        scene.canvas.height = 64;
+        scene.sources[0].size = SceneSize {
+            width: 96.0,
+            height: 64.0,
+        };
+        scene.sources[0].z_index = 0;
+        scene.sources.push(SceneSource {
+            id: "source-text".to_string(),
+            name: "Top Text".to_string(),
+            kind: SceneSourceKind::Text,
+            position: ScenePoint { x: 0.0, y: 0.0 },
+            size: SceneSize {
+                width: 96.0,
+                height: 64.0,
+            },
+            crop: SceneCrop {
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+                left: 48.0,
+            },
+            rotation_degrees: 0.0,
+            opacity: 0.5,
+            visible: true,
+            locked: false,
+            z_index: 20,
+            bounds_mode: SceneSourceBoundsMode::Stretch,
+            filters: Vec::new(),
+            config: serde_json::json!({
+                "text": "MMMM",
+                "font_family": "Inter",
+                "font_size": 60,
+                "color": "#ff0000",
+                "align": "center"
+            }),
+        });
+
+        let result = render_test_scene_with_target(scene, 96, 64);
+        let left_blended = count_pixels_in_region(&result.pixel_frames[0], 0, 48, blended_red_blue);
+        let right_blended =
+            count_pixels_in_region(&result.pixel_frames[0], 48, 96, blended_red_blue);
+
+        assert_eq!(left_blended, 0);
+        assert!(right_blended > 0);
+    }
+
+    #[test]
+    fn software_compositor_reports_text_font_fallback() {
+        let result = render_test_text_source("VAEX", "Papyrus", "#f4f8ff", "center", 42.0);
+        let text = result.input_frames[0].text.as_ref().unwrap();
+
+        assert_eq!(text.status, SoftwareCompositorTextStatus::FontFallback);
+        assert_eq!(text.requested_font_family, "Papyrus");
+        assert_eq!(text.used_font_family, "Inter");
+        assert!(result
+            .frame
+            .validation
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("requested font")));
+    }
+
+    #[test]
     fn software_compositor_uses_decoded_image_dimensions_for_bounds_modes() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("tall.png");
@@ -2430,7 +2981,67 @@ mod tests {
         }
     }
 
+    fn render_test_text_source(
+        text: &str,
+        font_family: &str,
+        color: &str,
+        align: &str,
+        font_size: f64,
+    ) -> SoftwareCompositorRenderResult {
+        render_test_scene_with_target(
+            Scene {
+                id: "scene-text".to_string(),
+                name: "Text Scene".to_string(),
+                canvas: crate::SceneCanvas {
+                    width: 160,
+                    height: 80,
+                    background_color: "#050711".to_string(),
+                },
+                sources: vec![SceneSource {
+                    id: "source-text".to_string(),
+                    name: "Text".to_string(),
+                    kind: SceneSourceKind::Text,
+                    position: ScenePoint { x: 0.0, y: 0.0 },
+                    size: SceneSize {
+                        width: 160.0,
+                        height: 80.0,
+                    },
+                    crop: SceneCrop {
+                        top: 0.0,
+                        right: 0.0,
+                        bottom: 0.0,
+                        left: 0.0,
+                    },
+                    rotation_degrees: 0.0,
+                    opacity: 1.0,
+                    visible: true,
+                    locked: false,
+                    z_index: 10,
+                    bounds_mode: SceneSourceBoundsMode::Stretch,
+                    filters: Vec::new(),
+                    config: serde_json::json!({
+                        "text": text,
+                        "font_family": font_family,
+                        "font_size": font_size,
+                        "color": color,
+                        "align": align
+                    }),
+                }],
+            },
+            160,
+            80,
+        )
+    }
+
     fn render_test_scene(scene: Scene) -> SoftwareCompositorRenderResult {
+        render_test_scene_with_target(scene, 8, 8)
+    }
+
+    fn render_test_scene_with_target(
+        scene: Scene,
+        width: u32,
+        height: u32,
+    ) -> SoftwareCompositorRenderResult {
         let graph = build_compositor_graph(&scene);
         let plan = build_compositor_render_plan(
             &graph,
@@ -2438,12 +3049,75 @@ mod tests {
                 "preview",
                 "Preview",
                 CompositorRenderTargetKind::Preview,
-                8,
-                8,
+                width,
+                height,
                 30,
             )],
         );
         render_software_compositor_frame(&plan, 0)
+    }
+
+    fn alpha_pixel_count(input: &SoftwareCompositorInputFrame) -> usize {
+        input
+            .pixels
+            .chunks_exact(4)
+            .filter(|pixel| pixel[3] > 0)
+            .count()
+    }
+
+    fn non_background_bounds(
+        frame: &SoftwareCompositorFrame,
+        background: [u8; 4],
+    ) -> Option<CompositorRect> {
+        let width = frame.width as usize;
+        let height = frame.height as usize;
+        let mut min_x = width;
+        let mut min_y = height;
+        let mut max_x = 0_usize;
+        let mut max_y = 0_usize;
+        let mut found = false;
+
+        for y in 0..height {
+            for x in 0..width {
+                let pixel = software_test_pixel(frame, x, y);
+                if pixel == background {
+                    continue;
+                }
+                found = true;
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+
+        found.then(|| CompositorRect {
+            x: min_x as f64,
+            y: min_y as f64,
+            width: (max_x - min_x + 1) as f64,
+            height: (max_y - min_y + 1) as f64,
+        })
+    }
+
+    fn count_pixels_in_region(
+        frame: &SoftwareCompositorFrame,
+        start_x: usize,
+        end_x: usize,
+        predicate: impl Fn([u8; 4]) -> bool,
+    ) -> usize {
+        let mut count = 0;
+        for y in 0..frame.height as usize {
+            for x in start_x..end_x.min(frame.width as usize) {
+                if predicate(software_test_pixel(frame, x, y)) {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    fn blended_red_blue(pixel: [u8; 4]) -> bool {
+        pixel[0] > 40 && pixel[2] > 80 && pixel[3] == 255
     }
 
     fn wait_for_distinct_mtime(path: &Path, write: impl Fn()) {
