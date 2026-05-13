@@ -1095,6 +1095,82 @@ nav {
   background: #0b0c13;
 }
 
+.group-child-manager {
+  display: grid;
+  gap: 10px;
+}
+
+.group-child-manager-header,
+.group-child-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.group-child-manager-header {
+  justify-content: space-between;
+}
+
+.group-child-manager-header strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.group-child-list {
+  display: grid;
+  gap: 6px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.group-child-row {
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.group-child-row.disabled {
+  opacity: 0.58;
+}
+
+.group-child-row input {
+  width: auto;
+}
+
+.group-child-row span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.group-child-row strong,
+.group-child-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-child-row strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.group-child-row small,
+.group-child-warnings {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.group-child-warnings {
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid rgba(255, 190, 94, 0.24);
+  border-radius: 7px;
+  background: rgba(255, 190, 94, 0.08);
+}
+
 .runtime-binding-panel {
   display: grid;
   gap: 10px;

@@ -6326,6 +6326,7 @@ function DesignerPage(props: {
                   mediaType,
                 )
               }
+              scene={props.scene}
               source={props.selectedSource}
             />
             <SourceFilterEditor
@@ -7525,6 +7526,7 @@ function SourceConfigEditor(props: {
   captureInventory: CaptureSourceInventory | null;
   onChange: (config: Record<string, unknown>) => void;
   onPickAsset: (mediaType: "image" | "video") => void;
+  scene: Scene;
   source: SceneSource;
 }) {
   const candidates = props.captureInventory?.candidates ?? [];
@@ -7977,21 +7979,110 @@ function SourceConfigEditor(props: {
     case "group":
       return (
         <div className="source-config-editor">
-          <TextInput
-            label="Child Source IDs"
-            onChange={(value) =>
-              props.onChange({
-                child_source_ids: value
-                  .split(",")
-                  .map((item) => item.trim())
-                  .filter(Boolean),
-              })
-            }
-            value={source.config.child_source_ids.join(", ")}
+          <GroupChildManager
+            onChange={(child_source_ids) => props.onChange({ child_source_ids })}
+            scene={props.scene}
+            source={source}
           />
         </div>
       );
   }
+}
+
+function GroupChildManager(props: {
+  onChange: (childSourceIds: string[]) => void;
+  scene: Scene;
+  source: Extract<SceneSource, { kind: "group" }>;
+}) {
+  const sourceById = new Map(
+    props.scene.sources.map((source) => [source.id, source]),
+  );
+  const parentMap = sceneSourceParentMap(props.scene);
+  const selectedIds = new Set(props.source.config.child_source_ids);
+  const duplicateIds = duplicateSourceIds(props.source.config.child_source_ids);
+  const missingIds = uniqueSourceIds(
+    props.source.config.child_source_ids.filter((sourceId) => !sourceById.has(sourceId)),
+  );
+  const rows = sortedSceneSources(props.scene)
+    .filter((source) => source.id !== props.source.id)
+    .map((source) => {
+      const parentId = parentMap.get(source.id) ?? null;
+      const groupedElsewhere = parentId !== null && parentId !== props.source.id;
+      const createsCycle = groupWouldCreateCycle(
+        props.scene,
+        source.id,
+        props.source.id,
+      );
+      const disabled = groupedElsewhere || createsCycle;
+      const detail = groupedElsewhere
+        ? `Already grouped by ${sourceById.get(parentId)?.name ?? parentId}`
+        : createsCycle
+          ? "Would create a group cycle"
+          : parentId === props.source.id
+            ? "Child of this group"
+            : "Available";
+
+      return {
+        detail,
+        disabled,
+        source,
+      };
+    });
+
+  function updateChild(childId: string, checked: boolean) {
+    if (checked) {
+      props.onChange(uniqueSourceIds([...props.source.config.child_source_ids, childId]));
+      return;
+    }
+    props.onChange(
+      props.source.config.child_source_ids.filter((sourceId) => sourceId !== childId),
+    );
+  }
+
+  return (
+    <div className="group-child-manager" data-testid="designer-group-child-manager">
+      <div className="group-child-manager-header">
+        <strong>Group Children</strong>
+        <Pill tone={selectedIds.size > 0 ? "green" : "muted"}>
+          {selectedIds.size} selected
+        </Pill>
+      </div>
+      <div className="group-child-list">
+        {rows.map(({ detail, disabled, source }) => (
+          <label
+            className={disabled ? "group-child-row disabled" : "group-child-row"}
+            key={source.id}
+          >
+            <input
+              checked={selectedIds.has(source.id)}
+              disabled={disabled && !selectedIds.has(source.id)}
+              onChange={(event) => updateChild(source.id, event.target.checked)}
+              type="checkbox"
+            />
+            <span>
+              <strong>{source.name}</strong>
+              <small>
+                {sceneSourceKindLabels[source.kind]} - {detail}
+              </small>
+            </span>
+          </label>
+        ))}
+      </div>
+      {rows.length === 0 && (
+        <div className="empty compact-empty">No eligible sources in this scene</div>
+      )}
+      {(missingIds.length > 0 || duplicateIds.length > 0) && (
+        <div className="group-child-warnings">
+          {missingIds.length > 0 && (
+            <span>Missing child ID(s): {missingIds.join(", ")}</span>
+          )}
+          {duplicateIds.length > 0 && (
+            <span>Duplicate child ID(s): {duplicateIds.join(", ")}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Dashboard(props: {
@@ -8805,6 +8896,19 @@ function isLockedSourcePatchAllowed(patch: SceneSourcePatch): boolean {
 
 function uniqueSourceIds(sourceIds: string[]): string[] {
   return [...new Set(sourceIds.filter(Boolean))];
+}
+
+function duplicateSourceIds(sourceIds: string[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  sourceIds.filter(Boolean).forEach((sourceId) => {
+    if (seen.has(sourceId)) {
+      duplicates.add(sourceId);
+      return;
+    }
+    seen.add(sourceId);
+  });
+  return [...duplicates];
 }
 
 function removeGroupChildRefs(

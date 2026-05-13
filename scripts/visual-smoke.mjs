@@ -142,6 +142,11 @@ const targets = [
         expression: 'Boolean(document.querySelector("[data-testid=\\"designer-source-stack-item\\"][data-source-kind=\\"group\\"]"))',
         message: "Designer grouping did not create a group source.",
       },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-group-child-manager\\"]"))',
+        message: "Designer group child manager did not render.",
+      },
     ],
   },
   {
