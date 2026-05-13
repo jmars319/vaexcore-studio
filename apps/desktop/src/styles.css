@@ -1292,6 +1292,61 @@ nav {
   background: #0b0c13;
 }
 
+.transition-preview-stage {
+  position: relative;
+  display: grid;
+  min-height: 180px;
+  overflow: hidden;
+  border: 1px solid rgba(34, 216, 255, 0.18);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    #070911;
+  background-size: 32px 32px;
+  aspect-ratio: 16 / 9;
+}
+
+.transition-preview-layer {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 4px;
+  padding: 16px;
+  text-align: center;
+  transition:
+    opacity 80ms linear,
+    transform 80ms linear;
+}
+
+.transition-preview-layer.from {
+  background: rgba(34, 216, 255, 0.22);
+}
+
+.transition-preview-layer.to {
+  background: rgba(255, 74, 232, 0.22);
+}
+
+.transition-preview-layer.stinger {
+  border: 1px dashed rgba(255, 190, 94, 0.55);
+  background: rgba(255, 190, 94, 0.18);
+}
+
+.transition-preview-layer strong,
+.transition-preview-layer small {
+  overflow-wrap: anywhere;
+}
+
+.transition-preview-layer strong {
+  color: var(--text);
+}
+
+.transition-preview-layer small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .transition-preview-player {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -1312,6 +1367,17 @@ nav {
   height: 100%;
   background: linear-gradient(90deg, var(--cyan), var(--magenta));
   transition: width 80ms linear;
+}
+
+.transition-preview-scrub {
+  width: 100%;
+}
+
+.transition-preview-validation {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .designer-transform-tools,

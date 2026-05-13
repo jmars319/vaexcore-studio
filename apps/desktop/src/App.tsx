@@ -112,6 +112,7 @@ import type {
   SceneRuntimeBindingsSnapshot,
   SceneRuntimeSnapshot,
   SceneTransition,
+  SceneTransitionPreviewFrame,
   StudioEvent,
   StudioStatus,
   StreamDestination,
@@ -120,6 +121,7 @@ import type {
 import {
   bindSceneCollectionCaptureInventory,
   buildCompositorGraph,
+  buildSceneTransitionPreviewFrame,
   buildSceneTransitionPreviewPlan,
   createDefaultSceneCollection,
   createDefaultSceneSource,
@@ -3514,12 +3516,6 @@ function DesignerPage(props: {
     props.collection.transitions.find(
       (transition) => transition.id === props.collection.active_transition_id,
     ) ?? props.collection.transitions[0];
-  const transitionPreviewPlan = buildSceneTransitionPreviewPlan(
-    props.collection,
-    props.scene.id,
-    props.scene.id,
-    60,
-  );
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const renderCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const suppressSourceClickRef = useRef(false);
@@ -3533,6 +3529,11 @@ function DesignerPage(props: {
   const [newSourceKind, setNewSourceKind] = useState<SceneSourceKind>("display");
   const [newTransitionKind, setNewTransitionKind] =
     useState<SceneTransition["kind"]>("fade");
+  const [transitionPreviewFromSceneId, setTransitionPreviewFromSceneId] =
+    useState(props.scene.id);
+  const [transitionPreviewToSceneId, setTransitionPreviewToSceneId] = useState(
+    () => previewFallbackToSceneId(props.collection, props.scene.id),
+  );
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [snapStrength, setSnapStrength] = useState(designerSnapThreshold);
   const [previewZoom, setPreviewZoom] = useState(1);
@@ -3552,6 +3553,20 @@ function DesignerPage(props: {
   const [shortcutMessage, setShortcutMessage] = useState<string | null>(null);
   const [renamingSourceId, setRenamingSourceId] = useState<string | null>(null);
   const [sourceRenameDraft, setSourceRenameDraft] = useState("");
+  const transitionPreviewPlan = buildSceneTransitionPreviewPlan(
+    props.collection,
+    transitionPreviewFromSceneId,
+    transitionPreviewToSceneId,
+    60,
+  );
+  const transitionPreviewFrame = buildSceneTransitionPreviewFrame(
+    transitionPreviewPlan,
+    Math.round(
+      transitionPreviewProgress * Math.max(0, transitionPreviewPlan.frame_count - 1),
+    ),
+    640,
+    360,
+  );
   const selectedSourceIds = props.selectedSourceIds.filter((sourceId) =>
     props.scene.sources.some((source) => source.id === sourceId),
   );
@@ -3830,6 +3845,23 @@ function DesignerPage(props: {
     setTransitionPreviewPlaying(false);
     setTransitionPreviewProgress(0);
   }, [activeTransition?.id]);
+
+  useEffect(() => {
+    const sceneIds = new Set(props.collection.scenes.map((scene) => scene.id));
+    if (!sceneIds.has(transitionPreviewFromSceneId)) {
+      setTransitionPreviewFromSceneId(props.scene.id);
+    }
+    if (!sceneIds.has(transitionPreviewToSceneId)) {
+      setTransitionPreviewToSceneId(
+        previewFallbackToSceneId(props.collection, props.scene.id),
+      );
+    }
+  }, [
+    props.collection,
+    props.scene.id,
+    transitionPreviewFromSceneId,
+    transitionPreviewToSceneId,
+  ]);
 
   useEffect(() => {
     if (
@@ -4582,8 +4614,16 @@ function DesignerPage(props: {
               />
               <div className="designer-preview-meta transition-preview-meta">
                 <KeyValue
+                  label="Preview"
+                  value={`${transitionPreviewPlan.from_scene_name} to ${transitionPreviewPlan.to_scene_name}`}
+                />
+                <KeyValue
                   label="Frames"
                   value={`${transitionPreviewPlan.frame_count} @ ${transitionPreviewPlan.framerate} fps`}
+                />
+                <KeyValue
+                  label="Frame"
+                  value={`${transitionPreviewFrame.frame_index + 1}/${transitionPreviewPlan.frame_count} - ${transitionPreviewFrame.checksum}`}
                 />
                 <KeyValue
                   label="Midpoint"
@@ -4592,6 +4632,41 @@ function DesignerPage(props: {
                   )}% eased`}
                 />
               </div>
+              <div className="form-grid">
+                <label>
+                  From Scene
+                  <select
+                    onChange={(event) => {
+                      setTransitionPreviewPlaying(false);
+                      setTransitionPreviewFromSceneId(event.target.value);
+                    }}
+                    value={transitionPreviewPlan.from_scene_id}
+                  >
+                    {props.collection.scenes.map((scene) => (
+                      <option key={scene.id} value={scene.id}>
+                        {scene.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  To Scene
+                  <select
+                    onChange={(event) => {
+                      setTransitionPreviewPlaying(false);
+                      setTransitionPreviewToSceneId(event.target.value);
+                    }}
+                    value={transitionPreviewPlan.to_scene_id}
+                  >
+                    {props.collection.scenes.map((scene) => (
+                      <option key={scene.id} value={scene.id}>
+                        {scene.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <TransitionPreviewFrameView frame={transitionPreviewFrame} />
               <div className="transition-preview-player">
                 <button
                   className="secondary-button compact"
@@ -4625,6 +4700,29 @@ function DesignerPage(props: {
                   {Math.round(transitionPreviewProgress * 100)}%
                 </Pill>
               </div>
+              <input
+                aria-label="Transition preview scrub"
+                className="transition-preview-scrub"
+                max={100}
+                min={0}
+                onChange={(event) => {
+                  setTransitionPreviewPlaying(false);
+                  setTransitionPreviewProgress(Number(event.target.value) / 100);
+                }}
+                type="range"
+                value={Math.round(transitionPreviewProgress * 100)}
+              />
+              {(transitionPreviewPlan.validation.errors.length > 0 ||
+                transitionPreviewPlan.validation.warnings.length > 0) && (
+                <div className="transition-preview-validation">
+                  {transitionPreviewPlan.validation.errors.map((message) => (
+                    <span key={`error-${message}`}>{message}</span>
+                  ))}
+                  {transitionPreviewPlan.validation.warnings.map((message) => (
+                    <span key={`warning-${message}`}>{message}</span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -6649,6 +6747,37 @@ function DesignerShortcutPanel(props: {
         <div className="designer-shortcut-message">{props.message}</div>
       )}
     </section>
+  );
+}
+
+function TransitionPreviewFrameView(props: {
+  frame: SceneTransitionPreviewFrame;
+}) {
+  return (
+    <div
+      className={`transition-preview-stage ${props.frame.transition_kind}`}
+      data-testid="transition-preview-stage"
+    >
+      {props.frame.layers.map((layer) => {
+        const translateX = `${(layer.offset_x / props.frame.width) * 100}%`;
+        const translateY = `${(layer.offset_y / props.frame.height) * 100}%`;
+        return (
+          <div
+            className={`transition-preview-layer ${layer.role}`}
+            key={layer.role}
+            style={{
+              opacity: layer.visible ? layer.opacity : 0,
+              transform: `translate(${translateX}, ${translateY})`,
+            }}
+          >
+            <strong>{layer.label}</strong>
+            <small>
+              {layer.role} - {Math.round(layer.opacity * 100)}%
+            </small>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -9075,6 +9204,15 @@ function firstSceneSourceId(collection: SceneCollection): string {
     collection.scenes.find((item) => item.id === collection.active_scene_id) ??
     collection.scenes[0];
   return scene?.sources[0]?.id ?? "";
+}
+
+function previewFallbackToSceneId(collection: SceneCollection, fromSceneId: string): string {
+  return (
+    collection.scenes.find((scene) => scene.id !== fromSceneId)?.id ??
+    collection.scenes.find((scene) => scene.id === fromSceneId)?.id ??
+    collection.scenes[0]?.id ??
+    fromSceneId
+  );
 }
 
 function sceneCollectionContainsSource(

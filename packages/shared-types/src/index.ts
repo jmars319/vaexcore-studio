@@ -228,6 +228,34 @@ export interface SceneTransitionPreviewValidation {
   errors: string[];
 }
 
+export type SceneTransitionPreviewLayerRole = "from" | "to" | "stinger";
+
+export interface SceneTransitionPreviewLayer {
+  role: SceneTransitionPreviewLayerRole;
+  scene_id: string | null;
+  scene_name: string;
+  label: string;
+  visible: boolean;
+  opacity: number;
+  offset_x: number;
+  offset_y: number;
+}
+
+export interface SceneTransitionPreviewFrame {
+  version: number;
+  transition_id: string;
+  transition_kind: SceneTransitionKind;
+  frame_index: number;
+  elapsed_ms: number;
+  linear_progress: number;
+  eased_progress: number;
+  width: number;
+  height: number;
+  checksum: string;
+  layers: SceneTransitionPreviewLayer[];
+  validation: SceneTransitionPreviewValidation;
+}
+
 export interface SceneCollection {
   id: string;
   name: string;
@@ -1722,6 +1750,69 @@ export function validateSceneTransitionPreviewPlan(
   };
 }
 
+export function buildSceneTransitionPreviewFrame(
+  plan: SceneTransitionPreviewPlan,
+  frameIndex: number,
+  width = 640,
+  height = 360,
+): SceneTransitionPreviewFrame {
+  const safeFrameCount = Math.max(1, plan.frame_count);
+  const clampedFrameIndex = Math.min(
+    safeFrameCount - 1,
+    Math.max(0, Math.round(frameIndex)),
+  );
+  const linearProgress =
+    safeFrameCount <= 1 ? 1 : clampedFrameIndex / (safeFrameCount - 1);
+  const easedProgress = transitionEasedProgress(
+    linearProgress,
+    plan.transition.easing,
+  );
+  const elapsedMs =
+    plan.framerate <= 0
+      ? 0
+      : Math.min(
+          plan.duration_ms,
+          Math.floor((clampedFrameIndex * 1000) / plan.framerate),
+        );
+  const frameWidth = Math.max(1, Math.round(width));
+  const frameHeight = Math.max(1, Math.round(height));
+  const layers = transitionPreviewLayers(
+    plan,
+    linearProgress,
+    easedProgress,
+    elapsedMs,
+    frameWidth,
+    frameHeight,
+  );
+  const validation = validateSceneTransitionPreviewPlan(plan);
+  const checksum = transitionPreviewChecksum({
+    transition_id: plan.transition.id,
+    transition_kind: plan.transition.kind,
+    frame_index: clampedFrameIndex,
+    elapsed_ms: elapsedMs,
+    linear_progress: linearProgress,
+    eased_progress: easedProgress,
+    width: frameWidth,
+    height: frameHeight,
+    layers,
+  });
+
+  return {
+    version: 1,
+    transition_id: plan.transition.id,
+    transition_kind: plan.transition.kind,
+    frame_index: clampedFrameIndex,
+    elapsed_ms: elapsedMs,
+    linear_progress: linearProgress,
+    eased_progress: easedProgress,
+    width: frameWidth,
+    height: frameHeight,
+    checksum,
+    layers,
+    validation,
+  };
+}
+
 function transitionFrameCount(durationMs: number, framerate: number): number {
   if (durationMs === 0 || framerate <= 0) return 1;
   return Math.max(1, Math.ceil((durationMs * framerate) / 1000));
@@ -1763,6 +1854,148 @@ function transitionEasedProgress(
         ? 2 * value * value
         : 1 - Math.pow(-2 * value + 2, 2) / 2;
   }
+}
+
+function transitionPreviewLayers(
+  plan: SceneTransitionPreviewPlan,
+  linearProgress: number,
+  easedProgress: number,
+  elapsedMs: number,
+  width: number,
+  height: number,
+): SceneTransitionPreviewLayer[] {
+  const baseFrom = transitionPreviewLayer("from", plan.from_scene_id, plan.from_scene_name);
+  const baseTo = transitionPreviewLayer("to", plan.to_scene_id, plan.to_scene_name);
+
+  switch (plan.transition.kind) {
+    case "cut":
+      return [
+        { ...baseFrom, visible: false, opacity: 0 },
+        { ...baseTo, visible: true, opacity: 1 },
+      ];
+    case "fade":
+      return [
+        { ...baseFrom, visible: true, opacity: roundPreviewNumber(1 - easedProgress) },
+        { ...baseTo, visible: true, opacity: roundPreviewNumber(easedProgress) },
+      ];
+    case "swipe": {
+      const direction = String(plan.transition.config.direction ?? "left");
+      const offset = swipePreviewOffsets(direction, easedProgress, width, height);
+      return [
+        {
+          ...baseFrom,
+          visible: true,
+          offset_x: offset.fromX,
+          offset_y: offset.fromY,
+        },
+        {
+          ...baseTo,
+          visible: true,
+          offset_x: offset.toX,
+          offset_y: offset.toY,
+        },
+      ];
+    }
+    case "stinger": {
+      const triggerMs = Number(
+        plan.transition.config.trigger_time_ms ?? Math.floor(plan.duration_ms / 2),
+      );
+      const triggered = elapsedMs >= Math.max(0, triggerMs);
+      const assetUri = String(plan.transition.config.asset_uri ?? "").trim();
+      return [
+        { ...baseFrom, visible: !triggered, opacity: triggered ? 0 : 1 },
+        { ...baseTo, visible: triggered, opacity: triggered ? 1 : 0 },
+        {
+          role: "stinger",
+          scene_id: null,
+          scene_name: "",
+          label: assetUri
+            ? `Stinger placeholder: ${basenameFromUri(assetUri)}`
+            : "Stinger placeholder: no asset selected",
+          visible: true,
+          opacity: 1,
+          offset_x: 0,
+          offset_y: 0,
+        },
+      ];
+    }
+  }
+}
+
+function transitionPreviewLayer(
+  role: "from" | "to",
+  sceneId: string,
+  sceneName: string,
+): SceneTransitionPreviewLayer {
+  return {
+    role,
+    scene_id: sceneId,
+    scene_name: sceneName,
+    label: sceneName || sceneId || role,
+    visible: true,
+    opacity: 1,
+    offset_x: 0,
+    offset_y: 0,
+  };
+}
+
+function swipePreviewOffsets(
+  direction: string,
+  progress: number,
+  width: number,
+  height: number,
+): { fromX: number; fromY: number; toX: number; toY: number } {
+  const eased = Math.min(1, Math.max(0, progress));
+  switch (direction) {
+    case "right":
+      return {
+        fromX: roundPreviewNumber(width * eased),
+        fromY: 0,
+        toX: roundPreviewNumber(-width + width * eased),
+        toY: 0,
+      };
+    case "up":
+      return {
+        fromX: 0,
+        fromY: roundPreviewNumber(-height * eased),
+        toX: 0,
+        toY: roundPreviewNumber(height - height * eased),
+      };
+    case "down":
+      return {
+        fromX: 0,
+        fromY: roundPreviewNumber(height * eased),
+        toX: 0,
+        toY: roundPreviewNumber(-height + height * eased),
+      };
+    case "left":
+    default:
+      return {
+        fromX: roundPreviewNumber(-width * eased),
+        fromY: 0,
+        toX: roundPreviewNumber(width - width * eased),
+        toY: 0,
+      };
+  }
+}
+
+function transitionPreviewChecksum(value: unknown): string {
+  const serialized = JSON.stringify(value);
+  let hash = 2166136261;
+  for (let index = 0; index < serialized.length; index += 1) {
+    hash ^= serialized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function basenameFromUri(value: string): string {
+  const normalized = value.replaceAll("\\", "/");
+  return normalized.split("/").filter(Boolean).at(-1) ?? normalized;
+}
+
+function roundPreviewNumber(value: number): number {
+  return Math.round(value * 1000) / 1000;
 }
 
 export function bindSceneCollectionCaptureInventory(

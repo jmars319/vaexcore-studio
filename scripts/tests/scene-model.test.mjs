@@ -106,6 +106,104 @@ test("scene source defaults cover supported source kinds", async () => {
   }
 });
 
+test("transition preview frames are deterministic for supported transition kinds", async () => {
+  const {
+    buildSceneTransitionPreviewFrame,
+    buildSceneTransitionPreviewPlan,
+    cloneSceneCollection,
+    createDefaultSceneCollection,
+  } = await sharedTypes;
+  const base = createDefaultSceneCollection("2026-05-08T12:00:00.000Z");
+  const secondScene = {
+    ...base.scenes[0],
+    id: "scene-next",
+    name: "Next Scene",
+    sources: base.scenes[0].sources.map((source) => ({
+      ...source,
+      id: `${source.id}-next`,
+    })),
+  };
+
+  for (const transition of [
+    {
+      id: "transition-cut",
+      name: "Cut",
+      kind: "cut",
+      duration_ms: 0,
+      easing: "linear",
+      config: {},
+    },
+    {
+      id: "transition-fade-test",
+      name: "Fade",
+      kind: "fade",
+      duration_ms: 300,
+      easing: "linear",
+      config: { color: "#000000" },
+    },
+    {
+      id: "transition-swipe-test",
+      name: "Swipe",
+      kind: "swipe",
+      duration_ms: 450,
+      easing: "linear",
+      config: { direction: "left", edge_softness: 0.12 },
+    },
+    {
+      id: "transition-stinger-test",
+      name: "Stinger",
+      kind: "stinger",
+      duration_ms: 1200,
+      easing: "linear",
+      config: { asset_uri: "/tmp/stinger.webm", trigger_time_ms: 500 },
+    },
+  ]) {
+    const collection = cloneSceneCollection(base);
+    collection.scenes.push(secondScene);
+    collection.transitions = [transition];
+    collection.active_transition_id = transition.id;
+    const plan = buildSceneTransitionPreviewPlan(
+      collection,
+      base.scenes[0].id,
+      secondScene.id,
+      60,
+    );
+    const midpoint = buildSceneTransitionPreviewFrame(
+      plan,
+      Math.floor(plan.frame_count / 2),
+      640,
+      360,
+    );
+    const repeated = buildSceneTransitionPreviewFrame(
+      plan,
+      Math.floor(plan.frame_count / 2),
+      640,
+      360,
+    );
+
+    assert.equal(midpoint.transition_kind, transition.kind);
+    assert.equal(midpoint.validation.ready, true);
+    assert.equal(midpoint.checksum, repeated.checksum);
+    assert.ok(midpoint.layers.length >= 2);
+
+    if (transition.kind === "fade") {
+      assert.ok(midpoint.layers[0].opacity < 1);
+      assert.ok(midpoint.layers[1].opacity > 0);
+    }
+    if (transition.kind === "swipe") {
+      assert.notEqual(midpoint.layers[0].offset_x, 0);
+      assert.notEqual(midpoint.layers[1].offset_x, 0);
+    }
+    if (transition.kind === "stinger") {
+      assert.equal(midpoint.layers.some((layer) => layer.role === "stinger"), true);
+      assert.match(
+        midpoint.layers.find((layer) => layer.role === "stinger").label,
+        /stinger\.webm/,
+      );
+    }
+  }
+});
+
 test("scene collection validation catches duplicate ids and invalid transforms", async () => {
   const { cloneSceneCollection, createDefaultSceneCollection, validateSceneCollection } =
     await sharedTypes;

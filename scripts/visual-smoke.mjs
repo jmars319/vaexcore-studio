@@ -202,6 +202,11 @@ const targets = [
         selector: '[data-testid="transition-preview-button"]',
       },
       {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"transition-preview-stage\\"]"))',
+        message: "Transition preview stage did not render.",
+      },
+      {
         type: "wait",
         ms: 240,
       },
@@ -209,6 +214,11 @@ const targets = [
         type: "assert",
         expression: 'Number(document.querySelector(".transition-preview-track")?.getAttribute("aria-valuenow") ?? 0) > 0',
         message: "Transition preview progress did not advance.",
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelectorAll(".transition-preview-layer").length >= 2',
+        message: "Transition preview frame layers did not render.",
       },
     ],
   },
