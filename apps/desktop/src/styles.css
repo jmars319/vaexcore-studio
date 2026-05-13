@@ -1299,6 +1299,13 @@ nav {
   background: rgba(7, 8, 16, 0.44);
 }
 
+.filter-asset-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
 .source-filter-item-header {
   justify-content: space-between;
 }

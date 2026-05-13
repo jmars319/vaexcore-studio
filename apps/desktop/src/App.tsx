@@ -650,6 +650,9 @@ const imageAssetDialogFilters = [
 const mediaAssetDialogFilters = [
   { name: "Media", extensions: ["mp4", "mov", "webm", "mkv"] },
 ];
+const lutAssetDialogFilters = [
+  { name: "LUT", extensions: ["cube"] },
+];
 
 function pickedDialogPath(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
@@ -677,13 +680,18 @@ async function pickSceneBundleImportPath(): Promise<string | null> {
 }
 
 async function pickLocalAssetPath(
-  kind: "image" | "media",
+  kind: "image" | "media" | "lut",
 ): Promise<string | null> {
   const { open } = await import("@tauri-apps/plugin-dialog");
   return pickedDialogPath(
     await open({
       directory: false,
-      filters: kind === "image" ? imageAssetDialogFilters : mediaAssetDialogFilters,
+      filters:
+        kind === "image"
+          ? imageAssetDialogFilters
+          : kind === "lut"
+            ? lutAssetDialogFilters
+            : mediaAssetDialogFilters,
       multiple: false,
     }),
   );
@@ -7533,6 +7541,23 @@ function SourceFilterEditor(props: {
     commit((props.source.filters ?? []).filter((filter) => filter.id !== filterId));
   }
 
+  async function pickFilterAsset(
+    filterId: string,
+    assetKind: "image" | "lut",
+  ) {
+    try {
+      const path = await pickLocalAssetPath(assetKind);
+      if (!path) return;
+      updateFilterConfig(filterId, assetKind === "image" ? { mask_uri: path } : { lut_uri: path });
+    } catch (error) {
+      window.alert(
+        error instanceof Error
+          ? error.message
+          : "Unable to open the asset picker for this filter.",
+      );
+    }
+  }
+
   return (
     <div className="source-filter-editor" data-testid="designer-source-filters">
       <div className="source-filter-editor-header">
@@ -7543,6 +7568,7 @@ function SourceFilterEditor(props: {
         <div className="source-filter-add-controls">
           <select
             aria-label="New filter kind"
+            data-testid="designer-new-source-filter-kind"
             value={newFilterKind}
             onChange={(event) =>
               setNewFilterKind(event.target.value as SceneSourceFilterKind)
@@ -7656,6 +7682,7 @@ function SourceFilterEditor(props: {
               <FilterConfigFields
                 filter={filter}
                 onChange={(patch) => updateFilterConfig(filter.id, patch)}
+                onPickAsset={(assetKind) => pickFilterAsset(filter.id, assetKind)}
               />
               <label>
                 Config JSON
@@ -7693,6 +7720,7 @@ function SourceFilterEditor(props: {
 function FilterConfigFields(props: {
   filter: SceneSourceFilter;
   onChange: (patch: Record<string, unknown>) => void;
+  onPickAsset: (assetKind: "image" | "lut") => void;
 }) {
   const config = props.filter.config ?? {};
 
@@ -7797,11 +7825,23 @@ function FilterConfigFields(props: {
     case "mask_blend":
       return (
         <div className="filter-config-fields">
-          <TextInput
-            label="Mask URI"
-            onChange={(mask_uri) => props.onChange({ mask_uri: mask_uri || null })}
-            value={configString(config, "mask_uri", "")}
-          />
+          <div className="filter-asset-row">
+            <TextInput
+              label="Mask URI"
+              onChange={(mask_uri) => props.onChange({ mask_uri: mask_uri || null })}
+              value={configString(config, "mask_uri", "")}
+            />
+            <button
+              className="secondary-button compact"
+              data-testid="designer-filter-mask-picker"
+              onClick={() => props.onPickAsset("image")}
+              title="Choose a local mask image"
+              type="button"
+            >
+              <ImageIcon size={14} />
+              Pick
+            </button>
+          </div>
           <label>
             Blend Mode
             <select
@@ -7860,11 +7900,23 @@ function FilterConfigFields(props: {
     case "lut":
       return (
         <div className="filter-config-fields">
-          <TextInput
-            label="LUT URI"
-            onChange={(lut_uri) => props.onChange({ lut_uri: lut_uri || null })}
-            value={configString(config, "lut_uri", "")}
-          />
+          <div className="filter-asset-row">
+            <TextInput
+              label="LUT URI"
+              onChange={(lut_uri) => props.onChange({ lut_uri: lut_uri || null })}
+              value={configString(config, "lut_uri", "")}
+            />
+            <button
+              className="secondary-button compact"
+              data-testid="designer-filter-lut-picker"
+              onClick={() => props.onPickAsset("lut")}
+              title="Choose a local .cube LUT"
+              type="button"
+            >
+              <Upload size={14} />
+              Pick
+            </button>
+          </div>
           <SceneNumberInput
             label="Strength"
             max={1}

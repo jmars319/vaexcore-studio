@@ -63,8 +63,8 @@ foundation to OBS-class scene editing and output.
     chains, supported filter kinds, duplicate/order/config validation, and
     compositor graph propagation, first-pass Designer filter chain editing, and
     software preview execution for color correction, chroma key, crop/pad alpha
-    crop, blur, and sharpen. Mask/blend, LUT, audio filter execution, and output
-    pipeline filter parity remain deferred.
+    crop, blur, sharpen, still-image mask/blend, and `.cube` LUT transforms.
+    Audio filter execution and output pipeline filter parity remain deferred.
 23. Scene transitions and transition preview: done for offline editor V1 with
     persisted transition contracts, validation, Designer controls, from/to scene
     selection, scrub/playback controls, and deterministic placeholder preview

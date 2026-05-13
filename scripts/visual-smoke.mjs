@@ -196,6 +196,66 @@ const targets = [
     ],
   },
   {
+    name: "designer-filter-mask-blend",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "click",
+        selector: '[data-testid="designer-source-select"][data-source-id="source-title-text"]',
+      },
+      {
+        type: "select",
+        selector: '[data-testid="designer-new-source-filter-kind"]',
+        value: "mask_blend",
+      },
+      {
+        type: "click",
+        selector: '[data-testid="designer-add-source-filter"]',
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-filter-mask-picker\\"]"))',
+        message: "Designer mask/blend picker did not render.",
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelector("[data-testid=\\"designer-filter-runtime\\"]")?.textContent?.includes("Mask / Blend")',
+        message: "Designer filter runtime panel did not show mask/blend filter.",
+      },
+    ],
+  },
+  {
+    name: "designer-filter-lut",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "click",
+        selector: '[data-testid="designer-source-select"][data-source-id="source-title-text"]',
+      },
+      {
+        type: "select",
+        selector: '[data-testid="designer-new-source-filter-kind"]',
+        value: "lut",
+      },
+      {
+        type: "click",
+        selector: '[data-testid="designer-add-source-filter"]',
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-filter-lut-picker\\"]"))',
+        message: "Designer LUT picker did not render.",
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelector("[data-testid=\\"designer-filter-runtime\\"]")?.textContent?.includes("LUT")',
+        message: "Designer filter runtime panel did not show LUT filter.",
+      },
+    ],
+  },
+  {
     name: "designer-grouping",
     path: "/?section=designer",
     minBytes: 50_000,
@@ -561,6 +621,28 @@ async function runInteraction(cdp, interaction) {
           metaKey: ${Boolean(interaction.metaKey)},
           ctrlKey: ${Boolean(interaction.ctrlKey)}
         }));
+        return true;
+      })()`,
+    );
+    await delay(interaction.delayMs ?? 160);
+    return;
+  }
+
+  if (interaction.type === "select") {
+    await waitForCdpExpression(
+      cdp,
+      `Boolean(document.querySelector(${JSON.stringify(interaction.selector)}))`,
+      5_000,
+      `Could not find ${interaction.selector}`,
+    );
+    await evaluateCdp(
+      cdp,
+      `(() => {
+        const element = document.querySelector(${JSON.stringify(interaction.selector)});
+        element.scrollIntoView({ block: "center", inline: "center" });
+        element.value = ${JSON.stringify(interaction.value)};
+        element.dispatchEvent(new Event("input", { bubbles: true }));
+        element.dispatchEvent(new Event("change", { bubbles: true }));
         return true;
       })()`,
     );
