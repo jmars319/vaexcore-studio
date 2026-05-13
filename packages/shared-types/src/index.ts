@@ -4929,7 +4929,7 @@ function validateSceneSourceFilterConfig(
         filter,
         filterPath,
         "blend_mode",
-        ["normal", "multiply", "screen", "overlay"],
+        ["normal", "multiply", "screen", "overlay", "alpha"],
         issues,
       );
       break;

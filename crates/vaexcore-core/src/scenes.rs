@@ -928,7 +928,7 @@ fn validate_source_filter_config(
                 filter,
                 filter_path,
                 "blend_mode",
-                &["normal", "multiply", "screen", "overlay"],
+                &["normal", "multiply", "screen", "overlay", "alpha"],
                 issues,
             );
         }

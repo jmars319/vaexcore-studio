@@ -338,6 +338,28 @@ struct DecodedImageAsset {
     image: CachedDecodedImage,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct LutAssetCacheKey {
+    path: String,
+    modified_unix_ms: u64,
+}
+
+#[derive(Clone, Debug)]
+struct CachedCubeLut {
+    size: usize,
+    domain_min: [f64; 3],
+    domain_max: [f64; 3],
+    values: Vec<[f64; 3]>,
+    checksum: u64,
+}
+
+#[derive(Clone, Debug)]
+struct DecodedCubeLut {
+    modified_unix_ms: u64,
+    cache_hit: bool,
+    lut: CachedCubeLut,
+}
+
 #[derive(Clone, Debug)]
 struct TextRenderRequest {
     text: String,
@@ -358,6 +380,7 @@ enum TextAlign {
 
 static IMAGE_ASSET_CACHE: OnceLock<Mutex<HashMap<ImageAssetCacheKey, CachedDecodedImage>>> =
     OnceLock::new();
+static LUT_ASSET_CACHE: OnceLock<Mutex<HashMap<LutAssetCacheKey, CachedCubeLut>>> = OnceLock::new();
 static INTER_FONT: OnceLock<Result<FontArc, String>> = OnceLock::new();
 const INTER_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/Inter.ttf");
 const SOFTWARE_TEXT_FONT_FAMILY: &str = "Inter";
@@ -1541,14 +1564,8 @@ fn apply_software_filter(
         }
         SceneSourceFilterKind::Blur => apply_blur_filter(frame, filter),
         SceneSourceFilterKind::Sharpen => apply_sharpen_filter(frame, filter),
-        SceneSourceFilterKind::MaskBlend => Err((
-            SoftwareCompositorFilterStatus::Deferred,
-            deferred_filter_detail(&filter.kind).to_string(),
-        )),
-        SceneSourceFilterKind::Lut => Err((
-            SoftwareCompositorFilterStatus::Deferred,
-            deferred_filter_detail(&filter.kind).to_string(),
-        )),
+        SceneSourceFilterKind::MaskBlend => apply_mask_blend_filter(frame, filter),
+        SceneSourceFilterKind::Lut => apply_lut_filter(frame, filter),
         SceneSourceFilterKind::AudioGain
         | SceneSourceFilterKind::NoiseGate
         | SceneSourceFilterKind::Compressor => Err((
@@ -1759,6 +1776,434 @@ fn apply_sharpen_filter(
         }
     }
     Ok(format!("Applied CPU sharpen with amount {:.2}.", amount))
+}
+
+fn apply_mask_blend_filter(
+    frame: &mut SoftwareCompositorInputFrame,
+    filter: &SceneSourceFilter,
+) -> Result<String, (SoftwareCompositorFilterStatus, String)> {
+    let mask_uri = filter_config_string(filter, "mask_uri", "");
+    if mask_uri.trim().is_empty() {
+        return filter_error("No mask image has been selected.");
+    }
+    let blend_mode = filter_config_string(filter, "blend_mode", "normal");
+    let decoded = decode_image_asset(&mask_uri).map_err(|metadata| {
+        (
+            SoftwareCompositorFilterStatus::Error,
+            format!("Mask image could not be loaded: {}", metadata.status_detail),
+        )
+    })?;
+    apply_mask_pixels(frame, &decoded.image, &blend_mode)?;
+    Ok(format!(
+        "Applied {} mask/blend image {}x{} ({}).",
+        blend_mode,
+        decoded.image.width,
+        decoded.image.height,
+        if decoded.cache_hit {
+            "cache hit"
+        } else {
+            "fresh decode"
+        }
+    ))
+}
+
+fn apply_mask_pixels(
+    frame: &mut SoftwareCompositorInputFrame,
+    mask: &CachedDecodedImage,
+    blend_mode: &str,
+) -> Result<(), (SoftwareCompositorFilterStatus, String)> {
+    let width = frame.width.max(1) as usize;
+    let height = frame.height.max(1) as usize;
+    let mask_width = mask.width.max(1) as usize;
+    let mask_height = mask.height.max(1) as usize;
+
+    for y in 0..height {
+        let mask_y = ((y * mask_height) / height).min(mask_height - 1);
+        for x in 0..width {
+            let mask_x = ((x * mask_width) / width).min(mask_width - 1);
+            let mask_offset = (mask_y * mask_width + mask_x) * 4;
+            let mask_color = [
+                mask.pixels[mask_offset],
+                mask.pixels[mask_offset + 1],
+                mask.pixels[mask_offset + 2],
+                mask.pixels[mask_offset + 3],
+            ];
+            let mask_alpha = color_channel_to_unit(mask_color[3]);
+            let mask_luma = color_luma_unit([mask_color[0], mask_color[1], mask_color[2]]);
+            let alpha_factor = (mask_luma * mask_alpha).clamp(0.0, 1.0);
+
+            let offset = (y * width + x) * 4;
+            let source = [
+                frame.pixels[offset],
+                frame.pixels[offset + 1],
+                frame.pixels[offset + 2],
+            ];
+            let blended = mask_blend_rgb(
+                source,
+                [mask_color[0], mask_color[1], mask_color[2]],
+                blend_mode,
+            )?;
+            let blend_amount = if blend_mode == "alpha" {
+                0.0
+            } else {
+                mask_alpha
+            };
+
+            for channel in 0..3 {
+                frame.pixels[offset + channel] =
+                    mix_channel(source[channel], blended[channel], blend_amount);
+            }
+            frame.pixels[offset + 3] =
+                (f64::from(frame.pixels[offset + 3]) * alpha_factor).round() as u8;
+        }
+    }
+    Ok(())
+}
+
+fn mask_blend_rgb(
+    source: [u8; 3],
+    mask: [u8; 3],
+    blend_mode: &str,
+) -> Result<[u8; 3], (SoftwareCompositorFilterStatus, String)> {
+    let Some(red) = mask_blend_channel(source[0], mask[0], blend_mode) else {
+        return filter_error(format!("Unsupported mask blend mode \"{blend_mode}\"."));
+    };
+    let Some(green) = mask_blend_channel(source[1], mask[1], blend_mode) else {
+        return filter_error(format!("Unsupported mask blend mode \"{blend_mode}\"."));
+    };
+    let Some(blue) = mask_blend_channel(source[2], mask[2], blend_mode) else {
+        return filter_error(format!("Unsupported mask blend mode \"{blend_mode}\"."));
+    };
+
+    Ok([
+        unit_to_color_channel(red),
+        unit_to_color_channel(green),
+        unit_to_color_channel(blue),
+    ])
+}
+
+fn mask_blend_channel(source: u8, mask: u8, blend_mode: &str) -> Option<f64> {
+    let source = color_channel_to_unit(source);
+    let mask = color_channel_to_unit(mask);
+    Some(match blend_mode {
+        "normal" | "alpha" => mask,
+        "multiply" => source * mask,
+        "screen" => 1.0 - (1.0 - source) * (1.0 - mask),
+        "overlay" if source < 0.5 => 2.0 * source * mask,
+        "overlay" => 1.0 - 2.0 * (1.0 - source) * (1.0 - mask),
+        _ => return None,
+    })
+}
+
+fn apply_lut_filter(
+    frame: &mut SoftwareCompositorInputFrame,
+    filter: &SceneSourceFilter,
+) -> Result<String, (SoftwareCompositorFilterStatus, String)> {
+    let lut_uri = filter_config_string(filter, "lut_uri", "");
+    if lut_uri.trim().is_empty() {
+        return filter_error("No LUT file has been selected.");
+    }
+    let strength = filter_config_number(filter, "strength", 1.0).clamp(0.0, 1.0);
+    let decoded = decode_cube_lut(&lut_uri)?;
+
+    if strength > f64::EPSILON {
+        for pixel in frame.pixels.chunks_exact_mut(4) {
+            if pixel[3] == 0 {
+                continue;
+            }
+            let original = [
+                color_channel_to_unit(pixel[0]),
+                color_channel_to_unit(pixel[1]),
+                color_channel_to_unit(pixel[2]),
+            ];
+            let mapped = sample_cube_lut(&decoded.lut, original);
+            for channel in 0..3 {
+                pixel[channel] = unit_to_color_channel(
+                    original[channel] + (mapped[channel] - original[channel]) * strength,
+                );
+            }
+        }
+    }
+
+    Ok(format!(
+        "Applied {}x{}x{} .cube LUT at {:.2} strength ({}; checksum {:x}; modified {}).",
+        decoded.lut.size,
+        decoded.lut.size,
+        decoded.lut.size,
+        strength,
+        if decoded.cache_hit {
+            "cache hit"
+        } else {
+            "fresh parse"
+        },
+        decoded.lut.checksum,
+        decoded.modified_unix_ms
+    ))
+}
+
+fn filter_error<T>(
+    message: impl Into<String>,
+) -> Result<T, (SoftwareCompositorFilterStatus, String)> {
+    Err((SoftwareCompositorFilterStatus::Error, message.into()))
+}
+
+fn decode_cube_lut(
+    lut_uri: &str,
+) -> Result<DecodedCubeLut, (SoftwareCompositorFilterStatus, String)> {
+    let Some(path) = asset_uri_path(lut_uri) else {
+        return filter_error("No LUT file has been selected.");
+    };
+    let normalized_path = normalized_asset_path(&path);
+    if path
+        .extension()
+        .map(|extension| extension.to_string_lossy().eq_ignore_ascii_case("cube"))
+        != Some(true)
+    {
+        return filter_error(format!(
+            "Unsupported LUT extension for {normalized_path}. Supported LUT files use .cube."
+        ));
+    }
+    let metadata = fs::metadata(&path).map_err(|_| {
+        (
+            SoftwareCompositorFilterStatus::Error,
+            format!("LUT file does not exist: {normalized_path}"),
+        )
+    })?;
+    if !metadata.is_file() {
+        return filter_error(format!("LUT path is not a file: {normalized_path}"));
+    }
+    let modified_unix_ms = metadata
+        .modified()
+        .ok()
+        .and_then(system_time_unix_ms)
+        .unwrap_or(0);
+    let key = LutAssetCacheKey {
+        path: normalized_path.clone(),
+        modified_unix_ms,
+    };
+    if let Some(lut) = cached_lut_asset(&key) {
+        return Ok(DecodedCubeLut {
+            modified_unix_ms,
+            cache_hit: true,
+            lut,
+        });
+    }
+
+    let contents = fs::read_to_string(&path).map_err(|error| {
+        (
+            SoftwareCompositorFilterStatus::Error,
+            format!("LUT file could not be read: {error}"),
+        )
+    })?;
+    let lut = parse_cube_lut(&contents).map_err(|error| {
+        (
+            SoftwareCompositorFilterStatus::Error,
+            format!("LUT file could not be parsed: {error}"),
+        )
+    })?;
+    store_cached_lut_asset(key, lut.clone());
+    Ok(DecodedCubeLut {
+        modified_unix_ms,
+        cache_hit: false,
+        lut,
+    })
+}
+
+fn parse_cube_lut(contents: &str) -> Result<CachedCubeLut, String> {
+    let mut size = None;
+    let mut domain_min = [0.0, 0.0, 0.0];
+    let mut domain_max = [1.0, 1.0, 1.0];
+    let mut values = Vec::new();
+
+    for raw_line in contents.lines() {
+        let line = raw_line.split('#').next().unwrap_or_default().trim();
+        if line.is_empty() {
+            continue;
+        }
+        let parts = line.split_whitespace().collect::<Vec<_>>();
+        let keyword = parts[0].to_ascii_uppercase();
+        match keyword.as_str() {
+            "TITLE" => continue,
+            "LUT_1D_SIZE" => return Err("1D LUT files are not supported in this pass.".to_string()),
+            "LUT_3D_SIZE" => {
+                let parsed_size = parts
+                    .get(1)
+                    .ok_or_else(|| "LUT_3D_SIZE requires a size.".to_string())?
+                    .parse::<usize>()
+                    .map_err(|_| "LUT_3D_SIZE must be an integer.".to_string())?;
+                if !(2..=128).contains(&parsed_size) {
+                    return Err("LUT_3D_SIZE must be between 2 and 128.".to_string());
+                }
+                size = Some(parsed_size);
+            }
+            "DOMAIN_MIN" => {
+                domain_min = parse_cube_triplet(&parts, "DOMAIN_MIN")?;
+            }
+            "DOMAIN_MAX" => {
+                domain_max = parse_cube_triplet(&parts, "DOMAIN_MAX")?;
+            }
+            "LUT_3D_INPUT_RANGE" => continue,
+            _ => {
+                if parts.len() < 3 || parts[0].parse::<f64>().is_err() {
+                    continue;
+                }
+                values.push([
+                    parts[0]
+                        .parse::<f64>()
+                        .map_err(|_| "LUT red channel must be numeric.".to_string())?
+                        .clamp(0.0, 1.0),
+                    parts[1]
+                        .parse::<f64>()
+                        .map_err(|_| "LUT green channel must be numeric.".to_string())?
+                        .clamp(0.0, 1.0),
+                    parts[2]
+                        .parse::<f64>()
+                        .map_err(|_| "LUT blue channel must be numeric.".to_string())?
+                        .clamp(0.0, 1.0),
+                ]);
+            }
+        }
+    }
+
+    let size = size.ok_or_else(|| "LUT_3D_SIZE is required.".to_string())?;
+    let expected = size
+        .checked_mul(size)
+        .and_then(|value| value.checked_mul(size))
+        .ok_or_else(|| "LUT size is too large.".to_string())?;
+    if values.len() != expected {
+        return Err(format!(
+            "LUT_3D_SIZE {size} requires {expected} RGB rows; found {}.",
+            values.len()
+        ));
+    }
+    for index in 0..3 {
+        if domain_max[index] <= domain_min[index] {
+            return Err("DOMAIN_MAX values must be greater than DOMAIN_MIN values.".to_string());
+        }
+    }
+    let checksum = checksum_lut_values(size, domain_min, domain_max, &values);
+    Ok(CachedCubeLut {
+        size,
+        domain_min,
+        domain_max,
+        values,
+        checksum,
+    })
+}
+
+fn parse_cube_triplet(parts: &[&str], label: &str) -> Result<[f64; 3], String> {
+    if parts.len() < 4 {
+        return Err(format!("{label} requires three numeric values."));
+    }
+    Ok([
+        parts[1]
+            .parse::<f64>()
+            .map_err(|_| format!("{label} red value must be numeric."))?,
+        parts[2]
+            .parse::<f64>()
+            .map_err(|_| format!("{label} green value must be numeric."))?,
+        parts[3]
+            .parse::<f64>()
+            .map_err(|_| format!("{label} blue value must be numeric."))?,
+    ])
+}
+
+fn sample_cube_lut(lut: &CachedCubeLut, rgb: [f64; 3]) -> [f64; 3] {
+    let scaled = [0, 1, 2].map(|index| {
+        let range = lut.domain_max[index] - lut.domain_min[index];
+        ((rgb[index] - lut.domain_min[index]) / range).clamp(0.0, 1.0) * (lut.size - 1) as f64
+    });
+    let low = scaled.map(|value| value.floor() as usize);
+    let high = low.map(|value| (value + 1).min(lut.size - 1));
+    let t = [
+        scaled[0] - low[0] as f64,
+        scaled[1] - low[1] as f64,
+        scaled[2] - low[2] as f64,
+    ];
+
+    let mut output = [0.0, 0.0, 0.0];
+    for blue_index in [low[2], high[2]] {
+        let blue_weight = if blue_index == low[2] {
+            1.0 - t[2]
+        } else {
+            t[2]
+        };
+        for green_index in [low[1], high[1]] {
+            let green_weight = if green_index == low[1] {
+                1.0 - t[1]
+            } else {
+                t[1]
+            };
+            for red_index in [low[0], high[0]] {
+                let red_weight = if red_index == low[0] {
+                    1.0 - t[0]
+                } else {
+                    t[0]
+                };
+                let weight = red_weight * green_weight * blue_weight;
+                let value = cube_lut_value(lut, red_index, green_index, blue_index);
+                for channel in 0..3 {
+                    output[channel] += value[channel] * weight;
+                }
+            }
+        }
+    }
+    output.map(|value| value.clamp(0.0, 1.0))
+}
+
+fn cube_lut_value(lut: &CachedCubeLut, red: usize, green: usize, blue: usize) -> [f64; 3] {
+    lut.values[(blue * lut.size * lut.size) + (green * lut.size) + red]
+}
+
+fn checksum_lut_values(
+    size: usize,
+    domain_min: [f64; 3],
+    domain_max: [f64; 3],
+    values: &[[f64; 3]],
+) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in (size as u64).to_le_bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    for value in domain_min
+        .into_iter()
+        .chain(domain_max)
+        .chain(values.iter().flat_map(|value| value.iter().copied()))
+    {
+        for byte in value.to_le_bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    hash
+}
+
+fn cached_lut_asset(key: &LutAssetCacheKey) -> Option<CachedCubeLut> {
+    LUT_ASSET_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .ok()
+        .and_then(|cache| cache.get(key).cloned())
+}
+
+fn store_cached_lut_asset(key: LutAssetCacheKey, lut: CachedCubeLut) {
+    let Ok(mut cache) = LUT_ASSET_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    else {
+        return;
+    };
+    cache.retain(|existing_key, _| {
+        existing_key.path != key.path || existing_key.modified_unix_ms == key.modified_unix_ms
+    });
+    cache.insert(key, lut);
+    if cache.len() > 32 {
+        let Some(first_key) = cache.keys().next().cloned() else {
+            return;
+        };
+        cache.remove(&first_key);
+    }
 }
 
 fn box_blur_rgba(pixels: &[u8], width: usize, height: usize, radius: usize) -> Vec<u8> {
@@ -2284,6 +2729,12 @@ fn color_distance_unit(left: [u8; 3], right: [u8; 3]) -> f64 {
     let green = color_channel_to_unit(left[1]) - color_channel_to_unit(right[1]);
     let blue = color_channel_to_unit(left[2]) - color_channel_to_unit(right[2]);
     ((red * red + green * green + blue * blue) / 3.0).sqrt()
+}
+
+fn color_luma_unit(color: [u8; 3]) -> f64 {
+    color_channel_to_unit(color[0]) * 0.2126
+        + color_channel_to_unit(color[1]) * 0.7152
+        + color_channel_to_unit(color[2]) * 0.0722
 }
 
 fn stable_source_tint(value: &str) -> u8 {
@@ -3406,7 +3857,295 @@ mod tests {
     }
 
     #[test]
-    fn software_compositor_reports_deferred_filters_without_mutating_pixels() {
+    fn software_compositor_applies_mask_blend_alpha_shaping() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("solid.png");
+        let mask_path = dir.path().join("mask.png");
+        write_test_image(&source_path, ImageFormat::Png, [255, 0, 0, 255]);
+        write_split_image(&mask_path, [0, 0, 0, 255], [255, 255, 255, 255]);
+
+        let filtered = render_test_image_source_with_filters(
+            &source_path.display().to_string(),
+            vec![test_filter(
+                "filter-mask",
+                SceneSourceFilterKind::MaskBlend,
+                10,
+                true,
+                serde_json::json!({
+                    "mask_uri": mask_path.display().to_string(),
+                    "blend_mode": "alpha"
+                }),
+            )],
+        );
+
+        assert_eq!(
+            filtered.input_frames[0].filters[0].status,
+            SoftwareCompositorFilterStatus::Applied
+        );
+        assert_eq!(input_test_pixel(&filtered.input_frames[0], 0, 0)[3], 0);
+        assert_eq!(input_test_pixel(&filtered.input_frames[0], 3, 0)[3], 255);
+        assert_eq!(
+            &input_test_pixel(&filtered.input_frames[0], 3, 0)[0..3],
+            &[255, 0, 0]
+        );
+    }
+
+    #[test]
+    fn software_compositor_applies_mask_blend_modes_deterministically() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("solid.png");
+        let mask_path = dir.path().join("mask.png");
+        write_test_image(&source_path, ImageFormat::Png, [96, 128, 180, 255]);
+        write_test_image(&mask_path, ImageFormat::Png, [64, 196, 128, 255]);
+
+        let mut checksums = HashSet::new();
+        for blend_mode in ["normal", "multiply", "screen", "overlay", "alpha"] {
+            let filtered = render_test_image_source_with_filters(
+                &source_path.display().to_string(),
+                vec![test_filter(
+                    &format!("filter-{blend_mode}"),
+                    SceneSourceFilterKind::MaskBlend,
+                    10,
+                    true,
+                    serde_json::json!({
+                        "mask_uri": mask_path.display().to_string(),
+                        "blend_mode": blend_mode
+                    }),
+                )],
+            );
+
+            assert_eq!(
+                filtered.input_frames[0].filters[0].status,
+                SoftwareCompositorFilterStatus::Applied
+            );
+            checksums.insert(filtered.input_frames[0].checksum);
+        }
+
+        assert_eq!(checksums.len(), 5);
+    }
+
+    #[test]
+    fn software_compositor_reports_mask_blend_asset_errors_without_mutating_pixels() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("solid.png");
+        write_test_image(&source_path, ImageFormat::Png, [255, 0, 0, 255]);
+
+        let baseline = render_test_image_source(&source_path.display().to_string(), None);
+        for (mask_uri, expected_detail) in [
+            ("", "No mask image"),
+            ("missing.png", "could not be loaded"),
+            ("mask.txt", "Unsupported image extension"),
+        ] {
+            if mask_uri == "mask.txt" {
+                fs::write(dir.path().join(mask_uri), b"not an image").unwrap();
+            }
+            let uri = if mask_uri.is_empty() {
+                String::new()
+            } else {
+                dir.path().join(mask_uri).display().to_string()
+            };
+            let filtered = render_test_image_source_with_filters(
+                &source_path.display().to_string(),
+                vec![test_filter(
+                    "filter-mask",
+                    SceneSourceFilterKind::MaskBlend,
+                    10,
+                    true,
+                    serde_json::json!({ "mask_uri": uri, "blend_mode": "normal" }),
+                )],
+            );
+            let filter = &filtered.input_frames[0].filters[0];
+
+            assert_eq!(filter.status, SoftwareCompositorFilterStatus::Error);
+            assert!(filter.status_detail.contains(expected_detail));
+            assert_eq!(
+                baseline.input_frames[0].checksum,
+                filtered.input_frames[0].checksum
+            );
+        }
+    }
+
+    #[test]
+    fn software_compositor_reports_undecodable_mask_blend_assets() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("solid.png");
+        let mask_path = dir.path().join("broken.png");
+        write_test_image(&source_path, ImageFormat::Png, [255, 0, 0, 255]);
+        fs::write(&mask_path, b"not a png").unwrap();
+
+        let filtered = render_test_image_source_with_filters(
+            &source_path.display().to_string(),
+            vec![test_filter(
+                "filter-mask",
+                SceneSourceFilterKind::MaskBlend,
+                10,
+                true,
+                serde_json::json!({
+                    "mask_uri": mask_path.display().to_string(),
+                    "blend_mode": "normal"
+                }),
+            )],
+        );
+
+        assert_eq!(
+            filtered.input_frames[0].filters[0].status,
+            SoftwareCompositorFilterStatus::Error
+        );
+        assert!(filtered.input_frames[0].filters[0]
+            .status_detail
+            .contains("could not be decoded"));
+    }
+
+    #[test]
+    fn software_compositor_applies_cube_lut_with_strength() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("source.png");
+        let lut_path = dir.path().join("invert.cube");
+        write_test_image(&source_path, ImageFormat::Png, [64, 128, 192, 255]);
+        write_cube_lut(&lut_path, |red, green, blue| {
+            [1.0 - red, 1.0 - green, 1.0 - blue]
+        });
+
+        let baseline = render_test_image_source(&source_path.display().to_string(), None);
+        let zero = render_test_image_source_with_filters(
+            &source_path.display().to_string(),
+            vec![test_filter(
+                "filter-lut-zero",
+                SceneSourceFilterKind::Lut,
+                10,
+                true,
+                serde_json::json!({ "lut_uri": lut_path.display().to_string(), "strength": 0 }),
+            )],
+        );
+        let half = render_test_image_source_with_filters(
+            &source_path.display().to_string(),
+            vec![test_filter(
+                "filter-lut-half",
+                SceneSourceFilterKind::Lut,
+                10,
+                true,
+                serde_json::json!({ "lut_uri": lut_path.display().to_string(), "strength": 0.5 }),
+            )],
+        );
+        let full = render_test_image_source_with_filters(
+            &source_path.display().to_string(),
+            vec![test_filter(
+                "filter-lut-full",
+                SceneSourceFilterKind::Lut,
+                10,
+                true,
+                serde_json::json!({ "lut_uri": lut_path.display().to_string(), "strength": 1 }),
+            )],
+        );
+
+        assert_eq!(
+            zero.input_frames[0].filters[0].status,
+            SoftwareCompositorFilterStatus::Applied
+        );
+        assert_eq!(
+            baseline.input_frames[0].checksum,
+            zero.input_frames[0].checksum
+        );
+        assert_ne!(
+            baseline.input_frames[0].checksum,
+            half.input_frames[0].checksum
+        );
+        assert_ne!(half.input_frames[0].checksum, full.input_frames[0].checksum);
+        assert_eq!(
+            full.input_frames[0].filters[0].status,
+            SoftwareCompositorFilterStatus::Applied
+        );
+    }
+
+    #[test]
+    fn software_compositor_reports_cube_lut_asset_errors_without_mutating_pixels() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("source.png");
+        write_test_image(&source_path, ImageFormat::Png, [64, 128, 192, 255]);
+        fs::write(dir.path().join("lut.txt"), "not a cube").unwrap();
+        fs::write(dir.path().join("broken.cube"), "LUT_3D_SIZE 2\n0 0 0\n").unwrap();
+
+        let baseline = render_test_image_source(&source_path.display().to_string(), None);
+        for (lut_uri, expected_detail) in [
+            ("", "No LUT file"),
+            ("missing.cube", "does not exist"),
+            ("lut.txt", "Unsupported LUT extension"),
+            ("broken.cube", "could not be parsed"),
+        ] {
+            let uri = if lut_uri.is_empty() {
+                String::new()
+            } else {
+                dir.path().join(lut_uri).display().to_string()
+            };
+            let filtered = render_test_image_source_with_filters(
+                &source_path.display().to_string(),
+                vec![test_filter(
+                    "filter-lut",
+                    SceneSourceFilterKind::Lut,
+                    10,
+                    true,
+                    serde_json::json!({ "lut_uri": uri, "strength": 1 }),
+                )],
+            );
+            let filter = &filtered.input_frames[0].filters[0];
+
+            assert_eq!(filter.status, SoftwareCompositorFilterStatus::Error);
+            assert!(filter.status_detail.contains(expected_detail));
+            assert_eq!(
+                baseline.input_frames[0].checksum,
+                filtered.input_frames[0].checksum
+            );
+        }
+    }
+
+    #[test]
+    fn software_compositor_applies_mask_and_lut_in_deterministic_order() {
+        let dir = tempdir().unwrap();
+        let source_path = dir.path().join("source.png");
+        let mask_path = dir.path().join("mask.png");
+        let lut_path = dir.path().join("warm.cube");
+        write_test_image(&source_path, ImageFormat::Png, [64, 128, 192, 255]);
+        write_test_image(&mask_path, ImageFormat::Png, [255, 255, 255, 255]);
+        write_cube_lut(&lut_path, |red, green, blue| {
+            [(red + 0.2).min(1.0), green * 0.85, blue * 0.75]
+        });
+        let mask = test_filter(
+            "filter-mask",
+            SceneSourceFilterKind::MaskBlend,
+            20,
+            true,
+            serde_json::json!({
+                "mask_uri": mask_path.display().to_string(),
+                "blend_mode": "multiply"
+            }),
+        );
+        let lut = test_filter(
+            "filter-lut",
+            SceneSourceFilterKind::Lut,
+            10,
+            true,
+            serde_json::json!({ "lut_uri": lut_path.display().to_string(), "strength": 1 }),
+        );
+
+        let reversed = render_test_image_source_with_filters(
+            &source_path.display().to_string(),
+            vec![mask.clone(), lut.clone()],
+        );
+        let ordered = render_test_image_source_with_filters(
+            &source_path.display().to_string(),
+            vec![lut, mask],
+        );
+
+        assert_eq!(
+            reversed.input_frames[0].checksum,
+            ordered.input_frames[0].checksum
+        );
+        assert_eq!(reversed.input_frames[0].filters[0].id, "filter-lut");
+        assert_eq!(reversed.input_frames[0].filters[1].id, "filter-mask");
+    }
+
+    #[test]
+    fn software_compositor_reports_audio_filters_deferred_without_mutating_pixels() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("solid.png");
         write_test_image(&path, ImageFormat::Png, [255, 0, 0, 255]);
@@ -3415,11 +4154,11 @@ mod tests {
         let filtered = render_test_image_source_with_filters(
             &path.display().to_string(),
             vec![test_filter(
-                "filter-mask",
-                SceneSourceFilterKind::MaskBlend,
+                "filter-audio",
+                SceneSourceFilterKind::AudioGain,
                 10,
                 true,
-                serde_json::json!({ "mask_uri": null, "blend_mode": "normal" }),
+                serde_json::json!({ "gain_db": 3 }),
             )],
         );
         let filter = &filtered.input_frames[0].filters[0];
@@ -3685,6 +4424,22 @@ mod tests {
         let mut image = RgbaImage::from_pixel(5, 5, Rgba([96, 96, 96, 255]));
         image.put_pixel(2, 2, Rgba([168, 168, 168, 255]));
         image.save_with_format(path, ImageFormat::Png).unwrap();
+    }
+
+    fn write_cube_lut(path: &Path, map: impl Fn(f64, f64, f64) -> [f64; 3]) {
+        let mut contents =
+            String::from("TITLE \"test\"\nLUT_3D_SIZE 2\nDOMAIN_MIN 0 0 0\nDOMAIN_MAX 1 1 1\n");
+        for blue in [0.0, 1.0] {
+            for green in [0.0, 1.0] {
+                for red in [0.0, 1.0] {
+                    let [mapped_red, mapped_green, mapped_blue] = map(red, green, blue);
+                    contents.push_str(&format!(
+                        "{mapped_red:.6} {mapped_green:.6} {mapped_blue:.6}\n"
+                    ));
+                }
+            }
+        }
+        fs::write(path, contents).unwrap();
     }
 
     fn render_test_image_source(

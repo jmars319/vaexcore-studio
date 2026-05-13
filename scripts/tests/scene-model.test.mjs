@@ -280,6 +280,47 @@ test("scene collection validation catches duplicate ids and invalid transforms",
   );
 });
 
+test("scene filter validation accepts alpha mask blend and rejects malformed filter config", async () => {
+  const { cloneSceneCollection, createDefaultSceneCollection, validateSceneCollection } =
+    await sharedTypes;
+  const collection = cloneSceneCollection(createDefaultSceneCollection());
+  const scene = collection.scenes[0];
+  scene.sources[0].filters = [
+    {
+      id: "filter-alpha-mask",
+      name: "Alpha Mask",
+      kind: "mask_blend",
+      enabled: true,
+      order: 0,
+      config: { mask_uri: null, blend_mode: "alpha" },
+    },
+    {
+      id: "filter-lut",
+      name: "LUT",
+      kind: "lut",
+      enabled: true,
+      order: 10,
+      config: { lut_uri: null, strength: 0.5 },
+    },
+  ];
+
+  assert.equal(validateSceneCollection(collection).ok, true);
+
+  scene.sources[0].filters[0].config.blend_mode = "difference";
+  scene.sources[0].filters[1].config.strength = 2;
+  const invalid = validateSceneCollection(collection);
+
+  assert.equal(invalid.ok, false);
+  assert.match(
+    invalid.issues.map((issue) => issue.message).join("\n"),
+    /blend_mode/,
+  );
+  assert.match(
+    invalid.issues.map((issue) => issue.message).join("\n"),
+    /strength/,
+  );
+});
+
 test("scene groups validate children and apply parent transforms", async () => {
   const {
     buildCompositorGraph,
