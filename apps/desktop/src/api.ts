@@ -431,9 +431,29 @@ export async function exportSceneCollectionBundle(): Promise<SceneCollectionBund
   return invoke<SceneCollectionBundleFileResult>("export_scene_collection_bundle");
 }
 
+export async function exportSceneCollectionBundleToPath(
+  path: string,
+): Promise<SceneCollectionBundleFileResult> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<SceneCollectionBundleFileResult>(
+    "export_scene_collection_bundle_to_path",
+    { path },
+  );
+}
+
 export async function importSceneCollectionBundle(): Promise<SceneCollectionBundleFileResult> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<SceneCollectionBundleFileResult>("import_scene_collection_bundle");
+}
+
+export async function importSceneCollectionBundleFromPath(
+  path: string,
+): Promise<SceneCollectionBundleFileResult> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<SceneCollectionBundleFileResult>(
+    "import_scene_collection_bundle_from_path",
+    { path },
+  );
 }
 
 export async function loadMediaRunnerInfo(): Promise<MediaRunnerInfo> {

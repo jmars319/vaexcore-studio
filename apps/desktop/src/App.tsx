@@ -132,11 +132,13 @@ import {
 import {
   eventSocketUrl,
   exportSceneCollectionBundle,
+  exportSceneCollectionBundleToPath,
   exportProfileBundle,
   fetchTwitchBroadcastReadinessFromConsole,
   fetchTwitchStreamKeyFromConsole,
   handoffRecordingToPulse,
   importSceneCollectionBundle,
+  importSceneCollectionBundleFromPath,
   importProfileBundle,
   launchVaexcoreSuite,
   LocalAppSettingsSnapshot,
@@ -635,6 +637,54 @@ const sceneFilterKindLabels: Record<SceneSourceFilterKind, string> = {
   noise_gate: "Noise Gate",
   compressor: "Compressor",
 };
+
+const sceneBundleDialogFilters = [
+  { name: "Scene collection JSON", extensions: ["json"] },
+];
+const imageAssetDialogFilters = [
+  { name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] },
+];
+const mediaAssetDialogFilters = [
+  { name: "Media", extensions: ["mp4", "mov", "webm", "mkv"] },
+];
+
+function pickedDialogPath(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+async function pickSceneBundleExportPath(): Promise<string | null> {
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  return pickedDialogPath(
+    await save({
+      defaultPath: "vaexcore-scene-collection.json",
+      filters: sceneBundleDialogFilters,
+    }),
+  );
+}
+
+async function pickSceneBundleImportPath(): Promise<string | null> {
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  return pickedDialogPath(
+    await open({
+      directory: false,
+      filters: sceneBundleDialogFilters,
+      multiple: false,
+    }),
+  );
+}
+
+async function pickLocalAssetPath(
+  kind: "image" | "media",
+): Promise<string | null> {
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  return pickedDialogPath(
+    await open({
+      directory: false,
+      filters: kind === "image" ? imageAssetDialogFilters : mediaAssetDialogFilters,
+      multiple: false,
+    }),
+  );
+}
 
 const sectionIds: readonly Section[] = [
   "dashboard",
@@ -1943,11 +1993,47 @@ function App() {
     }
   }
 
+  async function refreshDesignerAfterSceneImport(): Promise<boolean> {
+    if (!config) return true;
+    const collection = await StudioApi.sceneCollection(config);
+    const validation = validateSceneCollection(collection);
+    if (!validation.ok) {
+      setSceneSaveStatus(
+        `Import validation failed: ${formatSceneValidationSummary(
+          validation.issues,
+        )}`,
+      );
+      setError("Imported scene collection did not pass validation.");
+      return false;
+    }
+    setSceneCollection(collection);
+    const scene =
+      collection.scenes.find((item) => item.id === collection.active_scene_id) ??
+      collection.scenes[0];
+    selectDesignerSources([scene?.sources[0]?.id ?? ""]);
+    Promise.all([
+      StudioApi.mediaPlan(config),
+      StudioApi.sceneRuntime(config),
+      StudioApi.sceneRuntimeBindings(config),
+      StudioApi.sceneRuntimeAudioGraph(config),
+    ])
+      .then(([plan, runtime, bindings, audioGraph]) => {
+        setPipelinePlan(plan);
+        setSceneRuntime(runtime);
+        setSceneRuntimeBindings(bindings);
+        setAudioGraphRuntime(audioGraph);
+      })
+      .catch(() => undefined);
+    return true;
+  }
+
   async function handleExportSceneCollectionBundle() {
     try {
-      const result = await exportSceneCollectionBundle();
+      const path = await pickSceneBundleExportPath();
+      if (!path) return;
+      const result = await exportSceneCollectionBundleToPath(path);
       setSceneSaveStatus(
-        `Exported ${result.scenes} scene(s) and ${result.transitions} transition(s).`,
+        `Exported ${result.scenes} scene(s) and ${result.transitions} transition(s) to ${result.path}.`,
       );
       setError(null);
     } catch (error) {
@@ -1958,50 +2044,66 @@ function App() {
   }
 
   async function handleImportSceneCollectionBundle() {
-    if (!window.confirm("Import scene collection bundle from the app data directory?")) {
-      return;
-    }
-
     try {
-      const result = await importSceneCollectionBundle();
-      if (config) {
-        const collection = await StudioApi.sceneCollection(config);
-        const validation = validateSceneCollection(collection);
-        if (!validation.ok) {
-          setSceneSaveStatus(
-            `Import validation failed: ${formatSceneValidationSummary(
-              validation.issues,
-            )}`,
-          );
-          setError("Imported scene collection did not pass validation.");
-          return;
-        }
-        setSceneCollection(collection);
-        const scene =
-          collection.scenes.find(
-            (item) => item.id === collection.active_scene_id,
-          ) ?? collection.scenes[0];
-        selectDesignerSources([scene?.sources[0]?.id ?? ""]);
-        Promise.all([
-          StudioApi.mediaPlan(config),
-          StudioApi.sceneRuntime(config),
-          StudioApi.sceneRuntimeBindings(config),
-          StudioApi.sceneRuntimeAudioGraph(config),
-        ])
-          .then(([plan, runtime, bindings, audioGraph]) => {
-            setPipelinePlan(plan);
-            setSceneRuntime(runtime);
-            setSceneRuntimeBindings(bindings);
-            setAudioGraphRuntime(audioGraph);
-          })
-          .catch(() => undefined);
+      const path = await pickSceneBundleImportPath();
+      if (!path) return;
+      if (
+        !window.confirm(
+          "Import the selected scene collection bundle? The current collection will be backed up after the import validates.",
+        )
+      ) {
+        return;
       }
+      const result = await importSceneCollectionBundleFromPath(path);
+      if (!(await refreshDesignerAfterSceneImport())) return;
       setSceneDirty(false);
       setSceneHistory({ past: [], future: [] });
       designerHistoryGroupRef.current = null;
       setSceneSaveStatus(
         result.backupPath
-          ? `Imported ${result.scenes} scene(s), backup created.`
+          ? `Imported ${result.scenes} scene(s) and ${result.transitions} transition(s); backup created.`
+          : `Imported ${result.scenes} scene(s) and ${result.transitions} transition(s).`,
+      );
+      setError(null);
+    } catch (error) {
+      setSceneSaveStatus(
+        error instanceof Error ? error.message : "Scene import failed",
+      );
+    }
+  }
+
+  async function handleExportSceneCollectionBundleToAppData() {
+    try {
+      const result = await exportSceneCollectionBundle();
+      setSceneSaveStatus(
+        `Exported ${result.scenes} scene(s) and ${result.transitions} transition(s) to the app data bundle.`,
+      );
+      setError(null);
+    } catch (error) {
+      setSceneSaveStatus(
+        error instanceof Error ? error.message : "Scene export failed",
+      );
+    }
+  }
+
+  async function handleImportSceneCollectionBundleFromAppData() {
+    if (
+      !window.confirm(
+        "Import scene collection bundle from the app data directory? The current collection will be backed up after the import validates.",
+      )
+    ) {
+      return;
+    }
+
+    try {
+      const result = await importSceneCollectionBundle();
+      if (!(await refreshDesignerAfterSceneImport())) return;
+      setSceneDirty(false);
+      setSceneHistory({ past: [], future: [] });
+      designerHistoryGroupRef.current = null;
+      setSceneSaveStatus(
+        result.backupPath
+          ? `Imported ${result.scenes} scene(s) and ${result.transitions} transition(s); backup created.`
           : `Imported ${result.scenes} scene(s) and ${result.transitions} transition(s).`,
       );
       setError(null);
@@ -2431,6 +2533,47 @@ function App() {
           : transition,
       ),
     }));
+  }
+
+  async function handlePickDesignerSourceAsset(
+    sceneId: string,
+    sourceId: string,
+    mediaType: "image" | "video",
+  ) {
+    try {
+      const path = await pickLocalAssetPath(mediaType === "image" ? "image" : "media");
+      if (!path) return;
+      handleUpdateDesignerSource(sceneId, sourceId, {
+        config: {
+          asset_uri: path,
+          media_type: mediaType,
+        },
+      });
+      setSceneSaveStatus("Local media asset selected. Save to update runtime.");
+      setError(null);
+    } catch (error) {
+      setSceneSaveStatus(
+        error instanceof Error ? error.message : "Asset picker failed",
+      );
+    }
+  }
+
+  async function handlePickDesignerTransitionAsset(transitionId: string) {
+    try {
+      const path = await pickLocalAssetPath("media");
+      if (!path) return;
+      handleUpdateDesignerTransition(transitionId, {
+        config: {
+          asset_uri: path,
+        },
+      });
+      setSceneSaveStatus("Stinger asset selected. Save to update runtime.");
+      setError(null);
+    } catch (error) {
+      setSceneSaveStatus(
+        error instanceof Error ? error.message : "Stinger asset picker failed",
+      );
+    }
   }
 
   function handleCreateDesignerTransition(kind: SceneTransition["kind"]) {
@@ -2910,10 +3053,14 @@ function App() {
             onDuplicateSources={handleDuplicateDesignerSources}
             onDuplicateTransition={handleDuplicateDesignerTransition}
             onExportCollection={handleExportSceneCollectionBundle}
+            onExportCollectionDefault={handleExportSceneCollectionBundleToAppData}
             onFinishContinuousEdit={handleFinishDesignerContinuousEdit}
             onGroupSources={handleGroupDesignerSources}
             onImportCollection={handleImportSceneCollectionBundle}
+            onImportCollectionDefault={handleImportSceneCollectionBundleFromAppData}
             onPasteSource={handlePasteDesignerSource}
+            onPickSourceAsset={handlePickDesignerSourceAsset}
+            onPickTransitionAsset={handlePickDesignerTransitionAsset}
             onPreviewPollingChange={setPreviewPolling}
             onPreviewQualityChange={setPreviewQuality}
             onRequestPreviewFrame={requestDesignerPreviewFrame}
@@ -3285,10 +3432,18 @@ function DesignerPage(props: {
   onDuplicateSources: (sceneId: string, sourceIds: string[]) => void;
   onDuplicateTransition: (transitionId: string) => void;
   onExportCollection: () => void;
+  onExportCollectionDefault: () => void;
   onFinishContinuousEdit: () => void;
   onGroupSources: (sceneId: string, sourceIds: string[]) => void;
   onImportCollection: () => void;
+  onImportCollectionDefault: () => void;
   onPasteSource: (sceneId: string) => void;
+  onPickSourceAsset: (
+    sceneId: string,
+    sourceId: string,
+    mediaType: "image" | "video",
+  ) => void;
+  onPickTransitionAsset: (transitionId: string) => void;
   onPreviewPollingChange: (enabled: boolean) => void;
   onPreviewQualityChange: (quality: PreviewQuality) => void;
   onRequestPreviewFrame: () => void;
@@ -4422,6 +4577,7 @@ function DesignerPage(props: {
                     },
                   })
                 }
+                onPickAsset={() => props.onPickTransitionAsset(activeTransition.id)}
                 transition={activeTransition}
               />
               <div className="designer-preview-meta transition-preview-meta">
@@ -4881,19 +5037,37 @@ function DesignerPage(props: {
                 <Redo2 size={14} />
               </button>
               <button
-                aria-label="Export scene collection"
-                className="icon-button compact"
+                className="secondary-button compact"
                 onClick={props.onExportCollection}
-                title="Export scene collection"
+                title="Export scene collection to a selected JSON file"
+                type="button"
+              >
+                <Download size={14} />
+                Export
+              </button>
+              <button
+                className="secondary-button compact"
+                onClick={props.onImportCollection}
+                title="Import scene collection from a selected JSON file"
+                type="button"
+              >
+                <Upload size={14} />
+                Import
+              </button>
+              <button
+                className="icon-button compact"
+                aria-label="Export scene collection to app data bundle"
+                onClick={props.onExportCollectionDefault}
+                title="Export scene collection to app data bundle"
                 type="button"
               >
                 <Download size={14} />
               </button>
               <button
-                aria-label="Import scene collection"
                 className="icon-button compact"
-                onClick={props.onImportCollection}
-                title="Import scene collection"
+                aria-label="Import scene collection from app data bundle"
+                onClick={props.onImportCollectionDefault}
+                title="Import scene collection from app data bundle"
                 type="button"
               >
                 <Upload size={14} />
@@ -6145,6 +6319,13 @@ function DesignerPage(props: {
                   config,
                 })
               }
+              onPickAsset={(mediaType) =>
+                props.onPickSourceAsset(
+                  props.scene.id,
+                  props.selectedSource!.id,
+                  mediaType,
+                )
+              }
               source={props.selectedSource}
             />
             <SourceFilterEditor
@@ -6472,6 +6653,7 @@ function DesignerShortcutPanel(props: {
 
 function TransitionConfigEditor(props: {
   onChange: (configPatch: Record<string, unknown>) => void;
+  onPickAsset: () => void;
   transition: SceneTransition;
 }) {
   const config = props.transition.config ?? {};
@@ -6534,6 +6716,15 @@ function TransitionConfigEditor(props: {
         onChange={(asset_uri) => props.onChange({ asset_uri })}
         value={String(config.asset_uri ?? "")}
       />
+      <button
+        className="secondary-button compact"
+        data-testid="designer-stinger-asset-picker"
+        onClick={props.onPickAsset}
+        type="button"
+      >
+        <FileVideo size={14} />
+        Choose Stinger
+      </button>
       <div className="form-grid">
         <SceneNumberInput
           label="Trigger ms"
@@ -7333,6 +7524,7 @@ function FilterConfigFields(props: {
 function SourceConfigEditor(props: {
   captureInventory: CaptureSourceInventory | null;
   onChange: (config: Record<string, unknown>) => void;
+  onPickAsset: (mediaType: "image" | "video") => void;
   source: SceneSource;
 }) {
   const candidates = props.captureInventory?.candidates ?? [];
@@ -7656,6 +7848,19 @@ function SourceConfigEditor(props: {
             onChange={(asset_uri) => props.onChange({ asset_uri })}
             value={source.config.asset_uri ?? ""}
           />
+          <button
+            className="secondary-button compact"
+            data-testid="designer-asset-picker"
+            onClick={() => props.onPickAsset(source.config.media_type ?? "image")}
+            type="button"
+          >
+            {source.config.media_type === "video" ? (
+              <FileVideo size={14} />
+            ) : (
+              <ImageIcon size={14} />
+            )}
+            Choose Asset
+          </button>
           <div className="form-grid">
             <label>
               Media Type

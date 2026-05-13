@@ -23,9 +23,9 @@ use vaexcore_api::{
     ApiServerConfig, AuthConfig, ProfileStore, SharedAuthConfig,
 };
 use vaexcore_core::{
-    AppSettings, CaptureSourceCandidate, CaptureSourceInventory, CaptureSourceKind,
-    CaptureSourceSelection, PreflightCheck, PreflightSnapshot, PreflightStatus, ProfileBundle,
-    SceneCollectionBundle,
+    validate_scene_collection, AppSettings, CaptureSourceCandidate, CaptureSourceInventory,
+    CaptureSourceKind, CaptureSourceSelection, PreflightCheck, PreflightSnapshot, PreflightStatus,
+    ProfileBundle, SceneCollectionBundle,
 };
 use vaexcore_media::{MediaRunnerConfig, MediaRunnerSupervisor};
 
@@ -1688,11 +1688,25 @@ fn import_profile_bundle(
 fn export_scene_collection_bundle(
     state: tauri::State<'_, AppRuntimeState>,
 ) -> Result<FrontendSceneCollectionBundleResult, String> {
+    export_scene_collection_bundle_to_file(&state, scene_collection_bundle_path(&state))
+}
+
+#[tauri::command]
+fn export_scene_collection_bundle_to_path(
+    state: tauri::State<'_, AppRuntimeState>,
+    path: String,
+) -> Result<FrontendSceneCollectionBundleResult, String> {
+    export_scene_collection_bundle_to_file(&state, frontend_path(path)?)
+}
+
+fn export_scene_collection_bundle_to_file(
+    state: &AppRuntimeState,
+    path: PathBuf,
+) -> Result<FrontendSceneCollectionBundleResult, String> {
     let bundle = state
         .settings_store
         .export_scene_collection()
         .map_err(|error| error.to_string())?;
-    let path = scene_collection_bundle_path(&state);
     let result = FrontendSceneCollectionBundleResult {
         path: path.display().to_string(),
         backup_path: None,
@@ -1700,7 +1714,10 @@ fn export_scene_collection_bundle(
         transitions: bundle.collection.transitions.len(),
     };
     let serialized = serde_json::to_vec_pretty(&bundle).map_err(|error| error.to_string())?;
-    std::fs::write(path, serialized).map_err(|error| error.to_string())?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    fs::write(&path, serialized).map_err(|error| error.to_string())?;
     write_app_log(
         &state.log_dir,
         "scenes.bundle_exported",
@@ -1717,11 +1734,28 @@ fn export_scene_collection_bundle(
 fn import_scene_collection_bundle(
     state: tauri::State<'_, AppRuntimeState>,
 ) -> Result<FrontendSceneCollectionBundleResult, String> {
-    let path = scene_collection_bundle_path(&state);
-    let backup_path = write_scene_collection_backup(&state)?;
-    let contents = std::fs::read(&path).map_err(|error| error.to_string())?;
-    let bundle: SceneCollectionBundle =
-        serde_json::from_slice(&contents).map_err(|error| error.to_string())?;
+    import_scene_collection_bundle_from_file(&state, scene_collection_bundle_path(&state))
+}
+
+#[tauri::command]
+fn import_scene_collection_bundle_from_path(
+    state: tauri::State<'_, AppRuntimeState>,
+    path: String,
+) -> Result<FrontendSceneCollectionBundleResult, String> {
+    import_scene_collection_bundle_from_file(&state, frontend_path(path)?)
+}
+
+fn import_scene_collection_bundle_from_file(
+    state: &AppRuntimeState,
+    path: PathBuf,
+) -> Result<FrontendSceneCollectionBundleResult, String> {
+    let contents = fs::read(&path)
+        .map_err(|error| format!("Could not read scene collection bundle: {error}"))?;
+    let bundle: SceneCollectionBundle = serde_json::from_slice(&contents).map_err(|error| {
+        format!("Scene collection bundle is not valid JSON for the bundle format: {error}")
+    })?;
+    validate_scene_collection_bundle(&bundle)?;
+    let backup_path = write_scene_collection_backup(state)?;
     let result = state
         .settings_store
         .import_scene_collection(bundle)
@@ -1786,6 +1820,7 @@ pub fn run() {
     let log_dir = init_logging(&default_data_dir());
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .menu(|handle| {
             let about = PredefinedMenuItem::about(
                 handle,
@@ -2080,7 +2115,9 @@ pub fn run() {
             export_profile_bundle,
             import_profile_bundle,
             export_scene_collection_bundle,
+            export_scene_collection_bundle_to_path,
             import_scene_collection_bundle,
+            import_scene_collection_bundle_from_path,
             open_settings_window,
             media_runner_info,
             launch_vaexcore_suite,
@@ -3168,6 +3205,37 @@ fn profile_bundle_path(state: &AppRuntimeState) -> PathBuf {
 
 fn scene_collection_bundle_path(state: &AppRuntimeState) -> PathBuf {
     state.data_dir.join("scene-collection-bundle.json")
+}
+
+fn frontend_path(path: String) -> Result<PathBuf, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("A file path is required.".to_string());
+    }
+    Ok(PathBuf::from(trimmed))
+}
+
+fn validate_scene_collection_bundle(bundle: &SceneCollectionBundle) -> Result<(), String> {
+    let validation = validate_scene_collection(&bundle.collection);
+    if validation.ok {
+        return Ok(());
+    }
+
+    let summary = validation
+        .issues
+        .iter()
+        .take(5)
+        .map(|issue| format!("{}: {}", issue.path, issue.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    let suffix = if validation.issues.len() > 5 {
+        format!("; and {} more", validation.issues.len() - 5)
+    } else {
+        String::new()
+    };
+    Err(format!(
+        "Scene collection validation failed: {summary}{suffix}"
+    ))
 }
 
 fn scene_collection_backup_dir(data_dir: &Path) -> PathBuf {
