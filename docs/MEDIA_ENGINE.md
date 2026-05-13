@@ -85,13 +85,16 @@ started.
 
 The software preview compositor can now request one-shot macOS display/window
 snapshot frames through the native `screencapture` path when a display or window
-source is bound and Screen Recording permission is available. Captured pixels
-enter the same transform, crop, opacity, z-order, group, and visual-filter path
-as image/text/browser pixels. Missing permissions, unsupported source ids,
-unsupported platforms, and capture failures remain explicit placeholder states
-with provider, frame, duration, latency, dropped-frame, and checksum diagnostics.
-This is Designer preview capture only; persistent ScreenCaptureKit sessions and
-recording/streaming output capture remain later work.
+source is bound and Screen Recording permission is available. Camera sources can
+request one-shot macOS FFmpeg/AVFoundation preview frames when a camera is bound,
+FFmpeg is installed, and Camera permission is available. Captured pixels enter
+the same transform, crop, opacity, z-order, group, and visual-filter path as
+image/text/browser pixels. Missing permissions, missing FFmpeg, unsupported
+source ids, unsupported platforms, and capture failures remain explicit
+placeholder states with provider, frame, duration, latency, dropped-frame, and
+checksum diagnostics. This is Designer preview capture only; persistent native
+capture sessions, camera capability negotiation, and recording/streaming output
+capture remain later work.
 
 `AudioMixerPlan` maps visible audio meter sources to the master, monitor,
 recording, and stream buses. It carries gain, mute, monitoring, meter, and sync

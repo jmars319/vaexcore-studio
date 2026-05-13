@@ -36,8 +36,11 @@ foundation to OBS-class scene editing and output.
     native `screencapture` window snapshots for bound window ids when permission
     is available; persistent capture and Windows live capture remain later work.
 13. Camera source engine: started with inventory-backed source availability plus
-    capture-frame plan bindings and mocked provider lifecycle diagnostics; real
-    capture is not started.
+    capture-frame plan bindings, mocked provider lifecycle diagnostics, and
+    optional macOS FFmpeg/AVFoundation one-shot Designer preview frames when a
+    camera is bound, FFmpeg is installed, and Camera permission is available.
+    Persistent camera sessions and Windows live camera capture remain later
+    work.
 14. Microphone and system audio capture: started with inventory-backed source
     availability, capture-frame plan bindings, mocked provider lifecycle
     diagnostics, and audio source routing fields; real audio capture is not
@@ -150,6 +153,14 @@ Designer shows live capture frame diagnostics. This is not yet a persistent
 ScreenCaptureKit provider, and it does not cover Windows live capture,
 recording, streaming, or encoder output.
 
+Full Scene Designer Pass 5 is now started for camera capture V1: software
+preview frames can request one-shot macOS FFmpeg/AVFoundation camera snapshots
+for bound camera sources when FFmpeg and Camera permission are available, and
+Designer shows camera frame, latency, decoder, and fallback diagnostics. This is
+not yet a persistent camera provider, does not negotiate camera capabilities,
+and does not cover Windows live camera capture, recording, streaming, or encoder
+output.
+
 Phase F software compositor, covering steps 51-60, now has serializable input
 frame contracts, per-source placeholder providers, local still-image decode,
 local video preview frame extraction through optional FFmpeg, backend text
@@ -192,10 +203,12 @@ bundle import/export, app-data fallback bundles, validation, runtime refresh,
 deterministic placeholder transition preview, real local still-image preview
 pixels, FFmpeg-backed local video preview frames when FFmpeg is available,
 backend-rendered single-line text pixels, optional browser overlay preview
-snapshots, and software visual filter preview pixels. The remaining Scene
-Designer work starts the real capture, interactive browser lifecycle, live
-audio, stinger playback, and output path; offline editor completion does not
-imply OBS-level capture, encoder, plugin, or live-output parity.
+snapshots, software visual filter preview pixels, one-shot macOS display/window
+capture snapshots, and one-shot macOS camera snapshots through optional FFmpeg
+when source bindings and permissions are available. The remaining Scene Designer
+work starts persistent capture sessions, interactive browser lifecycle, live
+audio, timeline playback, and the output handoff path; offline editor completion
+does not imply OBS-level capture, encoder, plugin, or live-output parity.
 
 ## Validation Contract
 

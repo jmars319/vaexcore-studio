@@ -606,6 +606,7 @@ export type SoftwareCompositorCaptureStatus =
   | "rendered"
   | "no_source"
   | "permission_required"
+  | "decoder_unavailable"
   | "unsupported_platform"
   | "unsupported_source"
   | "capture_failed";

@@ -355,6 +355,7 @@ pub enum SoftwareCompositorCaptureStatus {
     Rendered,
     NoSource,
     PermissionRequired,
+    DecoderUnavailable,
     UnsupportedPlatform,
     UnsupportedSource,
     CaptureFailed,
@@ -1383,7 +1384,7 @@ fn software_input_frame_for_node(
         text_input_frame_for_node(node)
     } else if matches!(
         node.source_kind,
-        SceneSourceKind::Display | SceneSourceKind::Window
+        SceneSourceKind::Display | SceneSourceKind::Window | SceneSourceKind::Camera
     ) {
         capture_input_frame_for_node(node, clock)
     } else {
@@ -1584,6 +1585,7 @@ struct CaptureFrameError {
 
 fn capture_source_id_for_node(node: &CompositorNode) -> Option<String> {
     match node.source_kind {
+        SceneSourceKind::Camera => config_value_string(&node.config, "device_id"),
         SceneSourceKind::Display => config_value_string(&node.config, "display_id"),
         SceneSourceKind::Window => config_value_string(&node.config, "window_id"),
         _ => None,
@@ -1592,6 +1594,7 @@ fn capture_source_id_for_node(node: &CompositorNode) -> Option<String> {
 
 fn capture_kind_for_node(node: &CompositorNode) -> CaptureSourceKind {
     match node.source_kind {
+        SceneSourceKind::Camera => CaptureSourceKind::Camera,
         SceneSourceKind::Window => CaptureSourceKind::Window,
         _ => CaptureSourceKind::Display,
     }
@@ -1599,7 +1602,7 @@ fn capture_kind_for_node(node: &CompositorNode) -> CaptureSourceKind {
 
 fn platform_capture_provider_name() -> &'static str {
     if cfg!(target_os = "macos") {
-        "macos-screencapture"
+        "macos-capture"
     } else {
         "unsupported-platform"
     }
@@ -1610,7 +1613,11 @@ fn platform_capture_frame_for_node(
     node: &CompositorNode,
     clock: &CompositorFrameClock,
 ) -> Result<DecodedCaptureFrame, CaptureFrameError> {
-    macos_screencapture_frame_for_node(node, clock)
+    if node.source_kind == SceneSourceKind::Camera {
+        macos_avfoundation_camera_frame_for_node(node, clock)
+    } else {
+        macos_screencapture_frame_for_node(node, clock)
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1753,6 +1760,164 @@ fn macos_screencapture_frame_for_node(
         ),
         pixels: rgba.into_raw(),
     })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_avfoundation_camera_frame_for_node(
+    node: &CompositorNode,
+    clock: &CompositorFrameClock,
+) -> Result<DecodedCaptureFrame, CaptureFrameError> {
+    let capture_source_id = capture_source_id_for_node(node);
+    let Some(capture_id) = capture_source_id.clone() else {
+        return Err(CaptureFrameError {
+            status: SoftwareCompositorCaptureStatus::NoSource,
+            node_status: CompositorNodeStatus::Placeholder,
+            detail: "No camera source has been assigned.".to_string(),
+        });
+    };
+    let Some(ffmpeg_path) = find_ffmpeg_binary() else {
+        return Err(CaptureFrameError {
+            status: SoftwareCompositorCaptureStatus::DecoderUnavailable,
+            node_status: CompositorNodeStatus::Placeholder,
+            detail: "FFmpeg is required for camera preview V1 and was not found.".to_string(),
+        });
+    };
+    let Some(camera_index) = macos_camera_index_from_source_id(&capture_id) else {
+        return Err(CaptureFrameError {
+            status: SoftwareCompositorCaptureStatus::UnsupportedSource,
+            node_status: CompositorNodeStatus::Placeholder,
+            detail: format!("Unsupported macOS camera source id \"{capture_id}\"."),
+        });
+    };
+    let (width, height) = camera_capture_resolution(node);
+    let framerate = config_value_number(&node.config, "framerate")
+        .unwrap_or(30.0)
+        .round()
+        .clamp(1.0, 120.0) as u32;
+    let video_size = format!("{width}x{height}");
+    let input_name = format!("{camera_index}:none");
+    let framerate_arg = framerate.to_string();
+    let started_at = Instant::now();
+    let output = Command::new(&ffmpeg_path)
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-f",
+            "avfoundation",
+            "-framerate",
+            &framerate_arg,
+            "-video_size",
+            &video_size,
+            "-i",
+            &input_name,
+            "-frames:v",
+            "1",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "png",
+            "pipe:1",
+        ])
+        .output()
+        .map_err(|error| CaptureFrameError {
+            status: SoftwareCompositorCaptureStatus::CaptureFailed,
+            node_status: CompositorNodeStatus::Placeholder,
+            detail: format!("FFmpeg camera preview could not be started: {error}"),
+        })?;
+    let capture_duration_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+
+    if !output.status.success() {
+        let detail = ffmpeg_capture_error_detail(&output.stderr);
+        return Err(CaptureFrameError {
+            status: ffmpeg_capture_error_status(&detail),
+            node_status: if detail.to_ascii_lowercase().contains("permission") {
+                CompositorNodeStatus::PermissionRequired
+            } else {
+                CompositorNodeStatus::Placeholder
+            },
+            detail,
+        });
+    }
+    if output.stdout.is_empty() {
+        return Err(CaptureFrameError {
+            status: SoftwareCompositorCaptureStatus::CaptureFailed,
+            node_status: CompositorNodeStatus::Placeholder,
+            detail: "FFmpeg returned an empty camera preview frame.".to_string(),
+        });
+    }
+    let image = image::load_from_memory(&output.stdout).map_err(|error| CaptureFrameError {
+        status: SoftwareCompositorCaptureStatus::CaptureFailed,
+        node_status: CompositorNodeStatus::Placeholder,
+        detail: format!("FFmpeg camera preview image could not be decoded: {error}"),
+    })?;
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+
+    Ok(DecodedCaptureFrame {
+        capture_source_id,
+        width,
+        height,
+        frame_index: clock.frame_index,
+        capture_duration_ms,
+        provider_name: "macos-avfoundation-ffmpeg".to_string(),
+        status_detail: format!("Captured macOS camera frame from {capture_id}."),
+        pixels: rgba.into_raw(),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_camera_index_from_source_id(capture_id: &str) -> Option<u32> {
+    if capture_id == "camera:default" {
+        return Some(0);
+    }
+    capture_id
+        .strip_prefix("camera:")
+        .and_then(|value| value.parse::<u32>().ok())
+}
+
+#[cfg(target_os = "macos")]
+fn camera_capture_resolution(node: &CompositorNode) -> (u32, u32) {
+    let resolution = node.config.get("resolution");
+    let width = resolution
+        .and_then(|value| value.get("width"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or_else(|| node.transform.size.width.round().max(1.0) as u32)
+        .clamp(1, 3840);
+    let height = resolution
+        .and_then(|value| value.get("height"))
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or_else(|| node.transform.size.height.round().max(1.0) as u32)
+        .clamp(1, 2160);
+
+    (width, height)
+}
+
+#[cfg(target_os = "macos")]
+fn ffmpeg_capture_error_detail(stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    if stderr.is_empty() {
+        "FFmpeg camera preview failed. Check Camera permission and source availability.".to_string()
+    } else {
+        format!("FFmpeg camera preview failed: {stderr}")
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn ffmpeg_capture_error_status(detail: &str) -> SoftwareCompositorCaptureStatus {
+    let lower = detail.to_ascii_lowercase();
+    if lower.contains("not authorized")
+        || lower.contains("permission")
+        || lower.contains("privacy")
+        || lower.contains("denied")
+    {
+        SoftwareCompositorCaptureStatus::PermissionRequired
+    } else {
+        SoftwareCompositorCaptureStatus::CaptureFailed
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -3193,6 +3358,7 @@ fn apply_software_input_validation(
                 SoftwareCompositorCaptureStatus::Rendered => {}
                 SoftwareCompositorCaptureStatus::NoSource
                 | SoftwareCompositorCaptureStatus::PermissionRequired
+                | SoftwareCompositorCaptureStatus::DecoderUnavailable
                 | SoftwareCompositorCaptureStatus::UnsupportedPlatform
                 | SoftwareCompositorCaptureStatus::UnsupportedSource
                 | SoftwareCompositorCaptureStatus::CaptureFailed => {
@@ -4945,6 +5111,26 @@ mod tests {
         );
         assert_eq!(capture.capture_source_id.as_deref(), Some("display:main"));
         assert_eq!(capture.frame_index, 0);
+    }
+
+    #[test]
+    fn software_camera_capture_input_reports_missing_source_placeholder() {
+        let collection = crate::SceneCollection::default_collection(crate::now_utc());
+        let scene = collection.active_scene().unwrap();
+        let graph = build_compositor_graph(scene);
+        let camera = graph
+            .nodes
+            .iter()
+            .find(|node| node.source_id == "source-camera-placeholder")
+            .unwrap();
+
+        let input = software_input_frame_for_node(camera, &default_software_input_clock());
+        let capture = input.capture.unwrap();
+
+        assert_eq!(input.status, CompositorNodeStatus::Placeholder);
+        assert_eq!(capture.status, SoftwareCompositorCaptureStatus::NoSource);
+        assert_eq!(capture.capture_kind, CaptureSourceKind::Camera);
+        assert_eq!(capture.capture_source_id, None);
     }
 
     #[test]

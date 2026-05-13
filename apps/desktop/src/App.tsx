@@ -1164,6 +1164,7 @@ function captureRuntimeStatusTone(
       return "red";
     case "no_source":
     case "permission_required":
+    case "decoder_unavailable":
     case "unsupported_platform":
     case "unsupported_source":
       return "amber";
@@ -1266,6 +1267,7 @@ function runtimeBindingTarget(binding: SelectedRuntimeBinding | null): string {
 function runtimeCaptureConfigTarget(source: SceneSource): string {
   if (source.kind === "display") return source.config.display_id ?? "Unassigned";
   if (source.kind === "window") return source.config.window_id ?? "Unassigned";
+  if (source.kind === "camera") return source.config.device_id ?? "Unassigned";
   return "Unassigned";
 }
 
@@ -7288,7 +7290,11 @@ function LiveCaptureRuntimePanel(props: {
   node: CompositorEvaluatedNode | null;
   source: SceneSource;
 }) {
-  if (props.source.kind !== "display" && props.source.kind !== "window") {
+  if (
+    props.source.kind !== "display" &&
+    props.source.kind !== "window" &&
+    props.source.kind !== "camera"
+  ) {
     return null;
   }
 
@@ -7297,7 +7303,7 @@ function LiveCaptureRuntimePanel(props: {
     capture?.status ??
     (sceneSourceAvailability(props.source)?.state === "permission_required"
       ? "permission_required"
-      : props.source.kind === "display"
+      : props.source.kind === "display" || props.source.kind === "camera"
         ? "no_source"
         : "pending");
   const detail =
