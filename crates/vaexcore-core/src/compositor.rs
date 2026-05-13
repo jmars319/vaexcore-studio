@@ -347,6 +347,30 @@ pub struct SoftwareCompositorBrowserMetadata {
     pub capture_duration_ms: Option<u64>,
     #[serde(default)]
     pub cache_hit: bool,
+    #[serde(default)]
+    pub lifecycle_state: BrowserSourceLifecycleState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_interval_ms: Option<u64>,
+    #[serde(default)]
+    pub process_reused: bool,
+    #[serde(default)]
+    pub reload_count: u64,
+    #[serde(default)]
+    pub cleanup_count: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserSourceLifecycleState {
+    #[default]
+    Idle,
+    Starting,
+    Active,
+    Reloading,
+    Error,
+    Stopped,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -422,11 +446,13 @@ struct CachedDecodedImage {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct BrowserSnapshotCacheKey {
+    source_id: String,
     url: String,
     viewport_width: u32,
     viewport_height: u32,
     custom_css_hash: u64,
     sample_time_ms: u64,
+    reload_token: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -451,6 +477,12 @@ struct BrowserSnapshot {
     custom_css_applied: bool,
     custom_css_detail: Option<String>,
     cache_hit: bool,
+    lifecycle_state: BrowserSourceLifecycleState,
+    session_id: Option<String>,
+    refresh_interval_ms: u64,
+    process_reused: bool,
+    reload_count: u64,
+    cleanup_count: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -461,12 +493,35 @@ struct BrowserBinary {
 
 #[derive(Clone, Debug)]
 struct BrowserSnapshotRequest {
+    source_id: String,
     url: String,
     viewport_width: u32,
     viewport_height: u32,
     custom_css: String,
     sample_time_ms: u64,
     sample_index: u64,
+    refresh_interval_ms: u64,
+    reload_token: u64,
+}
+
+struct BrowserRuntimeSession {
+    session_id: String,
+    browser_path: PathBuf,
+    port: u16,
+    user_data_dir: PathBuf,
+    child: Child,
+    reload_token: u64,
+    reload_count: u64,
+    cleanup_count: u64,
+}
+
+#[derive(Clone, Debug)]
+struct BrowserSessionLease {
+    session_id: String,
+    port: u16,
+    process_reused: bool,
+    reload_count: u64,
+    cleanup_count: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -546,6 +601,8 @@ static IMAGE_ASSET_CACHE: OnceLock<Mutex<HashMap<ImageAssetCacheKey, CachedDecod
 static BROWSER_SNAPSHOT_CACHE: OnceLock<
     Mutex<HashMap<BrowserSnapshotCacheKey, CachedBrowserSnapshot>>,
 > = OnceLock::new();
+static BROWSER_SESSION_CACHE: OnceLock<Mutex<HashMap<String, BrowserRuntimeSession>>> =
+    OnceLock::new();
 static VIDEO_ASSET_CACHE: OnceLock<Mutex<HashMap<VideoAssetCacheKey, CachedDecodedImage>>> =
     OnceLock::new();
 static LUT_ASSET_CACHE: OnceLock<Mutex<HashMap<LutAssetCacheKey, CachedCubeLut>>> = OnceLock::new();
@@ -2165,14 +2222,22 @@ fn browser_overlay_input_frame_for_node_with_browser(
     };
 
     let custom_css = config_value_string(&node.config, "custom_css").unwrap_or_default();
-    let sample_time_ms = quantized_browser_sample_time_ms(clock);
+    let refresh_interval_ms = browser_refresh_interval_ms(node);
+    let sample_time_ms = quantized_browser_sample_time_ms(clock, refresh_interval_ms);
+    let reload_token = config_value_number(&node.config, "reload_token")
+        .unwrap_or(0.0)
+        .round()
+        .max(0.0) as u64;
     let request = BrowserSnapshotRequest {
+        source_id: node.source_id.clone(),
         url: url.clone(),
         viewport_width: viewport.0,
         viewport_height: viewport.1,
         custom_css,
         sample_time_ms,
-        sample_index: sample_time_ms / BROWSER_SAMPLE_INTERVAL_MS,
+        sample_index: sample_time_ms / refresh_interval_ms,
+        refresh_interval_ms,
+        reload_token,
     };
 
     match browser_overlay_snapshot(&browser, &request) {
@@ -2230,6 +2295,12 @@ fn browser_snapshot_input_frame(
         checksum: Some(snapshot.checksum),
         capture_duration_ms: Some(snapshot.capture_duration_ms),
         cache_hit: snapshot.cache_hit,
+        lifecycle_state: snapshot.lifecycle_state,
+        session_id: snapshot.session_id,
+        refresh_interval_ms: Some(snapshot.refresh_interval_ms),
+        process_reused: snapshot.process_reused,
+        reload_count: snapshot.reload_count,
+        cleanup_count: snapshot.cleanup_count,
     };
 
     SoftwareCompositorInputFrame {
@@ -3654,12 +3725,15 @@ fn browser_overlay_snapshot(
     request: &BrowserSnapshotRequest,
 ) -> Result<BrowserSnapshot, BrowserCaptureError> {
     let key = BrowserSnapshotCacheKey {
+        source_id: request.source_id.clone(),
         url: request.url.clone(),
         viewport_width: request.viewport_width,
         viewport_height: request.viewport_height,
         custom_css_hash: checksum_pixels(request.custom_css.as_bytes()),
         sample_time_ms: request.sample_time_ms,
+        reload_token: request.reload_token,
     };
+    let lease = ensure_browser_session(browser, request)?;
     if let Some(cached) = cached_browser_snapshot(&key) {
         return Ok(BrowserSnapshot {
             width: cached.width,
@@ -3674,12 +3748,18 @@ fn browser_overlay_snapshot(
             custom_css_applied: !request.custom_css.trim().is_empty(),
             custom_css_detail: custom_css_success_detail(&request.custom_css),
             cache_hit: true,
+            lifecycle_state: BrowserSourceLifecycleState::Active,
+            session_id: Some(lease.session_id),
+            refresh_interval_ms: request.refresh_interval_ms,
+            process_reused: lease.process_reused,
+            reload_count: lease.reload_count,
+            cleanup_count: lease.cleanup_count,
         });
     }
 
     let started_at = Instant::now();
     let (snapshot, custom_css_applied, custom_css_detail) =
-        capture_browser_snapshot_with_cdp(browser, request)?;
+        capture_browser_snapshot_with_cdp(lease.port, request)?;
     let capture_duration_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     store_cached_browser_snapshot(key, snapshot.clone());
 
@@ -3696,13 +3776,30 @@ fn browser_overlay_snapshot(
         custom_css_applied,
         custom_css_detail,
         cache_hit: false,
+        lifecycle_state: if request.reload_token > 0 {
+            BrowserSourceLifecycleState::Reloading
+        } else {
+            BrowserSourceLifecycleState::Active
+        },
+        session_id: Some(lease.session_id),
+        refresh_interval_ms: request.refresh_interval_ms,
+        process_reused: lease.process_reused,
+        reload_count: lease.reload_count,
+        cleanup_count: lease.cleanup_count,
     })
 }
 
 fn capture_browser_snapshot_with_cdp(
-    browser: &BrowserBinary,
+    port: u16,
     request: &BrowserSnapshotRequest,
 ) -> Result<(CachedBrowserSnapshot, bool, Option<String>), BrowserCaptureError> {
+    run_browser_capture_session(port, request)
+}
+
+fn start_browser_session(
+    browser: &BrowserBinary,
+    request: &BrowserSnapshotRequest,
+) -> Result<BrowserRuntimeSession, BrowserCaptureError> {
     let port = allocate_local_port()?;
     let user_data_dir = env::temp_dir().join(format!("vaexcore-browser-{}", Uuid::new_v4()));
     fs::create_dir_all(&user_data_dir).map_err(|error| BrowserCaptureError {
@@ -3712,7 +3809,7 @@ fn capture_browser_snapshot_with_cdp(
         custom_css_detail: None,
     })?;
 
-    let mut child = Command::new(&browser.path)
+    let child = Command::new(&browser.path)
         .arg("--headless=new")
         .arg("--disable-gpu")
         .arg("--no-first-run")
@@ -3739,10 +3836,73 @@ fn capture_browser_snapshot_with_cdp(
             custom_css_detail: None,
         })?;
 
-    let result = run_browser_capture_session(port, request);
-    stop_browser_child(&mut child);
-    let _ = fs::remove_dir_all(&user_data_dir);
-    result
+    Ok(BrowserRuntimeSession {
+        session_id: Uuid::new_v4().to_string(),
+        browser_path: browser.path.clone(),
+        port,
+        user_data_dir,
+        child,
+        reload_token: request.reload_token,
+        reload_count: u64::from(request.reload_token > 0),
+        cleanup_count: 0,
+    })
+}
+
+fn ensure_browser_session(
+    browser: &BrowserBinary,
+    request: &BrowserSnapshotRequest,
+) -> Result<BrowserSessionLease, BrowserCaptureError> {
+    let cache = BROWSER_SESSION_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut sessions = cache.lock().expect("browser session cache poisoned");
+    let source_key = if request.source_id.is_empty() {
+        request.url.clone()
+    } else {
+        format!("{}|{}", request.source_id, request.url)
+    };
+    let mut cleanup_count = 0;
+
+    let mut should_remove = false;
+    if let Some(session) = sessions.get_mut(&source_key) {
+        if session.browser_path != browser.path || session.child.try_wait().ok().flatten().is_some()
+        {
+            cleanup_count = cleanup_browser_session(session);
+            should_remove = true;
+        } else {
+            let process_reused = true;
+            if session.reload_token != request.reload_token {
+                session.reload_token = request.reload_token;
+                session.reload_count = session.reload_count.saturating_add(1);
+            }
+            return Ok(BrowserSessionLease {
+                session_id: session.session_id.clone(),
+                port: session.port,
+                process_reused,
+                reload_count: session.reload_count,
+                cleanup_count: session.cleanup_count,
+            });
+        }
+    }
+    if should_remove {
+        sessions.remove(&source_key);
+    }
+
+    let mut session = start_browser_session(browser, request)?;
+    session.cleanup_count = cleanup_count;
+    let lease = BrowserSessionLease {
+        session_id: session.session_id.clone(),
+        port: session.port,
+        process_reused: false,
+        reload_count: session.reload_count,
+        cleanup_count: session.cleanup_count,
+    };
+    sessions.insert(source_key, session);
+    Ok(lease)
+}
+
+fn cleanup_browser_session(session: &mut BrowserRuntimeSession) -> u64 {
+    stop_browser_child(&mut session.child);
+    let _ = fs::remove_dir_all(&session.user_data_dir);
+    session.cleanup_count.saturating_add(1)
 }
 
 fn run_browser_capture_session(
@@ -3772,19 +3932,30 @@ fn run_browser_capture_session(
     )
     .map_err(browser_capture_failed)?;
 
-    let navigation = cdp
+    let mut navigation = cdp
         .send("Page.navigate", serde_json::json!({ "url": request.url }))
         .map_err(browser_navigation_failed)?;
     if let Some(error_text) = navigation
         .get("errorText")
         .and_then(serde_json::Value::as_str)
     {
-        return Err(BrowserCaptureError {
-            status: SoftwareCompositorBrowserStatus::NavigationFailed,
-            detail: format!("Browser overlay navigation failed: {error_text}"),
-            custom_css_applied: false,
-            custom_css_detail: None,
-        });
+        if error_text == "net::ERR_ABORTED" {
+            std::thread::sleep(Duration::from_millis(150));
+            navigation = cdp
+                .send("Page.navigate", serde_json::json!({ "url": request.url }))
+                .map_err(browser_navigation_failed)?;
+        }
+        if let Some(error_text) = navigation
+            .get("errorText")
+            .and_then(serde_json::Value::as_str)
+        {
+            return Err(BrowserCaptureError {
+                status: SoftwareCompositorBrowserStatus::NavigationFailed,
+                detail: format!("Browser overlay navigation failed: {error_text}"),
+                custom_css_applied: false,
+                custom_css_detail: None,
+            });
+        }
     }
     if !wait_for_document_ready(&mut cdp) {
         return Err(BrowserCaptureError {
@@ -3945,12 +4116,15 @@ fn browser_metadata(
                 path: PathBuf::new(),
             },
             BrowserSnapshotRequest {
+                source_id: String::new(),
                 url: url.clone().unwrap_or_default(),
                 viewport_width: viewport.0,
                 viewport_height: viewport.1,
                 custom_css: String::new(),
                 sample_time_ms: 0,
                 sample_index: 0,
+                refresh_interval_ms: BROWSER_SAMPLE_INTERVAL_MS,
+                reload_token: 0,
             },
             false,
             None,
@@ -3967,7 +4141,7 @@ fn browser_metadata(
         Some(browser.path.display().to_string())
     };
     SoftwareCompositorBrowserMetadata {
-        status,
+        status: status.clone(),
         status_detail,
         url,
         viewport_width: viewport.0,
@@ -3982,6 +4156,21 @@ fn browser_metadata(
         checksum: None,
         capture_duration_ms: None,
         cache_hit: false,
+        lifecycle_state: match status {
+            SoftwareCompositorBrowserStatus::NoUrl => BrowserSourceLifecycleState::Idle,
+            SoftwareCompositorBrowserStatus::BrowserUnavailable => {
+                BrowserSourceLifecycleState::Stopped
+            }
+            SoftwareCompositorBrowserStatus::UnsupportedUrl
+            | SoftwareCompositorBrowserStatus::NavigationFailed
+            | SoftwareCompositorBrowserStatus::CaptureFailed => BrowserSourceLifecycleState::Error,
+            SoftwareCompositorBrowserStatus::Rendered => BrowserSourceLifecycleState::Active,
+        },
+        session_id: None,
+        refresh_interval_ms: Some(request.refresh_interval_ms),
+        process_reused: false,
+        reload_count: 0,
+        cleanup_count: 0,
     }
 }
 
@@ -3992,9 +4181,17 @@ fn is_supported_browser_overlay_url(url: &str) -> bool {
         || trimmed.starts_with("file://")
 }
 
-fn quantized_browser_sample_time_ms(clock: &CompositorFrameClock) -> u64 {
+fn quantized_browser_sample_time_ms(clock: &CompositorFrameClock, refresh_interval_ms: u64) -> u64 {
     let pts_ms = clock.pts_nanos / 1_000_000;
-    (pts_ms / BROWSER_SAMPLE_INTERVAL_MS) * BROWSER_SAMPLE_INTERVAL_MS
+    let interval = refresh_interval_ms.clamp(250, 60_000);
+    (pts_ms / interval) * interval
+}
+
+fn browser_refresh_interval_ms(node: &CompositorNode) -> u64 {
+    config_value_number(&node.config, "refresh_interval_ms")
+        .unwrap_or(BROWSER_SAMPLE_INTERVAL_MS as f64)
+        .round()
+        .clamp(250.0, 60_000.0) as u64
 }
 
 fn allocate_local_port() -> Result<u16, BrowserCaptureError> {
@@ -5175,7 +5372,12 @@ mod tests {
         let input = capture_input_frame_for_node_with_provider(display, &clock, fake_provider);
         let capture = input.capture.unwrap();
 
-        assert_eq!(input.status, CompositorNodeStatus::Ready);
+        assert_eq!(
+            input.status,
+            CompositorNodeStatus::Ready,
+            "{:?}",
+            input.browser
+        );
         assert_eq!(input.width, 2);
         assert_eq!(input.height, 2);
         assert_eq!(capture.status, SoftwareCompositorCaptureStatus::Rendered);
@@ -5734,6 +5936,12 @@ mod tests {
         assert_eq!(browser.viewport_height, 72);
         assert_eq!(browser.sampled_frame_time_ms, Some(0));
         assert!(browser.checksum.is_some_and(|checksum| checksum > 0));
+        assert_eq!(browser.lifecycle_state, BrowserSourceLifecycleState::Active);
+        assert!(browser
+            .session_id
+            .as_deref()
+            .is_some_and(|id| !id.is_empty()));
+        assert_eq!(browser.refresh_interval_ms, Some(1000));
         assert_ne!(
             software_test_pixel(&result.pixel_frames[0], 64, 36),
             [5, 7, 17, 255]
@@ -5756,6 +5964,15 @@ mod tests {
         assert!(!baseline.input_frames[0].browser.as_ref().unwrap().cache_hit);
         assert!(
             cached.input_frames[0].browser.as_ref().unwrap().cache_hit,
+            "{:?}",
+            cached.input_frames[0].browser
+        );
+        assert!(
+            cached.input_frames[0]
+                .browser
+                .as_ref()
+                .unwrap()
+                .process_reused,
             "{:?}",
             cached.input_frames[0].browser
         );

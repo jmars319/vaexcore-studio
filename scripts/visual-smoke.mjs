@@ -336,6 +336,11 @@ const targets = [
         expression: 'document.querySelector("[data-testid=\\"designer-browser-runtime\\"]")?.textContent?.includes("No browser overlay URL")',
         message: "Designer browser runtime panel did not explain the missing URL state.",
       },
+      {
+        type: "assert",
+        expression: 'document.querySelector("[data-testid=\\"designer-browser-runtime\\"]")?.textContent?.includes("Lifecycle")',
+        message: "Designer browser runtime panel did not expose lifecycle metadata.",
+      },
     ],
   },
   {

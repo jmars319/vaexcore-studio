@@ -158,6 +158,8 @@ test("scene validation accepts current browser overlay source configs", async ()
         url: "https://example.com/overlay",
         viewport: { width: 1280, height: 720 },
         custom_css: "body { background: transparent; }",
+        refresh_interval_ms: 500,
+        reload_token: 1,
         availability: {
           state: "available",
           detail: "Browser overlay URL configured.",

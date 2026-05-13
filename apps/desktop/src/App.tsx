@@ -7638,6 +7638,12 @@ function BrowserRuntimePanel(props: {
         <KeyValue label="Viewport" value={`${viewportWidth}x${viewportHeight}`} />
         <KeyValue label="Browser" value={browser?.browser_name ?? "not resolved"} />
         <KeyValue label="CSS" value={cssLabel} />
+        <KeyValue label="Lifecycle" value={browser?.lifecycle_state ?? "idle"} />
+        <KeyValue label="Session" value={browser?.session_id ?? "none"} />
+        <KeyValue
+          label="Refresh"
+          value={`${browser?.refresh_interval_ms ?? props.source.config.refresh_interval_ms ?? 1000} ms`}
+        />
         <KeyValue
           label="Sample"
           value={
@@ -7668,6 +7674,16 @@ function BrowserRuntimePanel(props: {
                 ? "cache hit"
                 : "fresh capture"
               : "no captured frame"
+          }
+        />
+        <KeyValue
+          label="Process"
+          value={
+            browser
+              ? `${browser.process_reused ? "reused" : "started"} / reloads ${
+                  browser.reload_count
+                } / cleanup ${browser.cleanup_count}`
+              : "not started"
           }
         />
       </div>
@@ -9362,6 +9378,32 @@ function SourceConfigEditor(props: {
               }
               value={source.config.viewport.height}
             />
+          </div>
+          <div className="form-grid">
+            <SceneNumberInput
+              label="Refresh Interval MS"
+              min={250}
+              onChange={(refresh_interval_ms) =>
+                props.onChange({ refresh_interval_ms })
+              }
+              value={source.config.refresh_interval_ms ?? 1000}
+            />
+            <label>
+              Reload Token
+              <button
+                className="secondary-button"
+                data-testid="designer-browser-reload"
+                onClick={() =>
+                  props.onChange({
+                    reload_token: (source.config.reload_token ?? 0) + 1,
+                  })
+                }
+                type="button"
+              >
+                <RefreshCw size={14} />
+                Reload
+              </button>
+            </label>
           </div>
           <label>
             Custom CSS

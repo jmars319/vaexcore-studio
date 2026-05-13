@@ -296,6 +296,8 @@ impl SceneCollection {
                         "url": null,
                         "viewport": { "width": 1280, "height": 720 },
                         "custom_css": null,
+                        "refresh_interval_ms": 1000,
+                        "reload_token": 0,
                         "availability": {
                             "state": "unavailable",
                             "detail": "No browser overlay URL has been configured."

@@ -54,9 +54,11 @@ foundation to OBS-class scene editing and output.
     MKV assets. Video audio playback and long-running media timelines are not
     started.
 17. Browser/web overlay source engine: started with optional local
-    Chrome/Chromium/Edge DevTools snapshot rendering for HTTP, HTTPS, and file
-    URLs. Interactive browser lifecycle, browser audio, and output parity are
-    not started.
+    Chrome/Chromium/Edge DevTools rendering for HTTP, HTTPS, and file URLs.
+    Full Scene Designer Pass 7 adds managed preview sessions, refresh interval,
+    reload-token handling, viewport/CSS reinjection, process reuse, cache, and
+    cleanup diagnostics. Browser audio, interactive overlay input, and output
+    parity are not started.
 18. Text render engine with font controls: started with backend software
     rasterization for current single-line text source fields. Multiline layout,
     rich text, and platform font discovery are not started.
@@ -165,11 +167,11 @@ output.
 Phase F software compositor, covering steps 51-60, now has serializable input
 frame contracts, per-source placeholder providers, local still-image decode,
 local video preview frame extraction through optional FFmpeg, backend text
-rasterization with bundled Inter, browser overlay snapshot rendering through
-optional Chrome/Chromium/Edge, asset cache invalidation by path/source identity
-and sampled time, crop/opacity/rotation-aware software drawing, z-order
-compositing, and compositor tests. Capture and live audio inputs are still
-deterministic placeholders.
+rasterization with bundled Inter, managed browser overlay preview sessions
+through optional Chrome/Chromium/Edge, asset cache invalidation by path/source
+identity and sampled time, crop/opacity/rotation-aware software drawing,
+z-order compositing, and compositor tests. Persistent display/window/camera
+capture and output browser parity remain later work.
 
 Phase G live preview, covering steps 61-70, now returns encoded software preview
 image data through the runtime preview API and Designer draws it as the preview

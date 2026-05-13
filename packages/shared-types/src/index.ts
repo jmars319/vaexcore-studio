@@ -120,6 +120,8 @@ export interface BrowserOverlaySceneSourceConfig {
   url: string | null;
   viewport: Resolution;
   custom_css: string | null;
+  refresh_interval_ms: number | null;
+  reload_token: number;
   availability: SceneSourceAvailability;
 }
 
@@ -584,6 +586,14 @@ export type SoftwareCompositorBrowserStatus =
   | "navigation_failed"
   | "capture_failed";
 
+export type BrowserSourceLifecycleState =
+  | "idle"
+  | "starting"
+  | "active"
+  | "reloading"
+  | "error"
+  | "stopped";
+
 export interface SoftwareCompositorBrowserMetadata {
   status: SoftwareCompositorBrowserStatus;
   status_detail: string;
@@ -600,6 +610,12 @@ export interface SoftwareCompositorBrowserMetadata {
   checksum?: number | null;
   capture_duration_ms?: number | null;
   cache_hit: boolean;
+  lifecycle_state: BrowserSourceLifecycleState;
+  session_id?: string | null;
+  refresh_interval_ms?: number | null;
+  process_reused: boolean;
+  reload_count: number;
+  cleanup_count: number;
 }
 
 export type SoftwareCompositorCaptureStatus =
@@ -1803,6 +1819,8 @@ export function defaultSceneSourceConfig(
         url: null,
         viewport: { width: 1280, height: 720 },
         custom_css: null,
+        refresh_interval_ms: 1000,
+        reload_token: 0,
         availability: defaultAvailability(
           "unavailable",
           "No browser overlay URL has been configured.",

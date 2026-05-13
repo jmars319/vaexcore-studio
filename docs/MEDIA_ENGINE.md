@@ -60,13 +60,15 @@ video extraction to composite sampled local transition video over still from/to
 scene software frames and report trigger, decoder, cache, and fallback metadata.
 The compositor also rasterizes single-line `text` sources with the
 bundled Inter font and reports font fallback, color fallback, rendered bounds,
-and checksum metadata. Browser overlay sources can render preview snapshots
-through optional local Chrome, Chromium, or Edge DevTools capture for HTTP,
-HTTPS, and file URLs. Browser snapshots use isolated temporary
-profiles, apply configured viewport and custom CSS, cache by URL, viewport, CSS
-hash, and sampled time, and fall back to explicit placeholder states when no
-compatible browser is available or capture fails. Filter diagnostics report
-applied, skipped, deferred, or failed runtime state plus filtered checksums.
+and checksum metadata. Browser overlay sources can render preview frames through
+managed optional local Chrome, Chromium, or Edge DevTools sessions for HTTP,
+HTTPS, and file URLs. Browser sessions use isolated temporary profiles, apply
+configured viewport and custom CSS, support refresh interval and reload-token
+changes, cache by source, URL, viewport, CSS hash, sampled time, and reload
+token, and report lifecycle, process reuse, cleanup, cache, and fallback
+diagnostics when no compatible browser is available or capture fails. Filter
+diagnostics report applied, skipped, deferred, or failed runtime state plus
+filtered checksums.
 Mask images use the same still-image decode/cache path, and LUT files are
 parsed and cached by normalized path plus modified time. Stinger video playback,
 live capture, recording, and streaming output remain outside this path.
