@@ -24,7 +24,8 @@
     "validate:windows": "node scripts/validate-windows.mjs",
     "check:sidecars": "npm run check:sidecars -w apps/desktop",
     "prepare:sidecars": "npm run prepare:sidecars -w apps/desktop",
-    "smoke:visual": "node scripts/visual-smoke.mjs"
+    "smoke:visual": "node scripts/visual-smoke.mjs",
+    "smoke:designer-soak": "node scripts/designer-soak.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -4,6 +4,7 @@ const steps = [
   ["npm", ["run", "test:scripts"]],
   ["npm", ["run", "typecheck", "--workspaces", "--if-present"]],
   ["npm", ["run", "smoke:visual"]],
+  ["npm", ["run", "smoke:designer-soak"]],
   ["cargo", ["fmt", "--all", "--", "--check"]],
   ["cargo", ["clippy", "--all-targets", "--", "-D", "warnings"]],
   ["cargo", ["test", "--workspace"], { windowsNoRunFallback: true }],

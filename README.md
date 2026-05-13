@@ -49,7 +49,9 @@ sidecars/
 - Scene Designer offline editor V1 supports local scene/source authoring,
   grouping, import/export, deterministic preview, local still-image preview
   pixels, backend-rendered text preview pixels, software visual filter previews,
-  and validation without starting real capture, recording, or streaming output.
+  managed runtime-session diagnostics, exportable readiness/dependency reports,
+  short soak validation, and validation without starting recording or streaming
+  output.
 - Windows launcher material is present, but platform maturity still centers on local desktop validation.
 
 ## Deployment Posture

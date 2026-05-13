@@ -88,6 +88,8 @@ import type {
   CompositorNode,
   CompositorRenderedFrame,
   ConnectedClient,
+  DesignerReadinessReport,
+  DesignerRuntimeSessionSnapshot,
   HealthResponse,
   Marker,
   MediaPipelinePlan,
@@ -386,9 +388,43 @@ type DesignerShortcutDefinition = {
 
 type DesignerShortcutMap = Record<DesignerShortcutAction, string>;
 
+type DesignerStoredSourcePreset = {
+  id: string;
+  name: string;
+  kind: SceneSourceKind;
+  createdAt: string;
+  defaults: SceneSourceDefaults;
+};
+
+type DesignerStoredFilterPreset = {
+  id: string;
+  name: string;
+  createdAt: string;
+  filters: SceneSourceFilter[];
+};
+
+type SceneAssetDependencyReport = {
+  version: number;
+  collectionId: string;
+  collectionName: string;
+  generatedAt: string;
+  dependencies: Array<{
+    sceneId: string;
+    sceneName: string;
+    ownerId: string;
+    ownerName: string;
+    ownerKind: string;
+    field: string;
+    uri: string;
+    status: "configured" | "missing";
+  }>;
+};
+
 const designerHistoryLimit = 50;
 const designerSnapThreshold = 12;
 const designerShortcutStorageKey = "vaexcore.studio.designer.shortcuts.v1";
+const designerSourcePresetStorageKey = "vaexcore.studio.designer.source-presets.v1";
+const designerFilterPresetStorageKey = "vaexcore.studio.designer.filter-presets.v1";
 
 const designerShortcutDefinitions: DesignerShortcutDefinition[] = [
   {
@@ -811,6 +847,160 @@ function saveDesignerShortcutMap(shortcuts: DesignerShortcutMap) {
   } catch {
     // Local shortcut persistence is best-effort and should never block editing.
   }
+}
+
+function loadDesignerSourcePresets(): DesignerStoredSourcePreset[] {
+  return loadDesignerPresetList<DesignerStoredSourcePreset>(
+    designerSourcePresetStorageKey,
+  ).filter((preset) => preset.id && preset.name && preset.kind && preset.defaults);
+}
+
+function saveDesignerSourcePresets(presets: DesignerStoredSourcePreset[]) {
+  saveDesignerPresetList(designerSourcePresetStorageKey, presets);
+}
+
+function loadDesignerFilterPresets(): DesignerStoredFilterPreset[] {
+  return loadDesignerPresetList<DesignerStoredFilterPreset>(
+    designerFilterPresetStorageKey,
+  ).filter((preset) => preset.id && preset.name && Array.isArray(preset.filters));
+}
+
+function saveDesignerFilterPresets(presets: DesignerStoredFilterPreset[]) {
+  saveDesignerPresetList(designerFilterPresetStorageKey, presets);
+}
+
+function loadDesignerPresetList<T>(key: string): T[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as T[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveDesignerPresetList<T>(key: string, presets: T[]) {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(presets.slice(0, 25)));
+  } catch {
+    // Presets are local editing conveniences and should not block scene work.
+  }
+}
+
+function cloneDesignerJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function buildSceneAssetDependencyReport(
+  collection: SceneCollection,
+): SceneAssetDependencyReport {
+  const dependencies: SceneAssetDependencyReport["dependencies"] = [];
+  collection.scenes.forEach((scene) => {
+    scene.sources.forEach((source) => {
+      if (source.kind === "image_media") {
+        dependencies.push({
+          sceneId: scene.id,
+          sceneName: scene.name,
+          ownerId: source.id,
+          ownerName: source.name,
+          ownerKind: source.kind,
+          field: "config.asset_uri",
+          uri: source.config.asset_uri ?? "",
+          status: source.config.asset_uri ? "configured" : "missing",
+        });
+      }
+      if (source.kind === "text" && source.config.font_file_uri) {
+        dependencies.push({
+          sceneId: scene.id,
+          sceneName: scene.name,
+          ownerId: source.id,
+          ownerName: source.name,
+          ownerKind: source.kind,
+          field: "config.font_file_uri",
+          uri: source.config.font_file_uri,
+          status: "configured",
+        });
+      }
+      source.filters.forEach((filter) => {
+        const maskUri = String(filter.config.mask_uri ?? "").trim();
+        const lutUri = String(filter.config.lut_uri ?? "").trim();
+        if (maskUri || filter.kind === "mask_blend") {
+          dependencies.push({
+            sceneId: scene.id,
+            sceneName: scene.name,
+            ownerId: filter.id,
+            ownerName: filter.name,
+            ownerKind: filter.kind,
+            field: "filter.mask_uri",
+            uri: maskUri,
+            status: maskUri ? "configured" : "missing",
+          });
+        }
+        if (lutUri || filter.kind === "lut") {
+          dependencies.push({
+            sceneId: scene.id,
+            sceneName: scene.name,
+            ownerId: filter.id,
+            ownerName: filter.name,
+            ownerKind: filter.kind,
+            field: "filter.lut_uri",
+            uri: lutUri,
+            status: lutUri ? "configured" : "missing",
+          });
+        }
+      });
+    });
+  });
+  collection.transitions.forEach((transition) => {
+    if (transition.kind !== "stinger") return;
+    const assetUri = String(transition.config.asset_uri ?? "").trim();
+    dependencies.push({
+      sceneId: collection.active_scene_id,
+      sceneName: "Transition",
+      ownerId: transition.id,
+      ownerName: transition.name,
+      ownerKind: transition.kind,
+      field: "transition.asset_uri",
+      uri: assetUri,
+      status: assetUri ? "configured" : "missing",
+    });
+  });
+
+  return {
+    version: 1,
+    collectionId: collection.id,
+    collectionName: collection.name,
+    generatedAt: new Date().toISOString(),
+    dependencies,
+  };
+}
+
+function buildFallbackDesignerReadinessReport(
+  collection: SceneCollection,
+  scene: Scene,
+): DesignerReadinessReport {
+  return {
+    version: 1,
+    collection_id: collection.id,
+    active_scene_id: scene.id,
+    active_scene_name: scene.name,
+    generated_at: new Date().toISOString(),
+    overall: "degraded",
+    items: [
+      {
+        id: "frontend-fallback",
+        label: "Frontend fallback",
+        state: "degraded",
+        detail: "Backend readiness report was not available; this is a local fallback.",
+      },
+    ],
+    windows_handoff: [
+      "Run npm run validate:windows from the Windows checkout.",
+      "Open Studio on Windows and validate live capture/readiness panels.",
+    ],
+  };
 }
 
 function normalizeDesignerShortcutCombo(combo: unknown) {
@@ -1423,6 +1613,12 @@ function App() {
     useState<CaptureProviderRuntimeSnapshot | null>(null);
   const [audioGraphRuntime, setAudioGraphRuntime] =
     useState<AudioGraphRuntimeSnapshot | null>(null);
+  const [designerRuntimeSession, setDesignerRuntimeSession] =
+    useState<DesignerRuntimeSessionSnapshot | null>(null);
+  const [designerReadinessReport, setDesignerReadinessReport] =
+    useState<DesignerReadinessReport | null>(null);
+  const [designerRuntimeMessage, setDesignerRuntimeMessage] =
+    useState<string | null>(null);
   const [previewFrame, setPreviewFrame] = useState<PreviewFrameResponse | null>(null);
   const [previewPolling, setPreviewPolling] = useState(true);
   const [previewQuality, setPreviewQuality] =
@@ -1534,6 +1730,8 @@ function App() {
           nextSceneRuntimeBindings,
           nextCaptureProviderRuntime,
           nextAudioGraphRuntime,
+          nextDesignerRuntimeSession,
+          nextDesignerReadinessReport,
           nextSuiteStatus,
           nextSuiteSession,
           nextSuiteTimeline,
@@ -1552,6 +1750,8 @@ function App() {
           StudioApi.sceneRuntimeBindings(runtimeConfig),
           StudioApi.sceneRuntimeCaptureProviders(runtimeConfig),
           StudioApi.sceneRuntimeAudioGraph(runtimeConfig),
+          StudioApi.designerRuntimeSession(runtimeConfig),
+          StudioApi.designerReadinessReport(runtimeConfig),
           loadSuiteStatus(),
           loadSuiteSession(),
           loadSuiteTimeline(50),
@@ -1571,6 +1771,8 @@ function App() {
         setSceneRuntimeBindings(nextSceneRuntimeBindings);
         setCaptureProviderRuntime(nextCaptureProviderRuntime);
         setAudioGraphRuntime(nextAudioGraphRuntime);
+        setDesignerRuntimeSession(nextDesignerRuntimeSession);
+        setDesignerReadinessReport(nextDesignerReadinessReport);
         setSuiteStatus(nextSuiteStatus);
         setSuiteSession(nextSuiteSession);
         setPersistedSuiteTimeline(nextSuiteTimeline);
@@ -1734,6 +1936,7 @@ function App() {
         previewFrameRequestForScene(activeDesignerScene, previewQuality),
       );
       setPreviewFrame(response);
+      setDesignerRuntimeSession(response.runtime_session);
       setPreviewStats((current) =>
         updatePreviewStats(
           current,
@@ -1776,6 +1979,7 @@ function App() {
         }),
       );
       setProgramPreviewFrame(response);
+      setDesignerRuntimeSession(response.runtime_session);
       setProgramPreviewError(
         response.validation.ready
           ? null
@@ -1830,6 +2034,11 @@ function App() {
         if (!cancelled) {
           setAudioGraphRuntime(audioGraph);
           setCaptureProviderRuntime(captureProviders);
+          StudioApi.designerRuntimeSession(runtimeConfig)
+            .then((snapshot) => {
+              if (!cancelled) setDesignerRuntimeSession(snapshot);
+            })
+            .catch(() => undefined);
         }
       } catch {
         // Live source telemetry is best-effort in the Designer shell.
@@ -1850,6 +2059,65 @@ function App() {
 
   async function requestDesignerProgramPreviewFrame() {
     await fetchDesignerProgramPreviewFrame();
+  }
+
+  async function pauseDesignerRuntime(paused: boolean) {
+    if (!config) return;
+    try {
+      const result = await StudioApi.pauseDesignerRuntimeSession(config, {
+        paused,
+        reason: paused
+          ? "Paused from Scene Designer."
+          : "Resumed from Scene Designer.",
+      });
+      setDesignerRuntimeSession(result.snapshot);
+      setDesignerRuntimeMessage(result.detail);
+    } catch (error) {
+      setDesignerRuntimeMessage(
+        error instanceof Error ? error.message : "Designer runtime control failed",
+      );
+    }
+  }
+
+  async function restartDesignerRuntimeSource(sourceId?: string) {
+    if (!config) return;
+    try {
+      const result = await StudioApi.restartDesignerRuntimeSession(config, {
+        source_id: sourceId ?? null,
+      });
+      setDesignerRuntimeSession(result.snapshot);
+      setDesignerRuntimeMessage(result.detail);
+    } catch (error) {
+      setDesignerRuntimeMessage(
+        error instanceof Error ? error.message : "Designer runtime restart failed",
+      );
+    }
+  }
+
+  async function cleanupDesignerRuntime() {
+    if (!config) return;
+    try {
+      const result = await StudioApi.cleanupDesignerRuntimeSession(config, {});
+      setDesignerRuntimeSession(result.snapshot);
+      setDesignerRuntimeMessage(result.detail);
+    } catch (error) {
+      setDesignerRuntimeMessage(
+        error instanceof Error ? error.message : "Designer runtime cleanup failed",
+      );
+    }
+  }
+
+  async function refreshDesignerReadinessReport() {
+    if (!config) return;
+    try {
+      const report = await StudioApi.designerReadinessReport(config);
+      setDesignerReadinessReport(report);
+      setDesignerRuntimeMessage("Scene Designer readiness report refreshed.");
+    } catch (error) {
+      setDesignerRuntimeMessage(
+        error instanceof Error ? error.message : "Readiness report unavailable",
+      );
+    }
   }
 
   async function refreshProfiles() {
@@ -3324,13 +3592,26 @@ function App() {
         StudioApi.sceneRuntimeBindings(config),
         StudioApi.sceneRuntimeCaptureProviders(config),
         StudioApi.sceneRuntimeAudioGraph(config),
+        StudioApi.designerRuntimeSession(config),
+        StudioApi.designerReadinessReport(config),
       ])
-        .then(([plan, runtime, bindings, captureProviders, audioGraph]) => {
+        .then(
+          ([
+            plan,
+            runtime,
+            bindings,
+            captureProviders,
+            audioGraph,
+            designerSession,
+            readinessReport,
+          ]) => {
           setPipelinePlan(plan);
           setSceneRuntime(runtime);
           setSceneRuntimeBindings(bindings);
           setCaptureProviderRuntime(captureProviders);
           setAudioGraphRuntime(audioGraph);
+          setDesignerRuntimeSession(designerSession);
+          setDesignerReadinessReport(readinessReport);
         })
         .catch(() => undefined);
     } catch (error) {
@@ -3365,6 +3646,9 @@ function App() {
             clipboardSources={designerSourceClipboard}
             config={config}
             captureBindingRefreshing={captureBindingRefreshing}
+            designerReadinessReport={designerReadinessReport}
+            designerRuntimeMessage={designerRuntimeMessage}
+            designerRuntimeSession={designerRuntimeSession}
             dirty={sceneDirty}
             previewError={previewError}
             previewFrame={previewFrame}
@@ -3406,8 +3690,12 @@ function App() {
             onPreviewQualityChange={setPreviewQuality}
             onRequestProgramPreviewFrame={requestDesignerProgramPreviewFrame}
             onRequestPreviewFrame={requestDesignerPreviewFrame}
+            onCleanupDesignerRuntime={cleanupDesignerRuntime}
+            onPauseDesignerRuntime={pauseDesignerRuntime}
             onRefreshCaptureBindings={refreshDesignerRuntimeBindings}
+            onRefreshDesignerReadinessReport={refreshDesignerReadinessReport}
             onRebindSource={handleRebindDesignerSource}
+            onRestartDesignerRuntimeSource={restartDesignerRuntimeSource}
             onRenameScene={handleRenameDesignerScene}
             onResetCollection={handleResetDesignerCollection}
             onAlignSelection={handleAlignDesignerSelection}
@@ -3585,6 +3873,9 @@ function App() {
     captureInventory,
     captureProviderRuntime,
     designerSceneCollection,
+    designerReadinessReport,
+    designerRuntimeMessage,
+    designerRuntimeSession,
     designerSourceClipboard,
     previewError,
     previewFrame,
@@ -3747,6 +4038,9 @@ function DesignerPage(props: {
   collection: SceneCollection;
   clipboardSources: SceneSource[];
   config: RuntimeApiConfig | null;
+  designerReadinessReport: DesignerReadinessReport | null;
+  designerRuntimeMessage: string | null;
+  designerRuntimeSession: DesignerRuntimeSessionSnapshot | null;
   dirty: boolean;
   previewError: string | null;
   previewFrame: PreviewFrameResponse | null;
@@ -3800,8 +4094,12 @@ function DesignerPage(props: {
   onPreviewQualityChange: (quality: PreviewQuality) => void;
   onRequestProgramPreviewFrame: () => void;
   onRequestPreviewFrame: () => void;
+  onCleanupDesignerRuntime: () => void;
+  onPauseDesignerRuntime: (paused: boolean) => void;
   onRefreshCaptureBindings: () => void;
+  onRefreshDesignerReadinessReport: () => void;
   onRebindSource: (sceneId: string, sourceId: string) => void;
+  onRestartDesignerRuntimeSource: (sourceId?: string) => void;
   onRenameScene: (sceneId: string, name: string) => void;
   onResetCollection: () => void;
   onAlignSelection: (
@@ -3909,6 +4207,15 @@ function DesignerPage(props: {
   const [shortcutMessage, setShortcutMessage] = useState<string | null>(null);
   const [renamingSourceId, setRenamingSourceId] = useState<string | null>(null);
   const [sourceRenameDraft, setSourceRenameDraft] = useState("");
+  const [sourcePresets, setSourcePresets] = useState<DesignerStoredSourcePreset[]>(
+    () => loadDesignerSourcePresets(),
+  );
+  const [filterPresets, setFilterPresets] = useState<DesignerStoredFilterPreset[]>(
+    () => loadDesignerFilterPresets(),
+  );
+  const [selectedSourcePresetId, setSelectedSourcePresetId] = useState("");
+  const [selectedFilterPresetId, setSelectedFilterPresetId] = useState("");
+  const [presetMessage, setPresetMessage] = useState<string | null>(null);
   const transitionPreviewPlan = buildSceneTransitionPreviewPlan(
     props.collection,
     transitionPreviewFromSceneId,
@@ -4341,6 +4648,91 @@ function DesignerPage(props: {
     saveDesignerShortcutMap(defaultDesignerShortcutMap);
     setListeningShortcutAction(null);
     setShortcutMessage("Designer shortcuts reset to defaults.");
+  }
+
+  function saveSelectedSourcePreset() {
+    if (!props.selectedSource) return;
+    const source = props.selectedSource;
+    const preset: DesignerStoredSourcePreset = {
+      id: `source-preset-${Date.now()}`,
+      name: `${source.name} Preset`,
+      kind: source.kind,
+      createdAt: new Date().toISOString(),
+      defaults: {
+        bounds_mode: source.bounds_mode,
+        config: cloneDesignerJson(source.config),
+        crop: cloneDesignerJson(source.crop),
+        filters: cloneDesignerJson(source.filters),
+        opacity: source.opacity,
+        rotation_degrees: source.rotation_degrees,
+        size: cloneDesignerJson(source.size),
+        visible: source.visible,
+      },
+    };
+    const next = [preset, ...sourcePresets].slice(0, 25);
+    setSourcePresets(next);
+    saveDesignerSourcePresets(next);
+    setSelectedSourcePresetId(preset.id);
+    setPresetMessage(`Saved source preset "${preset.name}".`);
+  }
+
+  function applySelectedSourcePreset() {
+    if (!props.selectedSource || !selectedSourcePresetId) return;
+    const preset = sourcePresets.find((item) => item.id === selectedSourcePresetId);
+    if (!preset) return;
+    if (preset.kind !== props.selectedSource.kind) {
+      setPresetMessage("Source preset kind does not match the selected source.");
+      return;
+    }
+    props.onUpdateSource(props.scene.id, props.selectedSource.id, {
+      ...preset.defaults,
+      name: props.selectedSource.name,
+    });
+    setPresetMessage(`Applied source preset "${preset.name}".`);
+  }
+
+  function saveSelectedFilterPreset() {
+    if (!props.selectedSource) return;
+    const preset: DesignerStoredFilterPreset = {
+      id: `filter-preset-${Date.now()}`,
+      name: `${props.selectedSource.name} Filters`,
+      createdAt: new Date().toISOString(),
+      filters: cloneDesignerJson(props.selectedSource.filters),
+    };
+    const next = [preset, ...filterPresets].slice(0, 25);
+    setFilterPresets(next);
+    saveDesignerFilterPresets(next);
+    setSelectedFilterPresetId(preset.id);
+    setPresetMessage(`Saved filter preset "${preset.name}".`);
+  }
+
+  function applySelectedFilterPreset() {
+    if (!props.selectedSource || !selectedFilterPresetId) return;
+    const preset = filterPresets.find((item) => item.id === selectedFilterPresetId);
+    if (!preset) return;
+    props.onUpdateSource(props.scene.id, props.selectedSource.id, {
+      filters: cloneDesignerJson(preset.filters).map((filter, index) => ({
+        ...filter,
+        id: `${filter.id}-${Date.now()}-${index}`,
+      })),
+    });
+    setPresetMessage(`Applied filter preset "${preset.name}".`);
+  }
+
+  async function copyAssetDependencyReport() {
+    const report = buildSceneAssetDependencyReport(props.collection);
+    await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+    setPresetMessage(
+      `Copied asset dependency report with ${report.dependencies.length} item(s).`,
+    );
+  }
+
+  async function copyDesignerReadinessReport() {
+    const report =
+      props.designerReadinessReport ??
+      buildFallbackDesignerReadinessReport(props.collection, props.scene);
+    await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
+    setPresetMessage("Copied Scene Designer readiness report.");
   }
 
   function beginInlineSourceRename(source: SceneSource) {
@@ -5681,6 +6073,45 @@ function DesignerPage(props: {
               {props.previewPolling ? <Pause size={14} /> : <Play size={14} />}
               {props.previewPolling ? "Pause" : "Resume"}
             </button>
+            <button
+              className="secondary-button compact"
+              onClick={() =>
+                props.onPauseDesignerRuntime(
+                  props.designerRuntimeSession?.session_state !== "paused",
+                )
+              }
+              type="button"
+            >
+              {props.designerRuntimeSession?.session_state === "paused" ? (
+                <Play size={14} />
+              ) : (
+                <Pause size={14} />
+              )}
+              {props.designerRuntimeSession?.session_state === "paused"
+                ? "Resume Runtime"
+                : "Pause Runtime"}
+            </button>
+            <button
+              aria-label="Restart selected runtime source"
+              className="icon-button compact"
+              disabled={selectedSourceIds.length === 0}
+              onClick={() =>
+                props.onRestartDesignerRuntimeSource(selectedSourceIds[0])
+              }
+              title="Restart selected runtime source session"
+              type="button"
+            >
+              <RefreshCw size={14} />
+            </button>
+            <button
+              aria-label="Cleanup inactive runtime sessions"
+              className="icon-button compact"
+              onClick={props.onCleanupDesignerRuntime}
+              title="Cleanup inactive Designer runtime sessions"
+              type="button"
+            >
+              <Trash2 size={14} />
+            </button>
             <label className="preview-quality-control">
               Quality
               <select
@@ -6039,6 +6470,26 @@ function DesignerPage(props: {
           <KeyValue
             label="Preview Stats"
             value={`${props.previewStats.renderedFrames} frames / ${props.previewStats.droppedFrames} dropped`}
+          />
+          <KeyValue
+            label="Runtime Session"
+            value={
+              props.designerRuntimeSession
+                ? `${props.designerRuntimeSession.session_state} / ${props.designerRuntimeSession.readiness_state}`
+                : "pending"
+            }
+          />
+          <KeyValue
+            label="Runtime Providers"
+            value={props.designerRuntimeSession?.provider_status ?? "not evaluated"}
+          />
+          <KeyValue
+            label="Runtime Stale"
+            value={
+              props.designerRuntimeSession
+                ? `${props.designerRuntimeSession.stale_frame_ms} ms / ${props.designerRuntimeSession.dropped_frames} dropped / ${props.designerRuntimeSession.restart_count} restarts`
+                : "pending"
+            }
           />
           <KeyValue
             label="Program Preview"
@@ -6404,12 +6855,16 @@ function DesignerPage(props: {
           audioGraphRuntime={props.audioGraphRuntime}
           captureProviderRuntime={props.captureProviderRuntime}
           collection={props.collection}
+          designerReadinessReport={props.designerReadinessReport}
+          designerRuntimeMessage={props.designerRuntimeMessage}
+          designerRuntimeSession={props.designerRuntimeSession}
           graphReady={graphValidation.ready}
           pipelinePlan={props.pipelinePlan}
           preflight={props.preflight}
           previewFrame={props.previewFrame}
           previewStats={props.previewStats}
           programPreviewFrame={props.programPreviewFrame}
+          onRefreshReport={props.onRefreshDesignerReadinessReport}
           scene={props.scene}
           sceneValid={validation.ok}
         />
@@ -6967,6 +7422,104 @@ function DesignerPage(props: {
                 }`}
               />
             </div>
+            <div className="designer-preset-panel" data-testid="designer-preset-panel">
+              <div className="designer-selection-tools-header">
+                <strong>Presets And Reports</strong>
+                <span>{presetMessage ?? "Local presets stay on this device."}</span>
+              </div>
+              <div className="designer-transform-tools compact-tools">
+                <button
+                  className="secondary-button compact"
+                  data-testid="designer-save-source-preset"
+                  onClick={saveSelectedSourcePreset}
+                  type="button"
+                >
+                  <Download size={14} />
+                  Source Preset
+                </button>
+                <button
+                  className="secondary-button compact"
+                  data-testid="designer-save-filter-preset"
+                  onClick={saveSelectedFilterPreset}
+                  type="button"
+                >
+                  <SlidersHorizontal size={14} />
+                  Filter Preset
+                </button>
+                <button
+                  className="secondary-button compact"
+                  data-testid="designer-copy-asset-report"
+                  onClick={copyAssetDependencyReport}
+                  type="button"
+                >
+                  <FileVideo size={14} />
+                  Assets
+                </button>
+                <button
+                  className="secondary-button compact"
+                  data-testid="designer-copy-readiness-report"
+                  onClick={copyDesignerReadinessReport}
+                  type="button"
+                >
+                  <ListChecks size={14} />
+                  Readiness
+                </button>
+              </div>
+              <div className="form-grid">
+                <label>
+                  Source Preset
+                  <select
+                    data-testid="designer-source-preset-select"
+                    onChange={(event) => setSelectedSourcePresetId(event.target.value)}
+                    value={selectedSourcePresetId}
+                  >
+                    <option value="">Choose source preset</option>
+                    {sourcePresets
+                      .filter((preset) => preset.kind === props.selectedSource!.kind)
+                      .map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <button
+                  className="secondary-button compact"
+                  data-testid="designer-apply-source-preset"
+                  disabled={!selectedSourcePresetId}
+                  onClick={applySelectedSourcePreset}
+                  type="button"
+                >
+                  Apply
+                </button>
+              </div>
+              <div className="form-grid">
+                <label>
+                  Filter Preset
+                  <select
+                    data-testid="designer-filter-preset-select"
+                    onChange={(event) => setSelectedFilterPresetId(event.target.value)}
+                    value={selectedFilterPresetId}
+                  >
+                    <option value="">Choose filter preset</option>
+                    {filterPresets.map((preset) => (
+                      <option key={preset.id} value={preset.id}>
+                        {preset.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  className="secondary-button compact"
+                  data-testid="designer-apply-filter-preset"
+                  disabled={!selectedFilterPresetId}
+                  onClick={applySelectedFilterPreset}
+                  type="button"
+                >
+                  Apply
+                </button>
+              </div>
+            </div>
             <RuntimeBindingPanel
               audioGraphSource={selectedAudioGraphSource}
               binding={selectedRuntimeBinding}
@@ -7191,7 +7744,12 @@ function OutputPreflightPanel(props: {
   );
 }
 
-type DesignerReadinessState = "ready" | "warning" | "blocked" | "pending";
+type DesignerReadinessState =
+  | "ready"
+  | "degraded"
+  | "blocked"
+  | "pending"
+  | "not_applicable";
 
 interface DesignerReadinessItem {
   id: string;
@@ -7204,12 +7762,16 @@ function SceneDesignerReadinessPanel(props: {
   audioGraphRuntime: AudioGraphRuntimeSnapshot | null;
   captureProviderRuntime: CaptureProviderRuntimeSnapshot | null;
   collection: SceneCollection;
+  designerReadinessReport: DesignerReadinessReport | null;
+  designerRuntimeMessage: string | null;
+  designerRuntimeSession: DesignerRuntimeSessionSnapshot | null;
   graphReady: boolean;
   pipelinePlan: MediaPipelinePlan | null;
   preflight: PreflightSnapshot | null;
   previewFrame: PreviewFrameResponse | null;
   previewStats: PreviewStats;
   programPreviewFrame: ProgramPreviewFrameResponse | null;
+  onRefreshReport: () => void;
   scene: Scene;
   sceneValid: boolean;
 }) {
@@ -7223,7 +7785,7 @@ function SceneDesignerReadinessPanel(props: {
   const filterNodes = nodes.filter((node) => node.filters.length > 0);
   const transitionCount = props.collection.transitions.length;
   const outputPlan = props.pipelinePlan?.config.output_preflight_plan ?? null;
-  const readiness: DesignerReadinessItem[] = [
+  const localReadiness: DesignerReadinessItem[] = [
     {
       id: "scene-model",
       label: "Scene Model",
@@ -7238,7 +7800,7 @@ function SceneDesignerReadinessPanel(props: {
       state: props.previewFrame
         ? props.previewFrame.validation.ready
           ? "ready"
-          : "warning"
+          : "degraded"
         : "pending",
       detail: props.previewFrame
         ? `${props.previewFrame.width}x${props.previewFrame.height}, ${props.previewFrame.render_time_ms.toFixed(1)} ms render, ${props.previewStats.droppedFrames} dropped.`
@@ -7250,7 +7812,7 @@ function SceneDesignerReadinessPanel(props: {
       state: props.programPreviewFrame
         ? props.programPreviewFrame.validation.ready
           ? "ready"
-          : "warning"
+          : "degraded"
         : "pending",
       detail: props.programPreviewFrame
         ? `${props.programPreviewFrame.width}x${props.programPreviewFrame.height} program frame is available.`
@@ -7260,11 +7822,13 @@ function SceneDesignerReadinessPanel(props: {
       id: "capture",
       label: "Capture",
       state: captureSources.length === 0
-        ? "ready"
+        ? "not_applicable"
         : props.captureProviderRuntime?.validation.errors.length
           ? "blocked"
           : props.captureProviderRuntime
-            ? "warning"
+            ? props.captureProviderRuntime.validation.warnings.length
+              ? "degraded"
+              : "ready"
             : "pending",
       detail: captureSources.length === 0
         ? "No display/window/camera sources in this scene."
@@ -7276,10 +7840,10 @@ function SceneDesignerReadinessPanel(props: {
       id: "browser",
       label: "Browser",
       state: browserNodes.length === 0
-        ? "ready"
+        ? "not_applicable"
         : browserNodes.some((node) => node.browser?.status === "rendered")
           ? "ready"
-          : "warning",
+          : "degraded",
       detail: browserNodes.length === 0
         ? "No browser overlay source rendered in the latest frame."
         : `${browserNodes.length} browser source(s) evaluated.`,
@@ -7288,9 +7852,9 @@ function SceneDesignerReadinessPanel(props: {
       id: "media",
       label: "Media",
       state: mediaNodes.length === 0
-        ? "ready"
+        ? "not_applicable"
         : mediaNodes.some((node) => node.asset?.status !== "decoded")
-          ? "warning"
+          ? "degraded"
           : "ready",
       detail: mediaNodes.length === 0
         ? "No image/video assets rendered in the latest frame."
@@ -7302,7 +7866,11 @@ function SceneDesignerReadinessPanel(props: {
       state: props.audioGraphRuntime?.validation.errors.length
         ? "blocked"
         : props.audioGraphRuntime
-          ? "ready"
+          ? props.audioGraphRuntime.sources.length === 0
+            ? "not_applicable"
+            : props.audioGraphRuntime.validation.warnings.length
+              ? "degraded"
+              : "ready"
           : "pending",
       detail: props.audioGraphRuntime
         ? `${props.audioGraphRuntime.sources.length} audio source(s), ${props.audioGraphRuntime.validation.warnings.length} warning(s).`
@@ -7311,7 +7879,7 @@ function SceneDesignerReadinessPanel(props: {
     {
       id: "transitions",
       label: "Transitions",
-      state: transitionCount > 0 ? "ready" : "warning",
+      state: transitionCount > 0 ? "ready" : "not_applicable",
       detail: `${transitionCount} transition contract(s) in this collection.`,
     },
     {
@@ -7320,7 +7888,7 @@ function SceneDesignerReadinessPanel(props: {
       state: filterNodes.some((node) =>
         node.filters.some((filter) => filter.status === "error"),
       )
-        ? "warning"
+        ? "degraded"
         : "ready",
       detail: filterNodes.length
         ? `${filterNodes.reduce((total, node) => total + node.filters.length, 0)} filter runtime result(s) in latest frame.`
@@ -7330,7 +7898,7 @@ function SceneDesignerReadinessPanel(props: {
       id: "performance",
       label: "Performance",
       state: props.previewFrame && props.previewFrame.render_time_ms > 100
-        ? "warning"
+        ? "degraded"
         : props.previewFrame
           ? "ready"
           : "pending",
@@ -7345,12 +7913,23 @@ function SceneDesignerReadinessPanel(props: {
         ? "blocked"
         : props.preflight
           ? props.preflight.overall === "warning"
-            ? "warning"
+            ? "degraded"
             : "ready"
           : "pending",
       detail: props.preflight
         ? `Desktop preflight is ${preflightLabel(props.preflight.overall)}.`
         : "Desktop preflight has not loaded.",
+    },
+    {
+      id: "runtime-session",
+      label: "Runtime Session",
+      state:
+        (props.designerRuntimeSession?.readiness_state as
+          | DesignerReadinessState
+          | undefined) ?? "pending",
+      detail: props.designerRuntimeSession
+        ? `${props.designerRuntimeSession.session_state}, ${props.designerRuntimeSession.provider_status}`
+        : "No Designer runtime session snapshot has been received.",
     },
     {
       id: "output-handoff",
@@ -7365,11 +7944,32 @@ function SceneDesignerReadinessPanel(props: {
         : "Output handoff preflight has not loaded.",
     },
   ];
+  const readiness: DesignerReadinessItem[] = props.designerReadinessReport
+    ? [
+        ...props.designerReadinessReport.items.map((item) => ({
+          id: item.id,
+          label: item.label,
+          state: item.state as DesignerReadinessState,
+          detail: item.detail,
+        })),
+        {
+          id: "runtime-session",
+          label: "Runtime Session",
+          state:
+            (props.designerRuntimeSession?.readiness_state as
+              | DesignerReadinessState
+              | undefined) ?? "pending",
+          detail: props.designerRuntimeSession
+            ? `${props.designerRuntimeSession.session_state}, ${props.designerRuntimeSession.provider_status}`
+            : "No Designer runtime session snapshot has been received.",
+        },
+      ]
+    : localReadiness;
   const blocked = readiness.filter((item) => item.state === "blocked").length;
-  const warnings = readiness.filter((item) => item.state === "warning").length;
+  const warnings = readiness.filter((item) => item.state === "degraded").length;
   const pending = readiness.filter((item) => item.state === "pending").length;
   const overall: DesignerReadinessState =
-    blocked > 0 ? "blocked" : warnings > 0 ? "warning" : pending > 0 ? "pending" : "ready";
+    blocked > 0 ? "blocked" : warnings > 0 ? "degraded" : pending > 0 ? "pending" : "ready";
 
   return (
     <div className="designer-preview-diagnostics" data-testid="designer-readiness-panel">
@@ -7378,11 +7978,25 @@ function SceneDesignerReadinessPanel(props: {
         <div>
           <strong>Scene Designer Readiness</strong>
           <span>
-            {blocked} blocked, {warnings} warning, {pending} pending
+            {blocked} blocked, {warnings} degraded, {pending} pending
           </span>
         </div>
+        <button
+          aria-label="Refresh Scene Designer readiness report"
+          className="icon-button compact"
+          onClick={props.onRefreshReport}
+          title="Refresh Scene Designer readiness report"
+          type="button"
+        >
+          <RefreshCw size={14} />
+        </button>
         <Pill tone={readinessTone(overall)}>{overall}</Pill>
       </div>
+      {props.designerRuntimeMessage && (
+        <div className="designer-runtime-message">
+          {props.designerRuntimeMessage}
+        </div>
+      )}
       <div className="check-list compact-check-list">
         {readiness.map((item) => (
           <div className="check-row-compact" key={item.id}>
@@ -13406,6 +14020,7 @@ function stepTone(status: string): "green" | "red" | "amber" | "muted" {
     case "blocked":
       return "red";
     case "warning":
+    case "degraded":
       return "amber";
     default:
       return "muted";

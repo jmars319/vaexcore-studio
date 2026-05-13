@@ -159,17 +159,18 @@ capture-backed frames in later phases.
 Full Scene Designer Pass 4 is now started for macOS display/window capture V1:
 software preview frames can use real one-shot macOS `screencapture` pixels for
 bound display/window sources when Screen Recording permission is available, and
-Designer shows live capture frame diagnostics. This is not yet a persistent
-ScreenCaptureKit provider, and it does not cover Windows live capture,
-recording, streaming, or encoder output.
+Designer shows live capture frame diagnostics through the managed runtime
+session/readiness layer. This is not yet a persistent ScreenCaptureKit provider,
+and it does not cover Windows live capture, recording, streaming, or encoder
+output.
 
 Full Scene Designer Pass 5 is now started for camera capture V1: software
 preview frames can request one-shot macOS FFmpeg/AVFoundation camera snapshots
 for bound camera sources when FFmpeg and Camera permission are available, and
-Designer shows camera frame, latency, decoder, and fallback diagnostics. This is
-not yet a persistent camera provider, does not negotiate camera capabilities,
-and does not cover Windows live camera capture, recording, streaming, or encoder
-output.
+Designer shows camera frame, latency, decoder, fallback diagnostics, stale-frame
+status, and restart/cleanup controls. This is not yet a persistent camera
+provider, does not negotiate camera capabilities, and does not cover Windows
+live camera capture, recording, streaming, or encoder output.
 
 Phase F software compositor, covering steps 51-60, now has serializable input
 frame contracts, per-source placeholder providers, local still-image decode,
@@ -222,11 +223,14 @@ multiline text pixels with basic effects and optional font files, optional
 browser overlay preview snapshots, software visual filter preview pixels,
 one-shot macOS display/window capture snapshots, and one-shot macOS camera
 snapshots through optional FFmpeg when source bindings and permissions are
-available. Full Scene Designer Pass 10 adds the milestone readiness surface and
-validation coverage for the OBS-class runtime V1 scope. The remaining work after
-this milestone is outside Scene Designer itself: true long-running capture
-sessions on every platform, recording/streaming encoder execution, plugin
-ecosystem work, installer QA, and hardware validation on Windows.
+available. Full Scene Designer Pass 10 now adds the milestone readiness surface,
+managed Designer runtime-session controls, exportable readiness and asset
+dependency reports, source/filter preset save-load controls, visual smoke
+coverage for the completion controls, and a short `npm run smoke:designer-soak`
+runner. This is the Mac-validated Scene Designer Completion Candidate. The
+remaining work after this milestone is outside the Mac-validated Designer scope:
+true Windows hardware capture validation, platform-specific fixes found there,
+recording/streaming encoder execution, plugin ecosystem work, and installer QA.
 
 ## Validation Contract
 
@@ -239,6 +243,8 @@ npm run typecheck --workspaces --if-present
 cargo fmt --all -- --check
 cargo clippy --all-targets -- -D warnings
 cargo test --workspace
+npm run smoke:visual
+npm run smoke:designer-soak
 ```
 
 macOS packaging validation uses:

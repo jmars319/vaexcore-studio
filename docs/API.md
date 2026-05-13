@@ -249,6 +249,41 @@ Accepts a `ProgramPreviewFrameRequest` and returns a `ProgramPreviewFrameRespons
 
 Accepts a `TransitionPreviewFrameRequest` for `cut`, `fade`, `swipe`, and `stinger` transitions and returns a `TransitionPreviewFrameResponse` with a software-rendered preview image, frame timing, progress metadata, checksum, and transition diagnostics. Cut, fade, and swipe render from/to scene pixels directly in the backend transition path. Stinger video frames are extracted from local MP4, MOV, WebM, and MKV assets through optional FFmpeg using the same timeline-aware cache and fallback policy as local video media sources. Missing assets, unsupported extensions, missing FFmpeg, and decode failures remain explicit placeholder states.
 
+### `GET /scene-runtime/designer-session`
+
+Returns the current managed Designer runtime session snapshot. Preview,
+program-preview, and transition-preview responses also include the same
+non-breaking runtime metadata: `runtime_session_id`, `session_state`,
+`last_frame_at`, `stale_frame_ms`, `restart_count`, `dropped_frames`,
+`provider_status`, `readiness_state`, and the full `runtime_session` source
+breakdown.
+
+### `POST /scene-runtime/designer-session/pause`
+
+Accepts a `DesignerRuntimeSessionControlRequest` with `paused` and optional
+`reason`, then returns a `DesignerRuntimeSessionControlResponse`. This pauses
+or resumes Designer preview sessions only; it does not start or stop recording,
+streaming, capture devices, or encoder output.
+
+### `POST /scene-runtime/designer-session/restart`
+
+Accepts an optional `source_id` and marks either that source session or all
+Designer runtime sessions for restart. V1 records the restart intent and exposes
+the updated counter/readiness snapshot.
+
+### `POST /scene-runtime/designer-session/cleanup`
+
+Marks inactive Designer runtime sessions for cleanup and returns the updated
+session snapshot. Managed browser/media/capture cleanup remains local to
+Designer preview and does not mutate scene data.
+
+### `GET /scene-runtime/readiness-report`
+
+Returns an exportable `DesignerReadinessReport` covering scene model, runtime
+preview, program preview, capture, camera, audio, browser, media, transitions,
+filters, performance, permissions, output handoff, and Windows validation
+handoff. Item states are `ready`, `degraded`, `blocked`, or `not_applicable`.
+
 ### `POST /scene-runtime/validate-graph`
 
 Accepts a `CompositorRenderRequest`, evaluates the render graph contract, and returns a `CompositorRenderResponse`.

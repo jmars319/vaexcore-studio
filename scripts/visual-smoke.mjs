@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -133,6 +133,54 @@ const targets = [
         expression:
           'document.querySelector("[data-testid=\\"designer-program-preview-runtime\\"]")?.textContent?.includes("Program Preview Readiness")',
         message: "Designer program preview runtime panel did not show readiness copy.",
+      },
+    ],
+  },
+  {
+    name: "designer-completion-candidate-controls",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-preset-panel\\"]"))',
+        message: "Designer presets and reports panel did not render.",
+      },
+      {
+        type: "assert",
+        expression:
+          'document.querySelector("[data-testid=\\"designer-preset-panel\\"]")?.textContent?.includes("Presets And Reports")',
+        message: "Designer presets and reports panel did not show its title.",
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-copy-asset-report\\"]"))',
+        message: "Designer asset dependency report control did not render.",
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-copy-readiness-report\\"]"))',
+        message: "Designer readiness report export control did not render.",
+      },
+      {
+        type: "click",
+        selector: '[data-testid="designer-save-source-preset"]',
+      },
+      {
+        type: "assert",
+        expression:
+          'document.querySelector("[data-testid=\\"designer-source-preset-select\\"] option[value]:not([value=\\"\\"])") !== null',
+        message: "Designer source preset save did not create a selectable preset.",
+      },
+      {
+        type: "click",
+        selector: '[aria-label="Refresh Scene Designer readiness report"]',
+      },
+      {
+        type: "assert",
+        expression:
+          'document.querySelector("[data-testid=\\"designer-readiness-panel\\"]")?.textContent?.includes("Runtime Session")',
+        message: "Designer readiness panel did not expose runtime session status.",
       },
     ],
   },
@@ -689,14 +737,43 @@ try {
 }
 
 function findChrome() {
+  const windows = process.platform === "win32";
+  const pathCandidates = (process.env.PATH ?? "")
+    .split(delimiter)
+    .filter(Boolean)
+    .flatMap((dir) =>
+      ["google-chrome", "chrome", "chromium", "chromium-browser", "msedge"].map(
+        (bin) => join(dir, windows ? `${bin}.exe` : bin),
+      ),
+    );
   const candidates = [
+    process.env.VAEXCORE_CHROME_PATH,
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
-    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
-  ];
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    process.env.LOCALAPPDATA
+      ? join(process.env.LOCALAPPDATA, "Google/Chrome/Application/chrome.exe")
+      : null,
+    process.env.PROGRAMFILES
+      ? join(process.env.PROGRAMFILES, "Google/Chrome/Application/chrome.exe")
+      : null,
+    process.env["PROGRAMFILES(X86)"]
+      ? join(process.env["PROGRAMFILES(X86)"], "Google/Chrome/Application/chrome.exe")
+      : null,
+    process.env.PROGRAMFILES
+      ? join(process.env.PROGRAMFILES, "Microsoft/Edge/Application/msedge.exe")
+      : null,
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/microsoft-edge",
+    ...pathCandidates,
+  ].filter(Boolean);
   const found = candidates.find((candidate) => existsSync(candidate));
   if (!found) {
-    throw new Error("Visual smoke requires Google Chrome, Chromium, or Microsoft Edge in /Applications.");
+    throw new Error(
+      "Visual smoke requires Google Chrome, Chromium, or Microsoft Edge. Set VAEXCORE_CHROME_PATH if it is installed in a custom location.",
+    );
   }
   return found;
 }

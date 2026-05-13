@@ -128,6 +128,17 @@ view. It is the Scene Designer runtime V1 milestone surface; it does not start
 recording, streaming, encoder execution, or cross-platform hardware capture
 validation.
 
+The Designer Completion Candidate adds managed runtime-session metadata around
+that surface. Preview, program-preview, and transition-preview frames now expose
+session id, session state, last frame time, stale-frame age, restart count,
+dropped-frame count, provider status, readiness state, and per-source runtime
+details. The desktop UI can pause/resume the Designer runtime, mark a selected
+source for restart, request cleanup of inactive sessions, copy an asset
+dependency report, copy an exportable readiness report, and run a short
+`npm run smoke:designer-soak` check. The session layer is intentionally
+diagnostic and preview-scoped; recording/streaming output execution remains a
+later Studio output phase.
+
 The Scene Runtime contracts define the payloads that the future runtime API will
 use for scene activation, runtime state patching, preview polling, compositor
 render requests, source binding readiness, audio binding readiness, and
