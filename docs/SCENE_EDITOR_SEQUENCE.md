@@ -41,8 +41,9 @@ foundation to OBS-class scene editing and output.
     playback remains placeholder-only.
 17. Browser/web overlay source engine: started with source-specific preview
     rendering; real browser capture is not started.
-18. Text render engine with font controls: started with canvas preview text
-    rendering; backend text rasterization is not started.
+18. Text render engine with font controls: started with backend software
+    rasterization for current single-line text source fields. Multiline layout,
+    rich text, and platform font discovery are not started.
 19. Groups, nesting, and parent transforms: done for offline editor V1 with
     group preview rendering, structured child management, group child
     validation, compositor parent/depth metadata, and first-pass nested
@@ -123,9 +124,10 @@ contracts for capture-backed frames in later phases.
 
 Phase F software compositor, covering steps 51-60, now has serializable input
 frame contracts, per-source placeholder providers, local still-image decode,
-asset cache invalidation by path and modified time, crop/opacity/rotation-aware
-software drawing, z-order compositing, and compositor tests. Capture, video,
-browser, and audio inputs are still deterministic placeholders.
+backend text rasterization with bundled Inter, asset cache invalidation by path
+and modified time, crop/opacity/rotation-aware software drawing, z-order
+compositing, and compositor tests. Capture, video, browser, and audio inputs
+are still deterministic placeholders.
 
 Phase G live preview, covering steps 61-70, now returns encoded software preview
 image data through the runtime preview API and Designer draws it as the preview
@@ -156,10 +158,11 @@ milestone; it is still not a real capture, recording, or streaming backend.
 Offline Editor V1 is now complete for local authoring scope: scene/source
 editing, grouping, numeric transforms, local asset URI selection, explicit
 bundle import/export, app-data fallback bundles, validation, runtime refresh,
-deterministic placeholder transition preview, and real local still-image preview
-pixels. The remaining Scene Designer work starts the real capture, video,
-browser, audio, and output path; offline editor completion does not imply
-OBS-level capture, encoder, plugin, or live-output parity.
+deterministic placeholder transition preview, real local still-image preview
+pixels, and backend-rendered single-line text pixels. The remaining Scene
+Designer work starts the real capture, video, browser, audio, and output path;
+offline editor completion does not imply OBS-level capture, encoder, plugin, or
+live-output parity.
 
 ## Validation Contract
 

@@ -48,8 +48,8 @@ sidecars/
 - Client SDK and smoke examples exist for companion integration testing.
 - Scene Designer offline editor V1 supports local scene/source authoring,
   grouping, import/export, deterministic preview, local still-image preview
-  pixels, and validation without starting real capture, recording, or streaming
-  output.
+  pixels, backend-rendered text preview pixels, and validation without starting
+  real capture, recording, or streaming output.
 - Windows launcher material is present, but platform maturity still centers on local desktop validation.
 
 ## Deployment Posture

@@ -151,6 +151,22 @@ const targets = [
     ],
   },
   {
+    name: "designer-text-runtime",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "click",
+        selector: '[data-testid="designer-source-select"][data-source-id="source-title-text"]',
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-text-runtime\\"]"))',
+        message: "Designer text runtime panel did not render.",
+      },
+    ],
+  },
+  {
     name: "designer-grouping",
     path: "/?section=designer",
     minBytes: 50_000,

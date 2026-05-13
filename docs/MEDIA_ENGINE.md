@@ -39,7 +39,9 @@ execution is started yet.
 The software preview compositor can decode local still-image `image_media`
 sources when `media_type = "image"`. It supports PNG, JPEG, WebP, and the first
 frame of GIF files, caches decoded pixels by normalized path plus file modified
-time, and reports asset readiness metadata to Designer. Video media, stinger
+time, and reports asset readiness metadata to Designer. It also rasterizes
+single-line `text` sources with the bundled Inter font and reports font fallback,
+color fallback, rendered bounds, and checksum metadata. Video media, stinger
 video playback, live capture, browser capture, recording, and streaming output
 remain outside this path.
 

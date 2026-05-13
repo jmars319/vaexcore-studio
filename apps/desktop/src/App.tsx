@@ -1098,6 +1098,25 @@ function imageAssetStatusLabel(status: string | null | undefined): string {
   return (status ?? "pending").replaceAll("_", " ");
 }
 
+function textRuntimeStatusTone(
+  status: string | null | undefined,
+): "green" | "red" | "amber" | "muted" {
+  switch (status) {
+    case "rendered":
+      return "green";
+    case "font_fallback":
+    case "invalid_color":
+    case "empty":
+      return "amber";
+    default:
+      return "muted";
+  }
+}
+
+function textRuntimeStatusLabel(status: string | null | undefined): string {
+  return (status ?? "pending").replaceAll("_", " ");
+}
+
 function runtimeNodeForSource(
   frame: PreviewFrameResponse | null,
   sourceId: string,
@@ -6468,6 +6487,10 @@ function DesignerPage(props: {
               node={selectedRuntimeNode}
               source={props.selectedSource}
             />
+            <TextRuntimePanel
+              node={selectedRuntimeNode}
+              source={props.selectedSource}
+            />
             <SourceFilterEditor
               onChange={(filters) =>
                 props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
@@ -6804,6 +6827,72 @@ function ImageAssetRuntimePanel(props: {
       {status !== "decoded" && (
         <div className="validation-issue warning">
           <strong>{imageAssetStatusLabel(status)}</strong>
+          <span>{detail}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TextRuntimePanel(props: {
+  node: CompositorEvaluatedNode | null;
+  source: SceneSource;
+}) {
+  if (props.source.kind !== "text") return null;
+
+  const text = props.node?.text ?? null;
+  const configuredText = props.source.config.text?.trim() ?? "";
+  const status = text?.status ?? (configuredText ? "pending" : "empty");
+  const detail =
+    text?.status_detail ??
+    (configuredText
+      ? "Waiting for the next runtime preview frame to render this text source."
+      : "Text source is empty.");
+  const renderedBounds = text?.rendered_bounds;
+
+  return (
+    <div className="text-runtime-panel" data-testid="designer-text-runtime">
+      <div className="runtime-binding-header">
+        <div>
+          <strong>Text Runtime</strong>
+          <span>{detail}</span>
+        </div>
+        <Pill tone={textRuntimeStatusTone(status)}>
+          {textRuntimeStatusLabel(status)}
+        </Pill>
+      </div>
+      <div className="designer-preview-meta">
+        <KeyValue
+          label="Requested"
+          value={text?.requested_font_family ?? props.source.config.font_family}
+        />
+        <KeyValue label="Used" value={text?.used_font_family ?? "pending"} />
+        <KeyValue
+          label="Size"
+          value={`${text?.font_size ?? props.source.config.font_size}px`}
+        />
+        <KeyValue label="Color" value={text?.color ?? props.source.config.color} />
+        <KeyValue label="Align" value={text?.align ?? props.source.config.align} />
+        <KeyValue
+          label="Length"
+          value={`${text?.text_length ?? configuredText.length} chars`}
+        />
+        <KeyValue
+          label="Bounds"
+          value={
+            renderedBounds
+              ? `${Math.round(renderedBounds.width)}x${Math.round(renderedBounds.height)} @ ${Math.round(renderedBounds.x)},${Math.round(renderedBounds.y)}`
+              : "not rendered"
+          }
+        />
+        <KeyValue
+          label="Checksum"
+          value={text?.checksum ? text.checksum.toString(16) : "none"}
+        />
+      </div>
+      {status !== "rendered" && (
+        <div className="validation-issue warning">
+          <strong>{textRuntimeStatusLabel(status)}</strong>
           <span>{detail}</span>
         </div>
       )}
