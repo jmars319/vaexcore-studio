@@ -1154,6 +1154,28 @@ function browserRuntimeStatusLabel(status: string | null | undefined): string {
   return (status ?? "pending").replaceAll("_", " ");
 }
 
+function captureRuntimeStatusTone(
+  status: string | null | undefined,
+): "green" | "red" | "amber" | "muted" {
+  switch (status) {
+    case "rendered":
+      return "green";
+    case "capture_failed":
+      return "red";
+    case "no_source":
+    case "permission_required":
+    case "unsupported_platform":
+    case "unsupported_source":
+      return "amber";
+    default:
+      return "muted";
+  }
+}
+
+function captureRuntimeStatusLabel(status: string | null | undefined): string {
+  return (status ?? "pending").replaceAll("_", " ");
+}
+
 function stingerRuntimeStatusTone(
   status: string | null | undefined,
 ): "green" | "red" | "amber" | "muted" {
@@ -1239,6 +1261,12 @@ function runtimeNodeForSource(
 function runtimeBindingTarget(binding: SelectedRuntimeBinding | null): string {
   if (!binding) return "No runtime binding";
   return binding.binding.capture_source_id ?? "Unassigned";
+}
+
+function runtimeCaptureConfigTarget(source: SceneSource): string {
+  if (source.kind === "display") return source.config.display_id ?? "Unassigned";
+  if (source.kind === "window") return source.config.window_id ?? "Unassigned";
+  return "Unassigned";
 }
 
 function runtimeBindingMedia(binding: SelectedRuntimeBinding | null): string {
@@ -6911,6 +6939,10 @@ function DesignerPage(props: {
               refreshing={props.captureBindingRefreshing}
               source={props.selectedSource}
             />
+            <LiveCaptureRuntimePanel
+              node={selectedRuntimeNode}
+              source={props.selectedSource}
+            />
             <SourceConfigEditor
               captureInventory={props.captureInventory}
               onChange={(config) =>
@@ -7247,6 +7279,77 @@ function RuntimeBindingPanel(props: {
           <Link2 size={14} />
           Auto Bind
         </button>
+      </div>
+    </div>
+  );
+}
+
+function LiveCaptureRuntimePanel(props: {
+  node: CompositorEvaluatedNode | null;
+  source: SceneSource;
+}) {
+  if (props.source.kind !== "display" && props.source.kind !== "window") {
+    return null;
+  }
+
+  const capture = props.node?.capture ?? null;
+  const status =
+    capture?.status ??
+    (sceneSourceAvailability(props.source)?.state === "permission_required"
+      ? "permission_required"
+      : props.source.kind === "display"
+        ? "no_source"
+        : "pending");
+  const detail =
+    capture?.status_detail ??
+    sceneSourceAvailability(props.source)?.detail ??
+    "Waiting for the next runtime preview frame to evaluate live capture.";
+
+  return (
+    <div className="live-capture-runtime-panel" data-testid="designer-live-capture-runtime">
+      <div className="runtime-binding-header">
+        <div>
+          <strong>Live Capture Runtime</strong>
+          <span>{detail}</span>
+        </div>
+        <Pill tone={captureRuntimeStatusTone(status)}>
+          {captureRuntimeStatusLabel(status)}
+        </Pill>
+      </div>
+      <div className="designer-preview-meta">
+        <KeyValue
+          label="Source"
+          value={capture?.capture_source_id ?? runtimeCaptureConfigTarget(props.source)}
+        />
+        <KeyValue label="Provider" value={capture?.provider_name ?? "macOS pending"} />
+        <KeyValue
+          label="Frame"
+          value={
+            capture?.width && capture.height
+              ? `${capture.width}x${capture.height} #${capture.frame_index}`
+              : "not captured"
+          }
+        />
+        <KeyValue
+          label="Capture"
+          value={
+            capture?.capture_duration_ms != null
+              ? `${capture.capture_duration_ms} ms`
+              : "pending"
+          }
+        />
+        <KeyValue
+          label="Latency"
+          value={capture?.latency_ms != null ? `${capture.latency_ms.toFixed(1)} ms` : "pending"}
+        />
+        <KeyValue
+          label="Dropped"
+          value={capture ? String(capture.dropped_frames) : "pending"}
+        />
+        <KeyValue
+          label="Checksum"
+          value={capture?.checksum ? capture.checksum.toString(16) : "none"}
+        />
       </div>
     </div>
   );

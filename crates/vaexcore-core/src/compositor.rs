@@ -17,8 +17,8 @@ use tungstenite::{stream::MaybeTlsStream, Message, WebSocket};
 use uuid::Uuid;
 
 use crate::{
-    Scene, SceneCrop, ScenePoint, SceneSize, SceneSource, SceneSourceBoundsMode, SceneSourceFilter,
-    SceneSourceFilterKind, SceneSourceKind,
+    CaptureSourceKind, Scene, SceneCrop, ScenePoint, SceneSize, SceneSource, SceneSourceBoundsMode,
+    SceneSourceFilter, SceneSourceFilterKind, SceneSourceKind,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -181,6 +181,8 @@ pub struct CompositorEvaluatedNode {
     pub text: Option<SoftwareCompositorTextMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser: Option<SoftwareCompositorBrowserMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<SoftwareCompositorCaptureMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filters: Vec<SoftwareCompositorFilterMetadata>,
     pub rect: CompositorRect,
@@ -237,6 +239,8 @@ pub struct SoftwareCompositorInputFrame {
     pub text: Option<SoftwareCompositorTextMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser: Option<SoftwareCompositorBrowserMetadata>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<SoftwareCompositorCaptureMetadata>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub filters: Vec<SoftwareCompositorFilterMetadata>,
     pub checksum: u64,
@@ -343,6 +347,33 @@ pub struct SoftwareCompositorBrowserMetadata {
     pub capture_duration_ms: Option<u64>,
     #[serde(default)]
     pub cache_hit: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SoftwareCompositorCaptureStatus {
+    Rendered,
+    NoSource,
+    PermissionRequired,
+    UnsupportedPlatform,
+    UnsupportedSource,
+    CaptureFailed,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SoftwareCompositorCaptureMetadata {
+    pub status: SoftwareCompositorCaptureStatus,
+    pub status_detail: String,
+    pub capture_source_id: Option<String>,
+    pub capture_kind: CaptureSourceKind,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub frame_index: u64,
+    pub checksum: Option<u64>,
+    pub capture_duration_ms: Option<u64>,
+    pub latency_ms: Option<f64>,
+    pub dropped_frames: u64,
+    pub provider_name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -1021,6 +1052,7 @@ fn evaluate_node_for_target_with_input(
     let asset = input_frame.and_then(|frame| frame.asset.clone());
     let text = input_frame.and_then(|frame| frame.text.clone());
     let browser = input_frame.and_then(|frame| frame.browser.clone());
+    let capture = input_frame.and_then(|frame| frame.capture.clone());
     let filters = input_frame
         .map(|frame| frame.filters.clone())
         .unwrap_or_default();
@@ -1034,6 +1066,7 @@ fn evaluate_node_for_target_with_input(
         asset,
         text,
         browser,
+        capture,
         filters,
         rect: CompositorRect {
             x: offset_x + source_rect.x * scale_x,
@@ -1153,6 +1186,10 @@ fn config_value_string(config: &serde_json::Value, key: &str) -> Option<String> 
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn config_bool(config: &serde_json::Value, key: &str) -> Option<bool> {
+    config.get(key).and_then(serde_json::Value::as_bool)
 }
 
 fn config_value_number(config: &serde_json::Value, key: &str) -> Option<f64> {
@@ -1344,6 +1381,11 @@ fn software_input_frame_for_node(
         browser_overlay_input_frame_for_node(node, clock)
     } else if node.source_kind == SceneSourceKind::Text {
         text_input_frame_for_node(node)
+    } else if matches!(
+        node.source_kind,
+        SceneSourceKind::Display | SceneSourceKind::Window
+    ) {
+        capture_input_frame_for_node(node, clock)
     } else {
         placeholder_input_frame_for_node(
             node,
@@ -1352,10 +1394,390 @@ fn software_input_frame_for_node(
             None,
             None,
             None,
+            None,
         )
     };
 
     apply_software_filters(node, input_frame)
+}
+
+fn capture_input_frame_for_node(
+    node: &CompositorNode,
+    clock: &CompositorFrameClock,
+) -> SoftwareCompositorInputFrame {
+    let Some(capture_source_id) = capture_source_id_for_node(node) else {
+        return capture_placeholder_input_frame_for_node(
+            node,
+            SoftwareCompositorCaptureStatus::NoSource,
+            "No capture source has been assigned.".to_string(),
+            None,
+            clock,
+            CompositorNodeStatus::Placeholder,
+        );
+    };
+
+    if node.status != CompositorNodeStatus::Ready {
+        let status = if node.status == CompositorNodeStatus::PermissionRequired {
+            SoftwareCompositorCaptureStatus::PermissionRequired
+        } else {
+            SoftwareCompositorCaptureStatus::CaptureFailed
+        };
+        return capture_placeholder_input_frame_for_node(
+            node,
+            status,
+            node.status_detail.clone(),
+            Some(capture_source_id),
+            clock,
+            node.status.clone(),
+        );
+    }
+
+    capture_input_frame_for_node_with_provider(node, clock, platform_capture_frame_for_node)
+}
+
+fn capture_input_frame_for_node_with_provider(
+    node: &CompositorNode,
+    clock: &CompositorFrameClock,
+    provider: fn(
+        &CompositorNode,
+        &CompositorFrameClock,
+    ) -> Result<DecodedCaptureFrame, CaptureFrameError>,
+) -> SoftwareCompositorInputFrame {
+    let capture_source_id = capture_source_id_for_node(node);
+    match provider(node, clock) {
+        Ok(decoded) => decoded_capture_input_frame(node, decoded),
+        Err(error) => capture_placeholder_input_frame_for_node(
+            node,
+            error.status,
+            error.detail,
+            capture_source_id,
+            clock,
+            error.node_status,
+        ),
+    }
+}
+
+fn decoded_capture_input_frame(
+    node: &CompositorNode,
+    decoded: DecodedCaptureFrame,
+) -> SoftwareCompositorInputFrame {
+    let checksum = checksum_pixels(&decoded.pixels);
+    let metadata = capture_metadata(
+        node,
+        CaptureMetadataInput {
+            status: SoftwareCompositorCaptureStatus::Rendered,
+            status_detail: decoded.status_detail,
+            capture_source_id: decoded.capture_source_id,
+            width: Some(decoded.width),
+            height: Some(decoded.height),
+            frame_index: decoded.frame_index,
+            checksum: Some(checksum),
+            capture_duration_ms: Some(decoded.capture_duration_ms),
+            latency_ms: Some(decoded.capture_duration_ms as f64),
+            dropped_frames: 0,
+            provider_name: decoded.provider_name,
+        },
+    );
+
+    SoftwareCompositorInputFrame {
+        source_id: node.source_id.clone(),
+        source_kind: node.source_kind.clone(),
+        width: decoded.width,
+        height: decoded.height,
+        frame_format: CompositorFrameFormat::Rgba8,
+        status: CompositorNodeStatus::Ready,
+        status_detail: metadata.status_detail.clone(),
+        asset: None,
+        text: None,
+        browser: None,
+        capture: Some(metadata),
+        filters: Vec::new(),
+        checksum,
+        pixels: decoded.pixels,
+    }
+}
+
+fn capture_placeholder_input_frame_for_node(
+    node: &CompositorNode,
+    status: SoftwareCompositorCaptureStatus,
+    detail: String,
+    capture_source_id: Option<String>,
+    clock: &CompositorFrameClock,
+    node_status: CompositorNodeStatus,
+) -> SoftwareCompositorInputFrame {
+    let node_status = if status == SoftwareCompositorCaptureStatus::PermissionRequired {
+        CompositorNodeStatus::PermissionRequired
+    } else {
+        node_status
+    };
+    let metadata = capture_metadata(
+        node,
+        CaptureMetadataInput {
+            status,
+            status_detail: detail.clone(),
+            capture_source_id,
+            width: None,
+            height: None,
+            frame_index: clock.frame_index,
+            checksum: None,
+            capture_duration_ms: None,
+            latency_ms: None,
+            dropped_frames: 0,
+            provider_name: platform_capture_provider_name().to_string(),
+        },
+    );
+    placeholder_input_frame_for_node(node, node_status, detail, None, None, None, Some(metadata))
+}
+
+struct CaptureMetadataInput {
+    status: SoftwareCompositorCaptureStatus,
+    status_detail: String,
+    capture_source_id: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
+    frame_index: u64,
+    checksum: Option<u64>,
+    capture_duration_ms: Option<u64>,
+    latency_ms: Option<f64>,
+    dropped_frames: u64,
+    provider_name: String,
+}
+
+fn capture_metadata(
+    node: &CompositorNode,
+    input: CaptureMetadataInput,
+) -> SoftwareCompositorCaptureMetadata {
+    SoftwareCompositorCaptureMetadata {
+        status: input.status,
+        status_detail: input.status_detail,
+        capture_source_id: input.capture_source_id,
+        capture_kind: capture_kind_for_node(node),
+        width: input.width,
+        height: input.height,
+        frame_index: input.frame_index,
+        checksum: input.checksum,
+        capture_duration_ms: input.capture_duration_ms,
+        latency_ms: input.latency_ms,
+        dropped_frames: input.dropped_frames,
+        provider_name: input.provider_name,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct DecodedCaptureFrame {
+    capture_source_id: Option<String>,
+    width: u32,
+    height: u32,
+    frame_index: u64,
+    capture_duration_ms: u64,
+    provider_name: String,
+    status_detail: String,
+    pixels: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct CaptureFrameError {
+    status: SoftwareCompositorCaptureStatus,
+    node_status: CompositorNodeStatus,
+    detail: String,
+}
+
+fn capture_source_id_for_node(node: &CompositorNode) -> Option<String> {
+    match node.source_kind {
+        SceneSourceKind::Display => config_value_string(&node.config, "display_id"),
+        SceneSourceKind::Window => config_value_string(&node.config, "window_id"),
+        _ => None,
+    }
+}
+
+fn capture_kind_for_node(node: &CompositorNode) -> CaptureSourceKind {
+    match node.source_kind {
+        SceneSourceKind::Window => CaptureSourceKind::Window,
+        _ => CaptureSourceKind::Display,
+    }
+}
+
+fn platform_capture_provider_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macos-screencapture"
+    } else {
+        "unsupported-platform"
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn platform_capture_frame_for_node(
+    node: &CompositorNode,
+    clock: &CompositorFrameClock,
+) -> Result<DecodedCaptureFrame, CaptureFrameError> {
+    macos_screencapture_frame_for_node(node, clock)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn platform_capture_frame_for_node(
+    node: &CompositorNode,
+    _clock: &CompositorFrameClock,
+) -> Result<DecodedCaptureFrame, CaptureFrameError> {
+    Err(CaptureFrameError {
+        status: SoftwareCompositorCaptureStatus::UnsupportedPlatform,
+        node_status: CompositorNodeStatus::Placeholder,
+        detail: format!(
+            "{} capture preview is not implemented on this platform yet.",
+            match capture_kind_for_node(node) {
+                CaptureSourceKind::Display => "Display",
+                CaptureSourceKind::Window => "Window",
+                CaptureSourceKind::Camera => "Camera",
+                CaptureSourceKind::Microphone => "Microphone",
+                CaptureSourceKind::SystemAudio => "System audio",
+            }
+        ),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_screencapture_frame_for_node(
+    node: &CompositorNode,
+    clock: &CompositorFrameClock,
+) -> Result<DecodedCaptureFrame, CaptureFrameError> {
+    let capture_source_id = capture_source_id_for_node(node);
+    let Some(capture_id) = capture_source_id.clone() else {
+        return Err(CaptureFrameError {
+            status: SoftwareCompositorCaptureStatus::NoSource,
+            node_status: CompositorNodeStatus::Placeholder,
+            detail: "No capture source has been assigned.".to_string(),
+        });
+    };
+
+    let output_path = env::temp_dir().join(format!(
+        "vaexcore-capture-{}-{}.png",
+        std::process::id(),
+        Uuid::new_v4()
+    ));
+    let mut args = vec!["-x".to_string(), "-t".to_string(), "png".to_string()];
+    if config_bool(&node.config, "capture_cursor").unwrap_or(false) {
+        args.push("-C".to_string());
+    }
+    match node.source_kind {
+        SceneSourceKind::Display => {
+            if let Some(display_id) = capture_id.strip_prefix("display:") {
+                if display_id != "main" {
+                    args.push("-D".to_string());
+                    args.push(display_id.to_string());
+                }
+            }
+        }
+        SceneSourceKind::Window => {
+            let Some(window_id) = capture_id.strip_prefix("window:") else {
+                let _ = fs::remove_file(&output_path);
+                return Err(CaptureFrameError {
+                    status: SoftwareCompositorCaptureStatus::UnsupportedSource,
+                    node_status: CompositorNodeStatus::Placeholder,
+                    detail: format!("Unsupported macOS window capture source id \"{capture_id}\"."),
+                });
+            };
+            let Ok(window_number) = window_id.parse::<u32>() else {
+                let _ = fs::remove_file(&output_path);
+                return Err(CaptureFrameError {
+                    status: SoftwareCompositorCaptureStatus::UnsupportedSource,
+                    node_status: CompositorNodeStatus::Placeholder,
+                    detail: format!("Unsupported macOS window capture source id \"{capture_id}\"."),
+                });
+            };
+            args.push("-l".to_string());
+            args.push(window_number.to_string());
+        }
+        _ => {
+            let _ = fs::remove_file(&output_path);
+            return Err(CaptureFrameError {
+                status: SoftwareCompositorCaptureStatus::UnsupportedSource,
+                node_status: CompositorNodeStatus::Placeholder,
+                detail: "Only display and window sources can use macOS capture preview."
+                    .to_string(),
+            });
+        }
+    }
+    args.push(output_path.display().to_string());
+
+    let started_at = Instant::now();
+    let output = Command::new("screencapture").args(&args).output();
+    let capture_duration_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    let output = output.map_err(|error| CaptureFrameError {
+        status: SoftwareCompositorCaptureStatus::CaptureFailed,
+        node_status: CompositorNodeStatus::Placeholder,
+        detail: format!("macOS screencapture could not be started: {error}"),
+    })?;
+
+    if !output.status.success() {
+        let detail = macos_screencapture_error_detail(&output.stderr);
+        let _ = fs::remove_file(&output_path);
+        return Err(CaptureFrameError {
+            status: macos_screencapture_error_status(&detail),
+            node_status: if detail.to_ascii_lowercase().contains("permission") {
+                CompositorNodeStatus::PermissionRequired
+            } else {
+                CompositorNodeStatus::Placeholder
+            },
+            detail,
+        });
+    }
+
+    let bytes = fs::read(&output_path).map_err(|error| CaptureFrameError {
+        status: SoftwareCompositorCaptureStatus::CaptureFailed,
+        node_status: CompositorNodeStatus::Placeholder,
+        detail: format!("macOS capture image could not be read: {error}"),
+    });
+    let _ = fs::remove_file(&output_path);
+    let bytes = bytes?;
+    let image = image::load_from_memory(&bytes).map_err(|error| CaptureFrameError {
+        status: SoftwareCompositorCaptureStatus::CaptureFailed,
+        node_status: CompositorNodeStatus::Placeholder,
+        detail: format!("macOS capture image could not be decoded: {error}"),
+    })?;
+    let rgba = image.to_rgba8();
+    let (width, height) = rgba.dimensions();
+
+    Ok(DecodedCaptureFrame {
+        capture_source_id,
+        width,
+        height,
+        frame_index: clock.frame_index,
+        capture_duration_ms,
+        provider_name: platform_capture_provider_name().to_string(),
+        status_detail: format!(
+            "Captured macOS {} frame from {}.",
+            match node.source_kind {
+                SceneSourceKind::Window => "window",
+                _ => "display",
+            },
+            capture_id
+        ),
+        pixels: rgba.into_raw(),
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_screencapture_error_detail(stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    if stderr.is_empty() {
+        "macOS screencapture failed. Check Screen Recording permission and source availability."
+            .to_string()
+    } else {
+        format!("macOS screencapture failed: {stderr}")
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_screencapture_error_status(detail: &str) -> SoftwareCompositorCaptureStatus {
+    let lower = detail.to_ascii_lowercase();
+    if lower.contains("not authorized")
+        || lower.contains("permission")
+        || lower.contains("privacy")
+        || lower.contains("denied")
+    {
+        SoftwareCompositorCaptureStatus::PermissionRequired
+    } else {
+        SoftwareCompositorCaptureStatus::CaptureFailed
+    }
 }
 
 fn image_media_input_frame_for_node(
@@ -1377,6 +1799,7 @@ fn image_media_input_frame_for_node(
             Some(metadata),
             None,
             None,
+            None,
         );
     }
 
@@ -1394,6 +1817,7 @@ fn image_media_input_frame_for_node(
                     Some(metadata),
                     None,
                     None,
+                    None,
                 )
             }
         };
@@ -1408,6 +1832,7 @@ fn image_media_input_frame_for_node(
                 CompositorNodeStatus::Placeholder,
                 metadata.status_detail.clone(),
                 Some(metadata),
+                None,
                 None,
                 None,
             )
@@ -1449,6 +1874,7 @@ fn decoded_image_input_frame(
         asset: Some(metadata),
         text: None,
         browser: None,
+        capture: None,
         filters: Vec::new(),
         checksum: decoded.image.checksum,
         pixels: decoded.image.pixels,
@@ -1493,6 +1919,7 @@ fn decoded_video_input_frame(
         asset: Some(metadata),
         text: None,
         browser: None,
+        capture: None,
         filters: Vec::new(),
         checksum: decoded.image.checksum,
         pixels: decoded.image.pixels,
@@ -1528,6 +1955,7 @@ fn browser_overlay_input_frame_for_node_with_browser(
             None,
             None,
             Some(metadata),
+            None,
         );
     }
 
@@ -1547,6 +1975,7 @@ fn browser_overlay_input_frame_for_node_with_browser(
             None,
             None,
             Some(metadata),
+            None,
         );
     }
 
@@ -1566,6 +1995,7 @@ fn browser_overlay_input_frame_for_node_with_browser(
             None,
             None,
             Some(metadata),
+            None,
         );
     };
 
@@ -1602,6 +2032,7 @@ fn browser_overlay_input_frame_for_node_with_browser(
                 None,
                 None,
                 Some(metadata),
+                None,
             )
         }
     }
@@ -1647,6 +2078,7 @@ fn browser_snapshot_input_frame(
         asset: None,
         text: None,
         browser: Some(metadata),
+        capture: None,
         filters: Vec::new(),
         checksum: snapshot.checksum,
         pixels: snapshot.pixels,
@@ -1670,6 +2102,7 @@ fn text_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFr
             None,
             Some(metadata),
             None,
+            None,
         );
     }
 
@@ -1689,6 +2122,7 @@ fn text_input_frame_for_node(node: &CompositorNode) -> SoftwareCompositorInputFr
                 metadata.status_detail.clone(),
                 None,
                 Some(metadata),
+                None,
                 None,
             )
         }
@@ -1756,6 +2190,7 @@ fn render_text_source(
         asset: None,
         text: Some(metadata),
         browser: None,
+        capture: None,
         filters: Vec::new(),
         checksum,
         pixels,
@@ -1901,6 +2336,7 @@ fn placeholder_input_frame_for_node(
     asset: Option<SoftwareCompositorAssetMetadata>,
     text: Option<SoftwareCompositorTextMetadata>,
     browser: Option<SoftwareCompositorBrowserMetadata>,
+    capture: Option<SoftwareCompositorCaptureMetadata>,
 ) -> SoftwareCompositorInputFrame {
     let size = input_frame_size(node);
     let width = size.width.max(1.0).round().min(3840.0) as u32;
@@ -1947,6 +2383,7 @@ fn placeholder_input_frame_for_node(
         asset,
         text,
         browser,
+        capture,
         filters: Vec::new(),
         checksum,
         pixels,
@@ -2747,6 +3184,21 @@ fn apply_software_input_validation(
                     validation.warnings.push(format!(
                         "{} browser overlay is using a placeholder: {}",
                         input.source_id, browser.status_detail
+                    ));
+                }
+            }
+        }
+        if let Some(capture) = &input.capture {
+            match capture.status {
+                SoftwareCompositorCaptureStatus::Rendered => {}
+                SoftwareCompositorCaptureStatus::NoSource
+                | SoftwareCompositorCaptureStatus::PermissionRequired
+                | SoftwareCompositorCaptureStatus::UnsupportedPlatform
+                | SoftwareCompositorCaptureStatus::UnsupportedSource
+                | SoftwareCompositorCaptureStatus::CaptureFailed => {
+                    validation.warnings.push(format!(
+                        "{} capture source is using a placeholder: {}",
+                        input.source_id, capture.status_detail
                     ));
                 }
             }
@@ -4470,6 +4922,81 @@ mod tests {
         let validation = validate_compositor_graph(&graph);
         assert!(validation.ready, "{:?}", validation.errors);
         assert!(!validation.warnings.is_empty());
+    }
+
+    #[test]
+    fn software_capture_input_reports_permission_placeholder() {
+        let collection = crate::SceneCollection::default_collection(crate::now_utc());
+        let scene = collection.active_scene().unwrap();
+        let graph = build_compositor_graph(scene);
+        let display = graph
+            .nodes
+            .iter()
+            .find(|node| node.source_id == "source-main-display")
+            .unwrap();
+
+        let input = software_input_frame_for_node(display, &default_software_input_clock());
+        let capture = input.capture.unwrap();
+
+        assert_eq!(input.status, CompositorNodeStatus::PermissionRequired);
+        assert_eq!(
+            capture.status,
+            SoftwareCompositorCaptureStatus::PermissionRequired
+        );
+        assert_eq!(capture.capture_source_id.as_deref(), Some("display:main"));
+        assert_eq!(capture.frame_index, 0);
+    }
+
+    #[test]
+    fn software_capture_input_accepts_mocked_display_pixels() {
+        fn fake_provider(
+            node: &CompositorNode,
+            clock: &CompositorFrameClock,
+        ) -> Result<DecodedCaptureFrame, CaptureFrameError> {
+            Ok(DecodedCaptureFrame {
+                capture_source_id: capture_source_id_for_node(node),
+                width: 2,
+                height: 2,
+                frame_index: clock.frame_index,
+                capture_duration_ms: 3,
+                provider_name: "test-provider".to_string(),
+                status_detail: "Captured mocked display frame.".to_string(),
+                pixels: vec![
+                    255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+                ],
+            })
+        }
+
+        let collection = crate::SceneCollection::default_collection(crate::now_utc());
+        let scene = collection.active_scene().unwrap();
+        let mut graph = build_compositor_graph(scene);
+        let display = graph
+            .nodes
+            .iter_mut()
+            .find(|node| node.source_id == "source-main-display")
+            .unwrap();
+        display.status = CompositorNodeStatus::Ready;
+        display.status_detail = "Display ready.".to_string();
+        display.config["availability"] =
+            serde_json::json!({ "state": "available", "detail": "Display ready." });
+
+        let clock = CompositorFrameClock {
+            frame_index: 9,
+            framerate: 30,
+            pts_nanos: 300_000_000,
+            duration_nanos: 33_333_333,
+        };
+        let input = capture_input_frame_for_node_with_provider(display, &clock, fake_provider);
+        let capture = input.capture.unwrap();
+
+        assert_eq!(input.status, CompositorNodeStatus::Ready);
+        assert_eq!(input.width, 2);
+        assert_eq!(input.height, 2);
+        assert_eq!(capture.status, SoftwareCompositorCaptureStatus::Rendered);
+        assert_eq!(capture.frame_index, 9);
+        assert_eq!(capture.capture_duration_ms, Some(3));
+        assert_eq!(capture.provider_name, "test-provider");
+        assert_eq!(capture.checksum, Some(input.checksum));
     }
 
     #[test]

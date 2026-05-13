@@ -26,10 +26,15 @@ foundation to OBS-class scene editing and output.
     render target timing/scaling evaluation.
 11. Display capture binding on macOS and Windows: started with inventory-backed
     source availability, capture-frame plan bindings, and mocked provider
-    lifecycle diagnostics; real capture is not started.
+    lifecycle diagnostics. macOS Designer preview can now request one-shot
+    native `screencapture` display snapshots when the source is bound and Screen
+    Recording permission is available; persistent capture and Windows live
+    capture remain later work.
 12. Window capture binding on macOS and Windows: started with inventory-backed
     source availability, capture-frame plan bindings, and mocked provider
-    lifecycle diagnostics; real capture is not started.
+    lifecycle diagnostics. macOS Designer preview can now request one-shot
+    native `screencapture` window snapshots for bound window ids when permission
+    is available; persistent capture and Windows live capture remain later work.
 13. Camera source engine: started with inventory-backed source availability plus
     capture-frame plan bindings and mocked provider lifecycle diagnostics; real
     capture is not started.
@@ -137,6 +142,13 @@ provider runtime snapshot with deterministic mock video/audio packet contracts,
 latency, dropped-frame, and readiness metadata. This still does not start real
 capture; it prepares the saved scene graph and runtime contracts for
 capture-backed frames in later phases.
+
+Full Scene Designer Pass 4 is now started for macOS display/window capture V1:
+software preview frames can use real one-shot macOS `screencapture` pixels for
+bound display/window sources when Screen Recording permission is available, and
+Designer shows live capture frame diagnostics. This is not yet a persistent
+ScreenCaptureKit provider, and it does not cover Windows live capture,
+recording, streaming, or encoder output.
 
 Phase F software compositor, covering steps 51-60, now has serializable input
 frame contracts, per-source placeholder providers, local still-image decode,

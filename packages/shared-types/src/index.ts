@@ -507,6 +507,7 @@ export interface CompositorEvaluatedNode {
   asset?: SoftwareCompositorAssetMetadata | null;
   text?: SoftwareCompositorTextMetadata | null;
   browser?: SoftwareCompositorBrowserMetadata | null;
+  capture?: SoftwareCompositorCaptureMetadata | null;
   filters: SoftwareCompositorFilterMetadata[];
   rect: CompositorRect;
   crop: SceneCrop;
@@ -601,6 +602,29 @@ export interface SoftwareCompositorBrowserMetadata {
   cache_hit: boolean;
 }
 
+export type SoftwareCompositorCaptureStatus =
+  | "rendered"
+  | "no_source"
+  | "permission_required"
+  | "unsupported_platform"
+  | "unsupported_source"
+  | "capture_failed";
+
+export interface SoftwareCompositorCaptureMetadata {
+  status: SoftwareCompositorCaptureStatus;
+  status_detail: string;
+  capture_source_id: string | null;
+  capture_kind: CaptureSourceKind;
+  width: number | null;
+  height: number | null;
+  frame_index: number;
+  checksum: number | null;
+  capture_duration_ms: number | null;
+  latency_ms: number | null;
+  dropped_frames: number;
+  provider_name: string;
+}
+
 export type SoftwareCompositorFilterStatus =
   | "applied"
   | "skipped"
@@ -628,6 +652,7 @@ export interface SoftwareCompositorInputFrame {
   asset?: SoftwareCompositorAssetMetadata | null;
   text?: SoftwareCompositorTextMetadata | null;
   browser?: SoftwareCompositorBrowserMetadata | null;
+  capture?: SoftwareCompositorCaptureMetadata | null;
   filters: SoftwareCompositorFilterMetadata[];
   checksum: number;
   pixels: number[];

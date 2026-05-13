@@ -156,6 +156,30 @@ const targets = [
     ],
   },
   {
+    name: "designer-live-capture-runtime",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "click",
+        selector:
+          '[data-testid="designer-source-select"][data-source-id="source-main-display"]',
+      },
+      {
+        type: "assert",
+        expression:
+          'Boolean(document.querySelector("[data-testid=\\"designer-live-capture-runtime\\"]"))',
+        message: "Designer live capture runtime panel did not render.",
+      },
+      {
+        type: "assert",
+        expression:
+          'document.querySelector("[data-testid=\\"designer-live-capture-runtime\\"]")?.textContent?.includes("Live Capture Runtime")',
+        message: "Designer live capture runtime panel did not show its title.",
+      },
+    ],
+  },
+  {
     name: "designer-multi-select",
     path: "/?section=designer",
     minBytes: 50_000,
