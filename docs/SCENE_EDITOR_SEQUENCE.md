@@ -41,8 +41,10 @@ foundation to OBS-class scene editing and output.
     FFmpeg-backed local video preview frame extraction for MP4, MOV, WebM, and
     MKV assets. Video audio playback and long-running media timelines are not
     started.
-17. Browser/web overlay source engine: started with source-specific preview
-    rendering; real browser capture is not started.
+17. Browser/web overlay source engine: started with optional local
+    Chrome/Chromium/Edge DevTools snapshot rendering for HTTP, HTTPS, and file
+    URLs. Interactive browser lifecycle, browser audio, and output parity are
+    not started.
 18. Text render engine with font controls: started with backend software
     rasterization for current single-line text source fields. Multiline layout,
     rich text, and platform font discovery are not started.
@@ -129,9 +131,10 @@ contracts for capture-backed frames in later phases.
 Phase F software compositor, covering steps 51-60, now has serializable input
 frame contracts, per-source placeholder providers, local still-image decode,
 local video preview frame extraction through optional FFmpeg, backend text
-rasterization with bundled Inter, asset cache invalidation by path and modified
-time, crop/opacity/rotation-aware software drawing, z-order compositing, and
-compositor tests. Capture, browser, and live audio inputs are still
+rasterization with bundled Inter, browser overlay snapshot rendering through
+optional Chrome/Chromium/Edge, asset cache invalidation by path/source identity
+and sampled time, crop/opacity/rotation-aware software drawing, z-order
+compositing, and compositor tests. Capture and live audio inputs are still
 deterministic placeholders.
 
 Phase G live preview, covering steps 61-70, now returns encoded software preview
@@ -166,10 +169,11 @@ editing, grouping, numeric transforms, local asset URI selection, explicit
 bundle import/export, app-data fallback bundles, validation, runtime refresh,
 deterministic placeholder transition preview, real local still-image preview
 pixels, FFmpeg-backed local video preview frames when FFmpeg is available,
-backend-rendered single-line text pixels, and software visual filter preview
-pixels. The remaining Scene Designer work starts the real capture, browser,
-live audio, stinger playback, and output path; offline editor completion does
-not imply OBS-level capture, encoder, plugin, or live-output parity.
+backend-rendered single-line text pixels, optional browser overlay preview
+snapshots, and software visual filter preview pixels. The remaining Scene
+Designer work starts the real capture, interactive browser lifecycle, live
+audio, stinger playback, and output path; offline editor completion does not
+imply OBS-level capture, encoder, plugin, or live-output parity.
 
 ## Validation Contract
 

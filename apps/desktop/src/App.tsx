@@ -1126,6 +1126,28 @@ function textRuntimeStatusLabel(status: string | null | undefined): string {
   return (status ?? "pending").replaceAll("_", " ");
 }
 
+function browserRuntimeStatusTone(
+  status: string | null | undefined,
+): "green" | "red" | "amber" | "muted" {
+  switch (status) {
+    case "rendered":
+      return "green";
+    case "navigation_failed":
+    case "capture_failed":
+      return "red";
+    case "no_url":
+    case "browser_unavailable":
+    case "unsupported_url":
+      return "amber";
+    default:
+      return "muted";
+  }
+}
+
+function browserRuntimeStatusLabel(status: string | null | undefined): string {
+  return (status ?? "pending").replaceAll("_", " ");
+}
+
 function filterRuntimeStatusTone(
   status: string | null | undefined,
 ): "green" | "red" | "amber" | "muted" {
@@ -6572,6 +6594,10 @@ function DesignerPage(props: {
               node={selectedRuntimeNode}
               source={props.selectedSource}
             />
+            <BrowserRuntimePanel
+              node={selectedRuntimeNode}
+              source={props.selectedSource}
+            />
             <SourceFilterEditor
               onChange={(filters) =>
                 props.onUpdateSource(props.scene.id, props.selectedSource!.id, {
@@ -6999,6 +7025,97 @@ function TextRuntimePanel(props: {
       {status !== "rendered" && (
         <div className="validation-issue warning">
           <strong>{textRuntimeStatusLabel(status)}</strong>
+          <span>{detail}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BrowserRuntimePanel(props: {
+  node: CompositorEvaluatedNode | null;
+  source: SceneSource;
+}) {
+  if (props.source.kind !== "browser_overlay") return null;
+
+  const browser = props.node?.browser ?? null;
+  const configuredUrl = props.source.config.url?.trim() ?? "";
+  const status = browser?.status ?? (configuredUrl ? "pending" : "no_url");
+  const detail =
+    browser?.status_detail ??
+    (configuredUrl
+      ? "Waiting for the next runtime preview frame to render this browser overlay."
+      : "No browser overlay URL has been configured.");
+  const viewportWidth = browser?.viewport_width ?? props.source.config.viewport.width;
+  const viewportHeight = browser?.viewport_height ?? props.source.config.viewport.height;
+  const cssLabel = browser
+    ? browser.custom_css_present
+      ? browser.custom_css_applied
+        ? "applied"
+        : "not applied"
+      : "none"
+    : props.source.config.custom_css
+      ? "pending"
+      : "none";
+
+  return (
+    <div className="browser-runtime-panel" data-testid="designer-browser-runtime">
+      <div className="runtime-binding-header">
+        <div>
+          <strong>Browser Runtime</strong>
+          <span>{detail}</span>
+        </div>
+        <Pill tone={browserRuntimeStatusTone(status)}>
+          {browserRuntimeStatusLabel(status)}
+        </Pill>
+      </div>
+      <div className="designer-preview-meta">
+        <KeyValue label="URL" value={(browser?.url ?? configuredUrl) || "none"} />
+        <KeyValue label="Viewport" value={`${viewportWidth}x${viewportHeight}`} />
+        <KeyValue label="Browser" value={browser?.browser_name ?? "not resolved"} />
+        <KeyValue label="CSS" value={cssLabel} />
+        <KeyValue
+          label="Sample"
+          value={
+            browser?.sampled_frame_time_ms != null
+              ? `${(browser.sampled_frame_time_ms / 1000).toFixed(2)}s (#${
+                  browser.sample_index ?? 0
+                })`
+              : "not sampled"
+          }
+        />
+        <KeyValue
+          label="Checksum"
+          value={browser?.checksum ? browser.checksum.toString(16) : "none"}
+        />
+        <KeyValue
+          label="Capture"
+          value={
+            browser?.capture_duration_ms != null
+              ? `${browser.capture_duration_ms} ms`
+              : "not captured"
+          }
+        />
+        <KeyValue
+          label="Cache"
+          value={
+            browser
+              ? browser.cache_hit
+                ? "cache hit"
+                : "fresh capture"
+              : "no captured frame"
+          }
+        />
+      </div>
+      {browser?.custom_css_detail && (
+        <div className="validation-issue warning">
+          <strong>Custom CSS</strong>
+          <span>{browser.custom_css_detail}</span>
+        </div>
+      )}
+      {status !== "rendered" && (
+        <div className="validation-issue warning">
+          <strong>{browserRuntimeStatusLabel(status)}</strong>
           <span>{detail}</span>
         </div>
       )}

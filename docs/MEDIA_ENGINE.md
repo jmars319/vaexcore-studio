@@ -50,11 +50,16 @@ decoded frames by normalized path, file modified time, and sampled time. Missing
 FFmpeg, missing files, unsupported extensions, and extraction failures remain
 explicit placeholder states. The compositor also rasterizes single-line `text`
 sources with the bundled Inter font and reports font fallback, color fallback,
-rendered bounds, and checksum metadata. Filter diagnostics report applied,
-skipped, deferred, or failed runtime state plus filtered checksums. Mask images
-use the same still-image decode/cache path, and LUT files are parsed and cached
-by normalized path plus modified time. Stinger video playback, live capture,
-browser capture, recording, and streaming output remain outside this path.
+rendered bounds, and checksum metadata. Browser overlay sources can render
+preview snapshots through optional local Chrome, Chromium, or Edge DevTools
+capture for HTTP, HTTPS, and file URLs. Browser snapshots use isolated temporary
+profiles, apply configured viewport and custom CSS, cache by URL, viewport, CSS
+hash, and sampled time, and fall back to explicit placeholder states when no
+compatible browser is available or capture fails. Filter diagnostics report
+applied, skipped, deferred, or failed runtime state plus filtered checksums.
+Mask images use the same still-image decode/cache path, and LUT files are
+parsed and cached by normalized path plus modified time. Stinger video playback,
+live capture, recording, and streaming output remain outside this path.
 
 `CaptureFramePlan` maps visible capture-backed scene sources to the video or
 audio frame stream the compositor will eventually consume. Each binding records

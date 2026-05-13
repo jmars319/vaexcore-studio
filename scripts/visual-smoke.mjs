@@ -208,6 +208,32 @@ const targets = [
     ],
   },
   {
+    name: "designer-browser-runtime",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "click",
+        selector: '[data-testid="designer-source-select"][data-source-id="source-alert-overlay"]',
+      },
+      {
+        type: "assert",
+        expression: 'Boolean(document.querySelector("[data-testid=\\"designer-browser-runtime\\"]"))',
+        message: "Designer browser runtime panel did not render.",
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelector("[data-testid=\\"designer-browser-runtime\\"]")?.textContent?.includes("Browser Runtime")',
+        message: "Designer browser runtime panel did not show its title.",
+      },
+      {
+        type: "assert",
+        expression: 'document.querySelector("[data-testid=\\"designer-browser-runtime\\"]")?.textContent?.includes("No browser overlay URL")',
+        message: "Designer browser runtime panel did not explain the missing URL state.",
+      },
+    ],
+  },
+  {
     name: "designer-filter-runtime",
     path: "/?section=designer",
     minBytes: 50_000,
