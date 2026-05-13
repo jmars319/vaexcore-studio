@@ -760,6 +760,84 @@ export type SceneRuntimeStatus =
   | "transitioning"
   | "error";
 
+export type DesignerRuntimeSessionState =
+  | "idle"
+  | "running"
+  | "paused"
+  | "degraded"
+  | "blocked";
+
+export type DesignerRuntimeReadinessState =
+  | "ready"
+  | "degraded"
+  | "blocked"
+  | "not_applicable";
+
+export interface DesignerRuntimeSourceSession {
+  source_id: string;
+  source_name: string;
+  source_kind: SceneSourceKind;
+  runtime_session_id: string;
+  session_state: DesignerRuntimeSessionState;
+  last_frame_at: string;
+  stale_frame_ms: number;
+  restart_count: number;
+  dropped_frames: number;
+  provider_status: string;
+  readiness_state: DesignerRuntimeReadinessState;
+  detail: string;
+}
+
+export interface DesignerRuntimeSessionSnapshot {
+  version: number;
+  runtime_session_id: string;
+  target: string;
+  scene_id: string;
+  scene_name: string;
+  frame_index: number;
+  target_framerate: number;
+  session_state: DesignerRuntimeSessionState;
+  readiness_state: DesignerRuntimeReadinessState;
+  provider_status: string;
+  last_frame_at: string;
+  stale_frame_ms: number;
+  restart_count: number;
+  dropped_frames: number;
+  sources: DesignerRuntimeSourceSession[];
+  validation: SceneRuntimeContractValidation;
+}
+
+export interface DesignerRuntimeSessionControlRequest {
+  source_id?: string | null;
+  paused?: boolean | null;
+  reason?: string | null;
+}
+
+export interface DesignerRuntimeSessionControlResponse {
+  changed: boolean;
+  action: string;
+  detail: string;
+  snapshot: DesignerRuntimeSessionSnapshot;
+}
+
+export interface DesignerReadinessReportItem {
+  id: string;
+  label: string;
+  state: DesignerRuntimeReadinessState;
+  detail: string;
+}
+
+export interface DesignerReadinessReport {
+  version: number;
+  collection_id: string;
+  active_scene_id: string;
+  active_scene_name: string;
+  generated_at: string;
+  overall: DesignerRuntimeReadinessState;
+  items: DesignerReadinessReportItem[];
+  windows_handoff: string[];
+}
+
 export interface SceneRuntimeSnapshot {
   version: number;
   collection_id: string;
@@ -857,6 +935,15 @@ export interface PreviewFrameResponse {
   checksum: string | null;
   render_time_ms: number;
   generated_at: string;
+  runtime_session_id: string;
+  session_state: DesignerRuntimeSessionState;
+  last_frame_at: string;
+  stale_frame_ms: number;
+  restart_count: number;
+  dropped_frames: number;
+  provider_status: string;
+  readiness_state: DesignerRuntimeReadinessState;
+  runtime_session: DesignerRuntimeSessionSnapshot;
   rendered_frame: CompositorRenderedFrame | null;
   validation: SceneRuntimeContractValidation;
 }
@@ -894,6 +981,15 @@ export interface ProgramPreviewFrameResponse {
   checksum: string | null;
   render_time_ms: number;
   generated_at: string;
+  runtime_session_id: string;
+  session_state: DesignerRuntimeSessionState;
+  last_frame_at: string;
+  stale_frame_ms: number;
+  restart_count: number;
+  dropped_frames: number;
+  provider_status: string;
+  readiness_state: DesignerRuntimeReadinessState;
+  runtime_session: DesignerRuntimeSessionSnapshot;
   rendered_frame: CompositorRenderedFrame | null;
   validation: SceneRuntimeContractValidation;
 }
@@ -1089,6 +1185,15 @@ export interface TransitionPreviewFrameResponse {
   checksum: string | null;
   render_time_ms: number;
   generated_at: string;
+  runtime_session_id: string;
+  session_state: DesignerRuntimeSessionState;
+  last_frame_at: string;
+  stale_frame_ms: number;
+  restart_count: number;
+  dropped_frames: number;
+  provider_status: string;
+  readiness_state: DesignerRuntimeReadinessState;
+  runtime_session: DesignerRuntimeSessionSnapshot;
   stinger?: StingerTransitionRuntimeMetadata | null;
   validation: SceneRuntimeContractValidation;
 }
@@ -5060,6 +5165,16 @@ export function createPreviewFrameResponse(
   const validation = frame
     ? runtimeValidation(frame.validation.errors, frame.validation.warnings)
     : runtimeValidation([], ["Preview frame response has no rendered frame payload."]);
+  const generatedAt = options.generatedAt ?? new Date().toISOString();
+  const runtimeSession = createDefaultDesignerRuntimeSession({
+    target: "runtime_preview",
+    sceneId: request.scene_id,
+    sceneName: options.sceneName ?? frame?.scene_name ?? "",
+    frameIndex: frame?.clock.frame_index ?? 0,
+    framerate: request.framerate,
+    generatedAt,
+    validation,
+  });
 
   return {
     version: 1,
@@ -5074,7 +5189,16 @@ export function createPreviewFrameResponse(
     image_data: options.imageData ?? null,
     checksum: options.checksum ?? null,
     render_time_ms: options.renderTimeMs ?? 0,
-    generated_at: options.generatedAt ?? new Date().toISOString(),
+    generated_at: generatedAt,
+    runtime_session_id: runtimeSession.runtime_session_id,
+    session_state: runtimeSession.session_state,
+    last_frame_at: runtimeSession.last_frame_at,
+    stale_frame_ms: runtimeSession.stale_frame_ms,
+    restart_count: runtimeSession.restart_count,
+    dropped_frames: runtimeSession.dropped_frames,
+    provider_status: runtimeSession.provider_status,
+    readiness_state: runtimeSession.readiness_state,
+    runtime_session: runtimeSession,
     rendered_frame: frame ? cloneJson(frame) : null,
     validation,
   };
@@ -5112,6 +5236,14 @@ export function validatePreviewFrameResponse(
   if (response.rendered_frame && response.rendered_frame.scene_id !== response.scene_id) {
     errors.push("Preview frame response scene id must match rendered frame.");
   }
+  const runtimeSessionValidation = validateDesignerRuntimeSessionSnapshot(
+    response.runtime_session,
+  );
+  errors.push(...runtimeSessionValidation.errors);
+  warnings.push(...runtimeSessionValidation.warnings);
+  if (response.runtime_session_id !== response.runtime_session.runtime_session_id) {
+    errors.push("Preview frame response runtime session id must match its session snapshot.");
+  }
 
   return runtimeValidation(errors, warnings);
 }
@@ -5133,6 +5265,16 @@ export function createProgramPreviewFrameResponse(
   const validation = frame
     ? runtimeValidation(frame.validation.errors, frame.validation.warnings)
     : runtimeValidation([], ["Program preview frame response has no rendered frame payload."]);
+  const generatedAt = options.generatedAt ?? new Date().toISOString();
+  const runtimeSession = createDefaultDesignerRuntimeSession({
+    target: "program_preview",
+    sceneId: frame?.scene_id ?? "",
+    sceneName: options.sceneName ?? frame?.scene_name ?? "",
+    frameIndex: frame?.clock.frame_index ?? 0,
+    framerate: request.framerate,
+    generatedAt,
+    validation,
+  });
 
   return {
     version: 1,
@@ -5152,10 +5294,182 @@ export function createProgramPreviewFrameResponse(
     image_data: options.imageData ?? null,
     checksum: options.checksum ?? null,
     render_time_ms: options.renderTimeMs ?? 0,
-    generated_at: options.generatedAt ?? new Date().toISOString(),
+    generated_at: generatedAt,
+    runtime_session_id: runtimeSession.runtime_session_id,
+    session_state: runtimeSession.session_state,
+    last_frame_at: runtimeSession.last_frame_at,
+    stale_frame_ms: runtimeSession.stale_frame_ms,
+    restart_count: runtimeSession.restart_count,
+    dropped_frames: runtimeSession.dropped_frames,
+    provider_status: runtimeSession.provider_status,
+    readiness_state: runtimeSession.readiness_state,
+    runtime_session: runtimeSession,
     rendered_frame: frame ? cloneJson(frame) : null,
     validation,
   };
+}
+
+function createDefaultDesignerRuntimeSession(input: {
+  target: string;
+  sceneId: string;
+  sceneName: string;
+  frameIndex: number;
+  framerate: number;
+  generatedAt: string;
+  validation: SceneRuntimeContractValidation;
+}): DesignerRuntimeSessionSnapshot {
+  const readinessState: DesignerRuntimeReadinessState =
+    input.validation.errors.length > 0
+      ? "blocked"
+      : input.validation.warnings.length > 0
+        ? "degraded"
+        : "ready";
+  const sessionState: DesignerRuntimeSessionState =
+    readinessState === "ready"
+      ? "running"
+      : readinessState === "blocked"
+        ? "blocked"
+        : "degraded";
+
+  return {
+    version: 1,
+    runtime_session_id: `designer:${input.target}:${input.sceneId}`,
+    target: input.target,
+    scene_id: input.sceneId,
+    scene_name: input.sceneName,
+    frame_index: input.frameIndex,
+    target_framerate: input.framerate,
+    session_state: sessionState,
+    readiness_state: readinessState,
+    provider_status:
+      readinessState === "ready"
+        ? "contract frame ready"
+        : `${input.validation.errors.length} error(s), ${input.validation.warnings.length} warning(s)`,
+    last_frame_at: input.generatedAt,
+    stale_frame_ms: readinessState === "ready" ? 0 : Math.ceil(2000 / Math.max(1, input.framerate)),
+    restart_count: 0,
+    dropped_frames: 0,
+    sources: [],
+    validation: input.validation,
+  };
+}
+
+export function validateDesignerRuntimeSessionSnapshot(
+  snapshot: DesignerRuntimeSessionSnapshot,
+): SceneRuntimeContractValidation {
+  const errors: string[] = [];
+  const warnings = [...snapshot.validation.warnings];
+
+  validateRuntimeEnvelope(
+    snapshot.version,
+    snapshot.runtime_session_id,
+    snapshot.last_frame_at,
+    "Designer runtime session",
+    errors,
+  );
+  if (!snapshot.target.trim()) {
+    errors.push("Designer runtime session target is required.");
+  }
+  if (!snapshot.scene_id.trim()) {
+    errors.push("Designer runtime session scene id is required.");
+  }
+  if (!snapshot.scene_name.trim()) {
+    errors.push("Designer runtime session scene name is required.");
+  }
+  validateGraphNonNegativeNumber(
+    snapshot.frame_index,
+    "designer_runtime.frame_index",
+    errors,
+  );
+  validateGraphPositiveNumber(
+    snapshot.target_framerate,
+    "designer_runtime.target_framerate",
+    errors,
+  );
+  validateGraphNonNegativeNumber(
+    snapshot.stale_frame_ms,
+    "designer_runtime.stale_frame_ms",
+    errors,
+  );
+  validateGraphNonNegativeNumber(
+    snapshot.restart_count,
+    "designer_runtime.restart_count",
+    errors,
+  );
+  validateGraphNonNegativeNumber(
+    snapshot.dropped_frames,
+    "designer_runtime.dropped_frames",
+    errors,
+  );
+  if (!snapshot.provider_status.trim()) {
+    warnings.push("Designer runtime session provider status is empty.");
+  }
+
+  const sourceIds = new Set<string>();
+  snapshot.sources.forEach((source, index) => {
+    const path = `designer_runtime.sources[${index}]`;
+    if (!source.source_id.trim()) errors.push(`${path}.source_id is required.`);
+    if (!source.source_name.trim()) errors.push(`${path}.source_name is required.`);
+    if (!source.runtime_session_id.trim()) {
+      errors.push(`${path}.runtime_session_id is required.`);
+    }
+    if (sourceIds.has(source.source_id)) {
+      errors.push(`${path}.source_id must be unique in a session snapshot.`);
+    }
+    sourceIds.add(source.source_id);
+    validateGraphNonNegativeNumber(source.stale_frame_ms, `${path}.stale_frame_ms`, errors);
+    validateGraphNonNegativeNumber(source.restart_count, `${path}.restart_count`, errors);
+    validateGraphNonNegativeNumber(source.dropped_frames, `${path}.dropped_frames`, errors);
+    if (Number.isNaN(Date.parse(source.last_frame_at))) {
+      errors.push(`${path}.last_frame_at must be a valid ISO-8601 timestamp.`);
+    }
+    if (!source.provider_status.trim()) {
+      warnings.push(`${path}.provider_status is empty.`);
+    }
+  });
+
+  return runtimeValidation(errors, warnings);
+}
+
+export function validateDesignerReadinessReport(
+  report: DesignerReadinessReport,
+): SceneRuntimeContractValidation {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  validateRuntimeEnvelope(
+    report.version,
+    report.collection_id,
+    report.generated_at,
+    "Designer readiness report",
+    errors,
+  );
+  if (!report.active_scene_id.trim()) {
+    errors.push("Designer readiness report active scene id is required.");
+  }
+  if (!report.active_scene_name.trim()) {
+    errors.push("Designer readiness report active scene name is required.");
+  }
+  if (report.items.length === 0) {
+    errors.push("Designer readiness report must include at least one item.");
+  }
+  if (report.windows_handoff.length === 0) {
+    warnings.push("Designer readiness report has no Windows handoff checklist.");
+  }
+
+  const itemIds = new Set<string>();
+  report.items.forEach((item, index) => {
+    const path = `designer_readiness.items[${index}]`;
+    if (!item.id.trim()) errors.push(`${path}.id is required.`);
+    if (!item.label.trim()) errors.push(`${path}.label is required.`);
+    if (!item.detail.trim()) warnings.push(`${path}.detail is empty.`);
+    if (itemIds.has(item.id)) {
+      errors.push(`${path}.id must be unique in a readiness report.`);
+    }
+    itemIds.add(item.id);
+  });
+
+  return runtimeValidation(errors, warnings);
 }
 
 export function validateProgramPreviewFrameResponse(
@@ -5206,6 +5520,16 @@ export function validateProgramPreviewFrameResponse(
     }
   } else {
     warnings.push("Program preview response has no rendered frame metadata.");
+  }
+  const runtimeSessionValidation = validateDesignerRuntimeSessionSnapshot(
+    response.runtime_session,
+  );
+  errors.push(...runtimeSessionValidation.errors);
+  warnings.push(...runtimeSessionValidation.warnings);
+  if (response.runtime_session_id !== response.runtime_session.runtime_session_id) {
+    errors.push(
+      "Program preview response runtime session id must match its session snapshot.",
+    );
   }
 
   return runtimeValidation(errors, warnings);

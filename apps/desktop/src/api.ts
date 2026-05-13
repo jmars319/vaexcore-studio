@@ -11,6 +11,10 @@ import type {
   CreateMarkerRequestInput,
   CreateProfileRequest,
   DeletedProfile,
+  DesignerReadinessReport,
+  DesignerRuntimeSessionControlRequest,
+  DesignerRuntimeSessionControlResponse,
+  DesignerRuntimeSessionSnapshot,
   HealthResponse,
   Marker,
   MarkersSnapshot,
@@ -613,6 +617,43 @@ export const StudioApi = {
     ),
   sceneRuntimeAudioGraph: (config: RuntimeApiConfig) =>
     apiRequest<AudioGraphRuntimeSnapshot>(config, "/scene-runtime/audio-graph"),
+  designerRuntimeSession: (config: RuntimeApiConfig) =>
+    apiRequest<DesignerRuntimeSessionSnapshot>(
+      config,
+      "/scene-runtime/designer-session",
+    ),
+  pauseDesignerRuntimeSession: (
+    config: RuntimeApiConfig,
+    request: DesignerRuntimeSessionControlRequest,
+  ) =>
+    apiRequest<DesignerRuntimeSessionControlResponse>(
+      config,
+      "/scene-runtime/designer-session/pause",
+      { method: "POST", body: JSON.stringify(request) },
+    ),
+  restartDesignerRuntimeSession: (
+    config: RuntimeApiConfig,
+    request: DesignerRuntimeSessionControlRequest = {},
+  ) =>
+    apiRequest<DesignerRuntimeSessionControlResponse>(
+      config,
+      "/scene-runtime/designer-session/restart",
+      { method: "POST", body: JSON.stringify(request) },
+    ),
+  cleanupDesignerRuntimeSession: (
+    config: RuntimeApiConfig,
+    request: DesignerRuntimeSessionControlRequest = {},
+  ) =>
+    apiRequest<DesignerRuntimeSessionControlResponse>(
+      config,
+      "/scene-runtime/designer-session/cleanup",
+      { method: "POST", body: JSON.stringify(request) },
+    ),
+  designerReadinessReport: (config: RuntimeApiConfig) =>
+    apiRequest<DesignerReadinessReport>(
+      config,
+      "/scene-runtime/readiness-report",
+    ),
   createProfile: (config: RuntimeApiConfig, request: CreateProfileRequest) =>
     apiRequest<CreatedProfile>(config, "/profiles", {
       method: "POST",

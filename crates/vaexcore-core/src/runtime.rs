@@ -9,13 +9,14 @@ use crate::{
     evaluate_compositor_frame, render_software_compositor_frame, stinger_video_input_frame,
     validate_compositor_render_plan, validate_scene_collection, AudioMixBus, AudioMixBusKind,
     AudioMixSourceStatus, CaptureFrameBindingStatus, CaptureFrameFormat, CaptureFrameMediaKind,
-    CaptureSourceKind, CompositorFrameClock, CompositorFrameFormat, CompositorRenderPlan,
-    CompositorRenderTarget, CompositorRenderTargetKind, CompositorRenderedFrame,
-    CompositorRendererKind, CompositorScaleMode, Scene, SceneCollection, SceneSourceKind,
-    SceneTransition, SceneTransitionEasing, SceneTransitionKind, SceneTransitionPreviewPlan,
-    SoftwareCompositorAssetMetadata, SoftwareCompositorAssetStatus, SoftwareCompositorFrame,
-    SoftwareCompositorInputFrame, SoftwareCompositorMediaPlaybackState,
-    SoftwareCompositorRenderResult,
+    CaptureSourceKind, CompositorFrameClock, CompositorFrameFormat, CompositorNodeStatus,
+    CompositorRenderPlan, CompositorRenderTarget, CompositorRenderTargetKind,
+    CompositorRenderedFrame, CompositorRendererKind, CompositorScaleMode, Scene, SceneCollection,
+    SceneSourceKind, SceneTransition, SceneTransitionEasing, SceneTransitionKind,
+    SceneTransitionPreviewPlan, SoftwareCompositorAssetMetadata, SoftwareCompositorAssetStatus,
+    SoftwareCompositorBrowserStatus, SoftwareCompositorCaptureStatus,
+    SoftwareCompositorFilterStatus, SoftwareCompositorFrame, SoftwareCompositorInputFrame,
+    SoftwareCompositorMediaPlaybackState, SoftwareCompositorRenderResult,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -53,6 +54,99 @@ pub enum SceneRuntimeStatus {
     Active,
     Transitioning,
     Error,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DesignerRuntimeSessionState {
+    Idle,
+    Running,
+    Paused,
+    Degraded,
+    Blocked,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DesignerRuntimeReadinessState {
+    Ready,
+    Degraded,
+    Blocked,
+    NotApplicable,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DesignerRuntimeSourceSession {
+    pub source_id: String,
+    pub source_name: String,
+    pub source_kind: SceneSourceKind,
+    pub runtime_session_id: String,
+    pub session_state: DesignerRuntimeSessionState,
+    pub last_frame_at: chrono::DateTime<chrono::Utc>,
+    pub stale_frame_ms: u64,
+    pub restart_count: u64,
+    pub dropped_frames: u64,
+    pub provider_status: String,
+    pub readiness_state: DesignerRuntimeReadinessState,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DesignerRuntimeSessionSnapshot {
+    pub version: u32,
+    pub runtime_session_id: String,
+    pub target: String,
+    pub scene_id: String,
+    pub scene_name: String,
+    pub frame_index: u64,
+    pub target_framerate: u32,
+    pub session_state: DesignerRuntimeSessionState,
+    pub readiness_state: DesignerRuntimeReadinessState,
+    pub provider_status: String,
+    pub last_frame_at: chrono::DateTime<chrono::Utc>,
+    pub stale_frame_ms: u64,
+    pub restart_count: u64,
+    pub dropped_frames: u64,
+    pub sources: Vec<DesignerRuntimeSourceSession>,
+    pub validation: SceneRuntimeContractValidation,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DesignerRuntimeSessionControlRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DesignerRuntimeSessionControlResponse {
+    pub changed: bool,
+    pub action: String,
+    pub detail: String,
+    pub snapshot: DesignerRuntimeSessionSnapshot,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DesignerReadinessReportItem {
+    pub id: String,
+    pub label: String,
+    pub state: DesignerRuntimeReadinessState,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DesignerReadinessReport {
+    pub version: u32,
+    pub collection_id: String,
+    pub active_scene_id: String,
+    pub active_scene_name: String,
+    pub generated_at: chrono::DateTime<chrono::Utc>,
+    pub overall: DesignerRuntimeReadinessState,
+    pub items: Vec<DesignerReadinessReportItem>,
+    pub windows_handoff: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -171,6 +265,15 @@ pub struct PreviewFrameResponse {
     pub checksum: Option<String>,
     pub render_time_ms: f64,
     pub generated_at: chrono::DateTime<chrono::Utc>,
+    pub runtime_session_id: String,
+    pub session_state: DesignerRuntimeSessionState,
+    pub last_frame_at: chrono::DateTime<chrono::Utc>,
+    pub stale_frame_ms: u64,
+    pub restart_count: u64,
+    pub dropped_frames: u64,
+    pub provider_status: String,
+    pub readiness_state: DesignerRuntimeReadinessState,
+    pub runtime_session: DesignerRuntimeSessionSnapshot,
     pub rendered_frame: Option<CompositorRenderedFrame>,
     pub validation: SceneRuntimeContractValidation,
 }
@@ -210,6 +313,15 @@ pub struct ProgramPreviewFrameResponse {
     pub checksum: Option<String>,
     pub render_time_ms: f64,
     pub generated_at: chrono::DateTime<chrono::Utc>,
+    pub runtime_session_id: String,
+    pub session_state: DesignerRuntimeSessionState,
+    pub last_frame_at: chrono::DateTime<chrono::Utc>,
+    pub stale_frame_ms: u64,
+    pub restart_count: u64,
+    pub dropped_frames: u64,
+    pub provider_status: String,
+    pub readiness_state: DesignerRuntimeReadinessState,
+    pub runtime_session: DesignerRuntimeSessionSnapshot,
     pub rendered_frame: Option<CompositorRenderedFrame>,
     pub validation: SceneRuntimeContractValidation,
 }
@@ -438,6 +550,15 @@ pub struct TransitionPreviewFrameResponse {
     pub checksum: Option<String>,
     pub render_time_ms: f64,
     pub generated_at: chrono::DateTime<chrono::Utc>,
+    pub runtime_session_id: String,
+    pub session_state: DesignerRuntimeSessionState,
+    pub last_frame_at: chrono::DateTime<chrono::Utc>,
+    pub stale_frame_ms: u64,
+    pub restart_count: u64,
+    pub dropped_frames: u64,
+    pub provider_status: String,
+    pub readiness_state: DesignerRuntimeReadinessState,
+    pub runtime_session: DesignerRuntimeSessionSnapshot,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stinger: Option<StingerTransitionRuntimeMetadata>,
     pub validation: SceneRuntimeContractValidation,
@@ -785,6 +906,19 @@ pub fn create_preview_frame_response(
                 .map(|frame| preview_frame_checksum(frame, request))
         });
     let image_data = pixel_frame.and_then(|frame| preview_image_data(frame, &request.encoding));
+    let generated_at = crate::now_utc();
+    let runtime_session = designer_runtime_session_snapshot(
+        "runtime_preview",
+        (
+            request.scene_id.as_str(),
+            scene.map(|scene| scene.name.as_str()).unwrap_or_default(),
+        ),
+        frame_index,
+        request.framerate,
+        generated_at,
+        render_result.as_ref(),
+        &validation,
+    );
 
     PreviewFrameResponse {
         version: 1,
@@ -799,7 +933,16 @@ pub fn create_preview_frame_response(
         image_data,
         checksum,
         render_time_ms: started_at.elapsed().as_secs_f64() * 1000.0,
-        generated_at: crate::now_utc(),
+        generated_at,
+        runtime_session_id: runtime_session.runtime_session_id.clone(),
+        session_state: runtime_session.session_state.clone(),
+        last_frame_at: runtime_session.last_frame_at,
+        stale_frame_ms: runtime_session.stale_frame_ms,
+        restart_count: runtime_session.restart_count,
+        dropped_frames: runtime_session.dropped_frames,
+        provider_status: runtime_session.provider_status.clone(),
+        readiness_state: runtime_session.readiness_state.clone(),
+        runtime_session,
         rendered_frame,
         validation,
     }
@@ -857,6 +1000,19 @@ pub fn create_program_preview_frame_response(
                 .map(|frame| rendered_frame_checksum(frame, request.width, request.height))
         });
     let image_data = pixel_frame.and_then(|frame| preview_image_data(frame, &request.encoding));
+    let generated_at = crate::now_utc();
+    let runtime_session = designer_runtime_session_snapshot(
+        "program_preview",
+        (
+            scene.map(|scene| scene.id.as_str()).unwrap_or_default(),
+            scene.map(|scene| scene.name.as_str()).unwrap_or_default(),
+        ),
+        frame_index,
+        request.framerate,
+        generated_at,
+        render_result.as_ref(),
+        &validation,
+    );
 
     ProgramPreviewFrameResponse {
         version: 1,
@@ -880,7 +1036,16 @@ pub fn create_program_preview_frame_response(
         image_data,
         checksum,
         render_time_ms: started_at.elapsed().as_secs_f64() * 1000.0,
-        generated_at: crate::now_utc(),
+        generated_at,
+        runtime_session_id: runtime_session.runtime_session_id.clone(),
+        session_state: runtime_session.session_state.clone(),
+        last_frame_at: runtime_session.last_frame_at,
+        stale_frame_ms: runtime_session.stale_frame_ms,
+        restart_count: runtime_session.restart_count,
+        dropped_frames: runtime_session.dropped_frames,
+        provider_status: runtime_session.provider_status.clone(),
+        readiness_state: runtime_session.readiness_state.clone(),
+        runtime_session,
         rendered_frame,
         validation,
     }
@@ -1417,6 +1582,25 @@ pub fn create_transition_preview_frame_response(
     let checksum = rendered_pixel_frame
         .as_ref()
         .map(|frame| format!("software-transition:{:016x}", frame.checksum));
+    let generated_at = crate::now_utc();
+    let transition_source_session = transition_runtime_source_session(
+        transition,
+        frame_index,
+        request.framerate,
+        generated_at,
+        &validation,
+        stinger_metadata.as_ref(),
+    );
+    let runtime_session = designer_transition_runtime_session_snapshot(
+        request,
+        transition_kind.clone(),
+        from_scene
+            .map(|scene| scene.name.as_str())
+            .unwrap_or_default(),
+        generated_at,
+        transition_source_session,
+        &validation,
+    );
 
     TransitionPreviewFrameResponse {
         version: 1,
@@ -1443,10 +1627,455 @@ pub fn create_transition_preview_frame_response(
         image_data,
         checksum,
         render_time_ms: started_at.elapsed().as_secs_f64() * 1000.0,
-        generated_at: crate::now_utc(),
+        generated_at,
+        runtime_session_id: runtime_session.runtime_session_id.clone(),
+        session_state: runtime_session.session_state.clone(),
+        last_frame_at: runtime_session.last_frame_at,
+        stale_frame_ms: runtime_session.stale_frame_ms,
+        restart_count: runtime_session.restart_count,
+        dropped_frames: runtime_session.dropped_frames,
+        provider_status: runtime_session.provider_status.clone(),
+        readiness_state: runtime_session.readiness_state.clone(),
+        runtime_session,
         stinger: stinger_metadata,
         validation,
     }
+}
+
+fn designer_runtime_session_snapshot(
+    target: &str,
+    scene: (&str, &str),
+    frame_index: u64,
+    framerate: u32,
+    generated_at: chrono::DateTime<chrono::Utc>,
+    render_result: Option<&SoftwareCompositorRenderResult>,
+    validation: &SceneRuntimeContractValidation,
+) -> DesignerRuntimeSessionSnapshot {
+    let sources = render_result
+        .map(|result| {
+            result
+                .input_frames
+                .iter()
+                .map(|input| {
+                    let source_name = result
+                        .frame
+                        .targets
+                        .iter()
+                        .flat_map(|target| target.nodes.iter())
+                        .find(|node| node.source_id == input.source_id)
+                        .map(|node| node.name.as_str())
+                        .unwrap_or(input.source_id.as_str());
+                    designer_runtime_source_session(
+                        target,
+                        source_name,
+                        input,
+                        framerate,
+                        frame_index,
+                        generated_at,
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let dropped_frames = sources
+        .iter()
+        .map(|source| source.dropped_frames)
+        .sum::<u64>();
+    let readiness_state = aggregate_runtime_readiness(
+        sources.iter().map(|source| &source.readiness_state),
+        validation,
+    );
+    let session_state = session_state_from_readiness(&readiness_state, validation);
+    let provider_status = provider_summary(&sources, validation);
+    let stale_frame_ms = sources
+        .iter()
+        .map(|source| source.stale_frame_ms)
+        .max()
+        .unwrap_or_else(|| frame_interval_ms(framerate));
+
+    DesignerRuntimeSessionSnapshot {
+        version: 1,
+        runtime_session_id: format!("designer:{target}:{}", scene.0),
+        target: target.to_string(),
+        scene_id: scene.0.to_string(),
+        scene_name: scene.1.to_string(),
+        frame_index,
+        target_framerate: framerate.max(1),
+        session_state,
+        readiness_state,
+        provider_status,
+        last_frame_at: generated_at,
+        stale_frame_ms,
+        restart_count: 0,
+        dropped_frames,
+        sources,
+        validation: validation.clone(),
+    }
+}
+
+fn designer_runtime_source_session(
+    target: &str,
+    source_name: &str,
+    input: &SoftwareCompositorInputFrame,
+    framerate: u32,
+    _frame_index: u64,
+    generated_at: chrono::DateTime<chrono::Utc>,
+) -> DesignerRuntimeSourceSession {
+    let readiness_state = input_readiness_state(input);
+    let session_state = match readiness_state {
+        DesignerRuntimeReadinessState::Ready => DesignerRuntimeSessionState::Running,
+        DesignerRuntimeReadinessState::Degraded => DesignerRuntimeSessionState::Degraded,
+        DesignerRuntimeReadinessState::Blocked => DesignerRuntimeSessionState::Blocked,
+        DesignerRuntimeReadinessState::NotApplicable => DesignerRuntimeSessionState::Idle,
+    };
+    let dropped_frames = input
+        .capture
+        .as_ref()
+        .map(|capture| capture.dropped_frames)
+        .unwrap_or(0);
+    let stale_frame_ms = if readiness_state == DesignerRuntimeReadinessState::Ready {
+        0
+    } else {
+        frame_interval_ms(framerate).saturating_mul(2)
+    };
+
+    DesignerRuntimeSourceSession {
+        source_id: input.source_id.clone(),
+        source_name: source_name.to_string(),
+        source_kind: input.source_kind.clone(),
+        runtime_session_id: format!(
+            "designer:{target}:{:?}:{}",
+            input.source_kind, input.source_id
+        ),
+        session_state,
+        last_frame_at: generated_at,
+        stale_frame_ms,
+        restart_count: 0,
+        dropped_frames,
+        provider_status: input_provider_status(input),
+        readiness_state,
+        detail: input_runtime_detail(input),
+    }
+}
+
+fn transition_runtime_source_session(
+    transition: Option<&SceneTransition>,
+    frame_index: u64,
+    framerate: u32,
+    generated_at: chrono::DateTime<chrono::Utc>,
+    validation: &SceneRuntimeContractValidation,
+    stinger: Option<&StingerTransitionRuntimeMetadata>,
+) -> DesignerRuntimeSourceSession {
+    let transition_id = transition
+        .map(|transition| transition.id.as_str())
+        .unwrap_or("missing-transition");
+    let transition_name = transition
+        .map(|transition| transition.name.as_str())
+        .unwrap_or("Transition");
+    let readiness_state = if !validation.errors.is_empty() {
+        DesignerRuntimeReadinessState::Blocked
+    } else if let Some(stinger) = stinger {
+        match stinger.status {
+            StingerTransitionRuntimeStatus::Rendered => DesignerRuntimeReadinessState::Ready,
+            StingerTransitionRuntimeStatus::NoAsset => DesignerRuntimeReadinessState::NotApplicable,
+            StingerTransitionRuntimeStatus::MissingFile
+            | StingerTransitionRuntimeStatus::UnsupportedExtension => {
+                DesignerRuntimeReadinessState::Blocked
+            }
+            StingerTransitionRuntimeStatus::FfmpegUnavailable
+            | StingerTransitionRuntimeStatus::DecodeFailed
+            | StingerTransitionRuntimeStatus::NotStinger => DesignerRuntimeReadinessState::Degraded,
+        }
+    } else if validation.warnings.is_empty() {
+        DesignerRuntimeReadinessState::Ready
+    } else {
+        DesignerRuntimeReadinessState::Degraded
+    };
+    let session_state = session_state_from_readiness(&readiness_state, validation);
+    let stale_frame_ms = if readiness_state == DesignerRuntimeReadinessState::Ready {
+        0
+    } else {
+        frame_interval_ms(framerate).saturating_mul(2)
+    };
+
+    DesignerRuntimeSourceSession {
+        source_id: transition_id.to_string(),
+        source_name: transition_name.to_string(),
+        source_kind: SceneSourceKind::ImageMedia,
+        runtime_session_id: format!("designer:transition:{transition_id}"),
+        session_state,
+        last_frame_at: generated_at,
+        stale_frame_ms,
+        restart_count: 0,
+        dropped_frames: 0,
+        provider_status: stinger
+            .and_then(|stinger| stinger.decoder_name.clone())
+            .unwrap_or_else(|| "software-transition".to_string()),
+        readiness_state,
+        detail: stinger
+            .map(|stinger| stinger.status_detail.clone())
+            .unwrap_or_else(|| format!("Transition frame {frame_index} rendered in software.")),
+    }
+}
+
+fn designer_transition_runtime_session_snapshot(
+    request: &TransitionPreviewFrameRequest,
+    transition_kind: SceneTransitionKind,
+    scene_name: &str,
+    generated_at: chrono::DateTime<chrono::Utc>,
+    source: DesignerRuntimeSourceSession,
+    validation: &SceneRuntimeContractValidation,
+) -> DesignerRuntimeSessionSnapshot {
+    let sources = vec![source];
+    let readiness_state = aggregate_runtime_readiness(
+        sources.iter().map(|source| &source.readiness_state),
+        validation,
+    );
+    let session_state = session_state_from_readiness(&readiness_state, validation);
+    let provider_status = provider_summary(&sources, validation);
+    let dropped_frames = sources
+        .iter()
+        .map(|source| source.dropped_frames)
+        .sum::<u64>();
+    let stale_frame_ms = sources
+        .iter()
+        .map(|source| source.stale_frame_ms)
+        .max()
+        .unwrap_or_else(|| frame_interval_ms(request.framerate));
+
+    DesignerRuntimeSessionSnapshot {
+        version: 1,
+        runtime_session_id: format!(
+            "designer:transition_preview:{:?}:{}",
+            transition_kind, request.transition_id
+        ),
+        target: "transition_preview".to_string(),
+        scene_id: request.from_scene_id.clone(),
+        scene_name: scene_name.to_string(),
+        frame_index: request.frame_index,
+        target_framerate: request.framerate.max(1),
+        session_state,
+        readiness_state,
+        provider_status,
+        last_frame_at: generated_at,
+        stale_frame_ms,
+        restart_count: 0,
+        dropped_frames,
+        sources,
+        validation: validation.clone(),
+    }
+}
+
+fn input_readiness_state(input: &SoftwareCompositorInputFrame) -> DesignerRuntimeReadinessState {
+    let mut state = match input.status {
+        CompositorNodeStatus::Ready => DesignerRuntimeReadinessState::Ready,
+        CompositorNodeStatus::Hidden => DesignerRuntimeReadinessState::NotApplicable,
+        CompositorNodeStatus::Placeholder => DesignerRuntimeReadinessState::Degraded,
+        CompositorNodeStatus::PermissionRequired | CompositorNodeStatus::Unavailable => {
+            DesignerRuntimeReadinessState::Blocked
+        }
+    };
+
+    if let Some(asset) = &input.asset {
+        state = merge_runtime_readiness(
+            state,
+            match asset.status {
+                SoftwareCompositorAssetStatus::Decoded => DesignerRuntimeReadinessState::Ready,
+                SoftwareCompositorAssetStatus::NoAsset => {
+                    DesignerRuntimeReadinessState::NotApplicable
+                }
+                SoftwareCompositorAssetStatus::VideoPlaceholder => {
+                    DesignerRuntimeReadinessState::Degraded
+                }
+                SoftwareCompositorAssetStatus::MissingFile
+                | SoftwareCompositorAssetStatus::UnsupportedExtension
+                | SoftwareCompositorAssetStatus::DecodeFailed => {
+                    DesignerRuntimeReadinessState::Blocked
+                }
+            },
+        );
+    }
+
+    if let Some(browser) = &input.browser {
+        state = merge_runtime_readiness(
+            state,
+            match browser.status {
+                SoftwareCompositorBrowserStatus::Rendered => DesignerRuntimeReadinessState::Ready,
+                SoftwareCompositorBrowserStatus::NoUrl => {
+                    DesignerRuntimeReadinessState::NotApplicable
+                }
+                SoftwareCompositorBrowserStatus::UnsupportedUrl => {
+                    DesignerRuntimeReadinessState::Blocked
+                }
+                SoftwareCompositorBrowserStatus::BrowserUnavailable
+                | SoftwareCompositorBrowserStatus::NavigationFailed
+                | SoftwareCompositorBrowserStatus::CaptureFailed => {
+                    DesignerRuntimeReadinessState::Degraded
+                }
+            },
+        );
+    }
+
+    if let Some(capture) = &input.capture {
+        state = merge_runtime_readiness(
+            state,
+            match capture.status {
+                SoftwareCompositorCaptureStatus::Rendered => DesignerRuntimeReadinessState::Ready,
+                SoftwareCompositorCaptureStatus::NoSource
+                | SoftwareCompositorCaptureStatus::PermissionRequired
+                | SoftwareCompositorCaptureStatus::UnsupportedSource => {
+                    DesignerRuntimeReadinessState::Blocked
+                }
+                SoftwareCompositorCaptureStatus::DecoderUnavailable
+                | SoftwareCompositorCaptureStatus::UnsupportedPlatform
+                | SoftwareCompositorCaptureStatus::CaptureFailed => {
+                    DesignerRuntimeReadinessState::Degraded
+                }
+            },
+        );
+    }
+
+    if input
+        .filters
+        .iter()
+        .any(|filter| filter.status == SoftwareCompositorFilterStatus::Error)
+    {
+        state = merge_runtime_readiness(state, DesignerRuntimeReadinessState::Degraded);
+    }
+
+    state
+}
+
+fn merge_runtime_readiness(
+    current: DesignerRuntimeReadinessState,
+    next: DesignerRuntimeReadinessState,
+) -> DesignerRuntimeReadinessState {
+    if runtime_readiness_rank(&next) > runtime_readiness_rank(&current) {
+        next
+    } else {
+        current
+    }
+}
+
+fn aggregate_runtime_readiness<'a>(
+    states: impl Iterator<Item = &'a DesignerRuntimeReadinessState>,
+    validation: &SceneRuntimeContractValidation,
+) -> DesignerRuntimeReadinessState {
+    if !validation.errors.is_empty() {
+        return DesignerRuntimeReadinessState::Blocked;
+    }
+    let mut state = if validation.warnings.is_empty() {
+        DesignerRuntimeReadinessState::Ready
+    } else {
+        DesignerRuntimeReadinessState::Degraded
+    };
+    let mut saw_source = false;
+    for source_state in states {
+        saw_source = true;
+        state = merge_runtime_readiness(state, source_state.clone());
+    }
+    if saw_source {
+        state
+    } else if validation.errors.is_empty() {
+        DesignerRuntimeReadinessState::NotApplicable
+    } else {
+        DesignerRuntimeReadinessState::Blocked
+    }
+}
+
+fn runtime_readiness_rank(state: &DesignerRuntimeReadinessState) -> u8 {
+    match state {
+        DesignerRuntimeReadinessState::Ready => 0,
+        DesignerRuntimeReadinessState::NotApplicable => 1,
+        DesignerRuntimeReadinessState::Degraded => 2,
+        DesignerRuntimeReadinessState::Blocked => 3,
+    }
+}
+
+fn session_state_from_readiness(
+    readiness: &DesignerRuntimeReadinessState,
+    validation: &SceneRuntimeContractValidation,
+) -> DesignerRuntimeSessionState {
+    if !validation.errors.is_empty() {
+        return DesignerRuntimeSessionState::Blocked;
+    }
+    match readiness {
+        DesignerRuntimeReadinessState::Ready => DesignerRuntimeSessionState::Running,
+        DesignerRuntimeReadinessState::Degraded => DesignerRuntimeSessionState::Degraded,
+        DesignerRuntimeReadinessState::Blocked => DesignerRuntimeSessionState::Blocked,
+        DesignerRuntimeReadinessState::NotApplicable => DesignerRuntimeSessionState::Idle,
+    }
+}
+
+fn input_provider_status(input: &SoftwareCompositorInputFrame) -> String {
+    if let Some(capture) = &input.capture {
+        return format!("{}:{:?}", capture.provider_name, capture.status);
+    }
+    if let Some(browser) = &input.browser {
+        return browser
+            .browser_name
+            .clone()
+            .unwrap_or_else(|| format!("browser:{:?}", browser.status));
+    }
+    if let Some(asset) = &input.asset {
+        return asset
+            .decoder_name
+            .clone()
+            .or_else(|| asset.format.clone())
+            .unwrap_or_else(|| format!("asset:{:?}", asset.status));
+    }
+    if let Some(text) = &input.text {
+        return format!("text:{}", text.used_font_family);
+    }
+    "software-placeholder".to_string()
+}
+
+fn input_runtime_detail(input: &SoftwareCompositorInputFrame) -> String {
+    if let Some(capture) = &input.capture {
+        return capture.status_detail.clone();
+    }
+    if let Some(browser) = &input.browser {
+        return browser.status_detail.clone();
+    }
+    if let Some(asset) = &input.asset {
+        return asset.status_detail.clone();
+    }
+    if let Some(text) = &input.text {
+        return text.status_detail.clone();
+    }
+    input.status_detail.clone()
+}
+
+fn provider_summary(
+    sources: &[DesignerRuntimeSourceSession],
+    validation: &SceneRuntimeContractValidation,
+) -> String {
+    if !validation.errors.is_empty() {
+        return format!("blocked:{} error(s)", validation.errors.len());
+    }
+    if sources.is_empty() {
+        return "no runtime sources".to_string();
+    }
+    let ready = sources
+        .iter()
+        .filter(|source| source.readiness_state == DesignerRuntimeReadinessState::Ready)
+        .count();
+    let degraded = sources
+        .iter()
+        .filter(|source| source.readiness_state == DesignerRuntimeReadinessState::Degraded)
+        .count();
+    let blocked = sources
+        .iter()
+        .filter(|source| source.readiness_state == DesignerRuntimeReadinessState::Blocked)
+        .count();
+    format!(
+        "{ready} ready / {degraded} degraded / {blocked} blocked / {} total",
+        sources.len()
+    )
+}
+
+fn frame_interval_ms(framerate: u32) -> u64 {
+    1_000_u64.div_ceil(u64::from(framerate.max(1)))
 }
 
 struct RenderedTransitionFrame {
@@ -2259,6 +2888,13 @@ mod tests {
             .is_some_and(|data| data.starts_with("data:image/bmp;base64,")));
         let rendered_frame = response.rendered_frame.as_ref().unwrap();
         assert_eq!(rendered_frame.renderer, CompositorRendererKind::Software);
+        assert_eq!(response.runtime_session.target, "runtime_preview");
+        assert_eq!(
+            response.runtime_session_id,
+            response.runtime_session.runtime_session_id
+        );
+        assert!(!response.runtime_session.sources.is_empty());
+        assert_eq!(response.session_state, DesignerRuntimeSessionState::Blocked);
         assert!(response.render_time_ms.is_finite());
         assert!(
             response.validation.ready,
@@ -2301,11 +2937,45 @@ mod tests {
         let target = &response.rendered_frame.as_ref().unwrap().targets[0];
         assert_eq!(target.target_id, "target-program-preview");
         assert_eq!(target.target_kind, CompositorRenderTargetKind::Program);
+        assert_eq!(response.runtime_session.target, "program_preview");
+        assert_eq!(response.runtime_session.target_framerate, 60);
+        assert!(!response.runtime_session.sources.is_empty());
         assert!(
             response.validation.ready,
             "{:?}",
             response.validation.errors
         );
+    }
+
+    #[test]
+    fn transition_preview_response_reports_runtime_session_metadata() {
+        let collection = SceneCollection::default_collection(crate::now_utc());
+        let request = TransitionPreviewFrameRequest {
+            version: 1,
+            request_id: "transition-runtime-session-test".to_string(),
+            collection_id: collection.id.clone(),
+            transition_id: collection.active_transition_id.clone(),
+            from_scene_id: collection.active_scene_id.clone(),
+            to_scene_id: collection.active_scene_id.clone(),
+            frame_index: 1,
+            width: 1280,
+            height: 720,
+            framerate: 30,
+            frame_format: CompositorFrameFormat::Rgba8,
+            scale_mode: CompositorScaleMode::Fit,
+            encoding: PreviewFrameEncoding::None,
+            include_debug_overlay: false,
+            requested_at: crate::now_utc(),
+        };
+        let response = create_transition_preview_frame_response(&request, &collection);
+
+        assert_eq!(response.runtime_session.target, "transition_preview");
+        assert_eq!(
+            response.runtime_session_id,
+            response.runtime_session.runtime_session_id
+        );
+        assert_eq!(response.runtime_session.sources.len(), 1);
+        assert_eq!(response.runtime_session.target_framerate, 30);
     }
 
     #[test]

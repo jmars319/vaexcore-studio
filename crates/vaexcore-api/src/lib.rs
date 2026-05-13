@@ -40,7 +40,10 @@ use vaexcore_core::{
     create_scene_activation_response, create_scene_runtime_state_update_response,
     create_transition_preview_frame_response, scene_runtime_snapshot,
     scene_runtime_snapshot_with_options, AudioGraphRuntimeSnapshot, CaptureProviderRuntimeSnapshot,
-    CompositorRenderRequest, CompositorRenderResponse, ProgramPreviewFrameRequest,
+    CompositorRenderRequest, CompositorRenderResponse, DesignerReadinessReport,
+    DesignerReadinessReportItem, DesignerRuntimeReadinessState,
+    DesignerRuntimeSessionControlRequest, DesignerRuntimeSessionControlResponse,
+    DesignerRuntimeSessionSnapshot, DesignerRuntimeSessionState, ProgramPreviewFrameRequest,
     ProgramPreviewFrameResponse,
 };
 use vaexcore_core::{
@@ -48,12 +51,12 @@ use vaexcore_core::{
     CommandStatus, ConnectedClientsSnapshot, HealthResponse, LocalRuntimeDependency,
     LocalRuntimeHealth, Marker, MarkersSnapshot, MediaPipelinePlan, MediaPipelinePlanRequest,
     MediaPipelineValidation, MediaProfileInput, PipelineIntent, PreviewFrameRequest,
-    PreviewFrameResponse, ProfilesSnapshot, RecentRecordingsSnapshot, SceneActivationRequest,
-    SceneActivationResponse, SceneCollection, SceneCollectionBundle, SceneCollectionImportResult,
-    SceneRuntimeBindingsSnapshot, SceneRuntimeSnapshot, SceneRuntimeStateUpdateRequest,
-    SceneRuntimeStateUpdateResponse, SceneRuntimeStatus, SceneValidationResult, SecretStore,
-    StreamDestinationInput, StudioEvent, StudioEventKind, StudioStatus,
-    TransitionPreviewFrameRequest, TransitionPreviewFrameResponse, APP_NAME,
+    PreviewFrameResponse, ProfilesSnapshot, RecentRecordingsSnapshot, Scene,
+    SceneActivationRequest, SceneActivationResponse, SceneCollection, SceneCollectionBundle,
+    SceneCollectionImportResult, SceneRuntimeBindingsSnapshot, SceneRuntimeSnapshot,
+    SceneRuntimeStateUpdateRequest, SceneRuntimeStateUpdateResponse, SceneRuntimeStatus,
+    SceneValidationResult, SecretStore, StreamDestinationInput, StudioEvent, StudioEventKind,
+    StudioStatus, TransitionPreviewFrameRequest, TransitionPreviewFrameResponse, APP_NAME,
 };
 use vaexcore_media::{
     build_dry_run_pipeline_plan, DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor,
@@ -92,6 +95,10 @@ pub struct ApiState {
     pub pipeline_plan_path: Option<PathBuf>,
     pub pipeline_config_path: Option<PathBuf>,
     pub scene_runtime: RwLock<SceneRuntimeSnapshot>,
+    pub designer_runtime_paused: RwLock<bool>,
+    pub designer_runtime_last_snapshot: RwLock<Option<DesignerRuntimeSessionSnapshot>>,
+    pub designer_runtime_restart_count: AtomicU64,
+    pub designer_runtime_cleanup_count: AtomicU64,
     pub preview_frame_index: AtomicU64,
     pub program_preview_frame_index: AtomicU64,
     pub audio_graph_frame_index: AtomicU64,
@@ -122,6 +129,10 @@ impl ApiState {
             pipeline_plan_path: config.pipeline_plan_path.clone(),
             pipeline_config_path: config.pipeline_config_path.clone(),
             scene_runtime: RwLock::new(scene_runtime),
+            designer_runtime_paused: RwLock::new(false),
+            designer_runtime_last_snapshot: RwLock::new(None),
+            designer_runtime_restart_count: AtomicU64::new(0),
+            designer_runtime_cleanup_count: AtomicU64::new(0),
             preview_frame_index: AtomicU64::new(0),
             program_preview_frame_index: AtomicU64::new(0),
             audio_graph_frame_index: AtomicU64::new(0),
@@ -160,6 +171,10 @@ impl ApiState {
             pipeline_plan_path: None,
             pipeline_config_path: None,
             scene_runtime: RwLock::new(scene_runtime),
+            designer_runtime_paused: RwLock::new(false),
+            designer_runtime_last_snapshot: RwLock::new(None),
+            designer_runtime_restart_count: AtomicU64::new(0),
+            designer_runtime_cleanup_count: AtomicU64::new(0),
             preview_frame_index: AtomicU64::new(0),
             program_preview_frame_index: AtomicU64::new(0),
             audio_graph_frame_index: AtomicU64::new(0),
@@ -345,6 +360,26 @@ pub fn router(state: Arc<ApiState>) -> Router {
             get(get_scene_runtime_audio_graph),
         )
         .route(
+            "/scene-runtime/designer-session",
+            get(get_scene_runtime_designer_session),
+        )
+        .route(
+            "/scene-runtime/designer-session/pause",
+            post(post_scene_runtime_designer_session_pause),
+        )
+        .route(
+            "/scene-runtime/designer-session/restart",
+            post(post_scene_runtime_designer_session_restart),
+        )
+        .route(
+            "/scene-runtime/designer-session/cleanup",
+            post(post_scene_runtime_designer_session_cleanup),
+        )
+        .route(
+            "/scene-runtime/readiness-report",
+            get(get_scene_runtime_readiness_report),
+        )
+        .route(
             "/media/plan",
             get(default_pipeline_plan).post(post_pipeline_plan),
         )
@@ -515,6 +550,9 @@ fn command_action(method: &Method, path: &str) -> Option<String> {
             "scene_runtime.transition_preview_frame"
         }
         ("POST", "/scene-runtime/validate-graph") => "scene_runtime.validate_graph",
+        ("POST", "/scene-runtime/designer-session/pause") => "scene_runtime.designer.pause",
+        ("POST", "/scene-runtime/designer-session/restart") => "scene_runtime.designer.restart",
+        ("POST", "/scene-runtime/designer-session/cleanup") => "scene_runtime.designer.cleanup",
         ("POST", "/media/plan") => "media.plan",
         ("POST", "/media/validate") => "media.validate",
         ("POST", "/marker/create") => "marker.create",
@@ -864,7 +902,20 @@ async fn post_scene_runtime_preview_frame(
     auth::authorize_headers(&headers, &state.auth)?;
     let collection = state.store.scene_collection()?;
     let frame_index = state.preview_frame_index.fetch_add(1, Ordering::Relaxed);
-    let response = create_preview_frame_response(&request, &collection, frame_index);
+    let mut response = create_preview_frame_response(&request, &collection, frame_index);
+    apply_designer_runtime_control_state(&state, &mut response.runtime_session).await;
+    sync_response_runtime_summary(
+        &mut response.runtime_session_id,
+        &mut response.session_state,
+        &mut response.last_frame_at,
+        &mut response.stale_frame_ms,
+        &mut response.restart_count,
+        &mut response.dropped_frames,
+        &mut response.provider_status,
+        &mut response.readiness_state,
+        &response.runtime_session,
+    );
+    *state.designer_runtime_last_snapshot.write().await = Some(response.runtime_session.clone());
     Ok(Json(ApiResponse::ok(response)))
 }
 
@@ -878,7 +929,20 @@ async fn post_scene_runtime_program_preview_frame(
     let frame_index = state
         .program_preview_frame_index
         .fetch_add(1, Ordering::Relaxed);
-    let response = create_program_preview_frame_response(&request, &collection, frame_index);
+    let mut response = create_program_preview_frame_response(&request, &collection, frame_index);
+    apply_designer_runtime_control_state(&state, &mut response.runtime_session).await;
+    sync_response_runtime_summary(
+        &mut response.runtime_session_id,
+        &mut response.session_state,
+        &mut response.last_frame_at,
+        &mut response.stale_frame_ms,
+        &mut response.restart_count,
+        &mut response.dropped_frames,
+        &mut response.provider_status,
+        &mut response.readiness_state,
+        &response.runtime_session,
+    );
+    *state.designer_runtime_last_snapshot.write().await = Some(response.runtime_session.clone());
     Ok(Json(ApiResponse::ok(response)))
 }
 
@@ -889,7 +953,20 @@ async fn post_scene_runtime_transition_preview_frame(
 ) -> Result<Json<ApiResponse<TransitionPreviewFrameResponse>>, ApiError> {
     auth::authorize_headers(&headers, &state.auth)?;
     let collection = state.store.scene_collection()?;
-    let response = create_transition_preview_frame_response(&request, &collection);
+    let mut response = create_transition_preview_frame_response(&request, &collection);
+    apply_designer_runtime_control_state(&state, &mut response.runtime_session).await;
+    sync_response_runtime_summary(
+        &mut response.runtime_session_id,
+        &mut response.session_state,
+        &mut response.last_frame_at,
+        &mut response.stale_frame_ms,
+        &mut response.restart_count,
+        &mut response.dropped_frames,
+        &mut response.provider_status,
+        &mut response.readiness_state,
+        &response.runtime_session,
+    );
+    *state.designer_runtime_last_snapshot.write().await = Some(response.runtime_session.clone());
     Ok(Json(ApiResponse::ok(response)))
 }
 
@@ -958,6 +1035,453 @@ async fn get_scene_runtime_audio_graph(
     Ok(Json(ApiResponse::ok(
         build_live_audio_graph_runtime_snapshot(scene, frame_index),
     )))
+}
+
+async fn get_scene_runtime_designer_session(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<DesignerRuntimeSessionSnapshot>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let snapshot = designer_runtime_session_snapshot_for_state(&state).await?;
+    Ok(Json(ApiResponse::ok(snapshot)))
+}
+
+async fn post_scene_runtime_designer_session_pause(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(request): Json<DesignerRuntimeSessionControlRequest>,
+) -> Result<Json<ApiResponse<DesignerRuntimeSessionControlResponse>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let paused = request.paused.unwrap_or(true);
+    *state.designer_runtime_paused.write().await = paused;
+    let snapshot = designer_runtime_session_snapshot_for_state(&state).await?;
+    Ok(Json(ApiResponse::ok(
+        DesignerRuntimeSessionControlResponse {
+            changed: true,
+            action: if paused { "pause" } else { "resume" }.to_string(),
+            detail: request.reason.unwrap_or_else(|| {
+                if paused {
+                    "Designer runtime preview sessions paused.".to_string()
+                } else {
+                    "Designer runtime preview sessions resumed.".to_string()
+                }
+            }),
+            snapshot,
+        },
+    )))
+}
+
+async fn post_scene_runtime_designer_session_restart(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(request): Json<DesignerRuntimeSessionControlRequest>,
+) -> Result<Json<ApiResponse<DesignerRuntimeSessionControlResponse>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    state
+        .designer_runtime_restart_count
+        .fetch_add(1, Ordering::Relaxed);
+    let snapshot = designer_runtime_session_snapshot_for_state(&state).await?;
+    Ok(Json(ApiResponse::ok(
+        DesignerRuntimeSessionControlResponse {
+            changed: true,
+            action: "restart".to_string(),
+            detail: request
+                .source_id
+                .map(|source_id| {
+                    format!("Designer runtime source \"{source_id}\" was marked for restart.")
+                })
+                .unwrap_or_else(|| {
+                    "Designer runtime sessions were marked for restart.".to_string()
+                }),
+            snapshot,
+        },
+    )))
+}
+
+async fn post_scene_runtime_designer_session_cleanup(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    Json(_request): Json<DesignerRuntimeSessionControlRequest>,
+) -> Result<Json<ApiResponse<DesignerRuntimeSessionControlResponse>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    state
+        .designer_runtime_cleanup_count
+        .fetch_add(1, Ordering::Relaxed);
+    let snapshot = designer_runtime_session_snapshot_for_state(&state).await?;
+    Ok(Json(ApiResponse::ok(
+        DesignerRuntimeSessionControlResponse {
+            changed: true,
+            action: "cleanup".to_string(),
+            detail: "Inactive Designer runtime sessions were marked for cleanup.".to_string(),
+            snapshot,
+        },
+    )))
+}
+
+async fn get_scene_runtime_readiness_report(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<DesignerReadinessReport>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    Ok(Json(ApiResponse::ok(
+        designer_readiness_report_for_state(&state).await?,
+    )))
+}
+
+async fn designer_runtime_session_snapshot_for_state(
+    state: &ApiState,
+) -> Result<DesignerRuntimeSessionSnapshot, ApiError> {
+    if let Some(mut snapshot) = state.designer_runtime_last_snapshot.read().await.clone() {
+        apply_designer_runtime_control_state(state, &mut snapshot).await;
+        return Ok(snapshot);
+    }
+
+    let collection = state.store.scene_collection()?;
+    let scene = collection.active_scene().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "scene_runtime_no_active_scene",
+            "scene runtime has no active scene",
+        )
+    })?;
+    let request = PreviewFrameRequest {
+        version: 1,
+        request_id: "designer-session-snapshot".to_string(),
+        scene_id: scene.id.clone(),
+        width: scene.canvas.width,
+        height: scene.canvas.height,
+        framerate: 30,
+        frame_format: vaexcore_core::CompositorFrameFormat::Rgba8,
+        scale_mode: vaexcore_core::CompositorScaleMode::Fit,
+        encoding: vaexcore_core::PreviewFrameEncoding::None,
+        include_debug_overlay: false,
+        requested_at: now_utc(),
+    };
+    let frame_index = state.preview_frame_index.fetch_add(1, Ordering::Relaxed);
+    let response = create_preview_frame_response(&request, &collection, frame_index);
+    let mut snapshot = response.runtime_session;
+    apply_designer_runtime_control_state(state, &mut snapshot).await;
+    *state.designer_runtime_last_snapshot.write().await = Some(snapshot.clone());
+    Ok(snapshot)
+}
+
+async fn apply_designer_runtime_control_state(
+    state: &ApiState,
+    snapshot: &mut DesignerRuntimeSessionSnapshot,
+) {
+    let paused = *state.designer_runtime_paused.read().await;
+    let restart_count = state.designer_runtime_restart_count.load(Ordering::Relaxed);
+    let cleanup_count = state.designer_runtime_cleanup_count.load(Ordering::Relaxed);
+
+    snapshot.restart_count = restart_count;
+    if cleanup_count > 0 && !snapshot.provider_status.contains("cleanup") {
+        snapshot.provider_status = format!(
+            "{} / cleanup requests {}",
+            snapshot.provider_status, cleanup_count
+        );
+    }
+    if paused {
+        snapshot.session_state = DesignerRuntimeSessionState::Paused;
+    }
+    for source in &mut snapshot.sources {
+        source.restart_count = restart_count;
+        if paused && source.session_state == DesignerRuntimeSessionState::Running {
+            source.session_state = DesignerRuntimeSessionState::Paused;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sync_response_runtime_summary(
+    runtime_session_id: &mut String,
+    session_state: &mut DesignerRuntimeSessionState,
+    last_frame_at: &mut chrono::DateTime<chrono::Utc>,
+    stale_frame_ms: &mut u64,
+    restart_count: &mut u64,
+    dropped_frames: &mut u64,
+    provider_status: &mut String,
+    readiness_state: &mut DesignerRuntimeReadinessState,
+    snapshot: &DesignerRuntimeSessionSnapshot,
+) {
+    *runtime_session_id = snapshot.runtime_session_id.clone();
+    *session_state = snapshot.session_state.clone();
+    *last_frame_at = snapshot.last_frame_at;
+    *stale_frame_ms = snapshot.stale_frame_ms;
+    *restart_count = snapshot.restart_count;
+    *dropped_frames = snapshot.dropped_frames;
+    *provider_status = snapshot.provider_status.clone();
+    *readiness_state = snapshot.readiness_state.clone();
+}
+
+async fn designer_readiness_report_for_state(
+    state: &ApiState,
+) -> Result<DesignerReadinessReport, ApiError> {
+    let collection = state.store.scene_collection()?;
+    let active_scene = collection.active_scene().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "scene_runtime_no_active_scene",
+            "scene runtime has no active scene",
+        )
+    })?;
+    let validation = state.store.validate_scene_collection(&collection);
+    let runtime = designer_runtime_session_snapshot_for_state(state).await?;
+    let capture = build_capture_provider_runtime_snapshot(active_scene);
+    let audio = build_live_audio_graph_runtime_snapshot(active_scene, 0);
+    let pipeline = plan_pipeline(state, default_pipeline_plan_request(state)?).await;
+
+    let mut items = vec![
+        DesignerReadinessReportItem {
+            id: "scene_model".to_string(),
+            label: "Scene model".to_string(),
+            state: if validation.ok {
+                DesignerRuntimeReadinessState::Ready
+            } else {
+                DesignerRuntimeReadinessState::Blocked
+            },
+            detail: if validation.ok {
+                "Saved scene collection validates.".to_string()
+            } else {
+                format!("{} scene validation issue(s).", validation.issues.len())
+            },
+        },
+        DesignerReadinessReportItem {
+            id: "runtime_preview".to_string(),
+            label: "Runtime preview".to_string(),
+            state: runtime.readiness_state.clone(),
+            detail: runtime.provider_status.clone(),
+        },
+        DesignerReadinessReportItem {
+            id: "capture".to_string(),
+            label: "Capture sources".to_string(),
+            state: readiness_from_validation(
+                capture.providers.is_empty(),
+                &capture.validation.errors,
+                &capture.validation.warnings,
+            ),
+            detail: format!(
+                "{} provider(s), {} warning(s), {} error(s).",
+                capture.providers.len(),
+                capture.validation.warnings.len(),
+                capture.validation.errors.len()
+            ),
+        },
+        DesignerReadinessReportItem {
+            id: "audio".to_string(),
+            label: "Audio graph".to_string(),
+            state: readiness_from_validation(
+                audio.sources.is_empty(),
+                &audio.validation.errors,
+                &audio.validation.warnings,
+            ),
+            detail: format!(
+                "{} source(s), {} warning(s), {} error(s).",
+                audio.sources.len(),
+                audio.validation.warnings.len(),
+                audio.validation.errors.len()
+            ),
+        },
+        DesignerReadinessReportItem {
+            id: "output_handoff".to_string(),
+            label: "Output handoff".to_string(),
+            state: readiness_from_validation(
+                false,
+                &pipeline.validation().errors,
+                &pipeline.validation().warnings,
+            ),
+            detail: "Dry-run output handoff contract is available; encoder execution remains outside Scene Designer.".to_string(),
+        },
+    ];
+
+    items.extend(source_family_report_items(active_scene, &runtime));
+    let overall = items
+        .iter()
+        .fold(DesignerRuntimeReadinessState::Ready, |current, item| {
+            worse_readiness(current, item.state.clone())
+        });
+
+    Ok(DesignerReadinessReport {
+        version: 1,
+        collection_id: collection.id.clone(),
+        active_scene_id: active_scene.id.clone(),
+        active_scene_name: active_scene.name.clone(),
+        generated_at: now_utc(),
+        overall,
+        items,
+        windows_handoff: vec![
+            "Run npm run validate:windows on this repo from the Windows checkout.".to_string(),
+            "Launch Studio on Windows and verify display, window, camera, browser, media, text, transitions, filters, and readiness panels.".to_string(),
+            "Confirm Windows capture permission/device failures are reported as degraded or blocked, not as ready.".to_string(),
+        ],
+    })
+}
+
+#[derive(Clone, Copy)]
+enum SceneSourceFamily {
+    Browser,
+    Media,
+    Transitions,
+    Filters,
+}
+
+fn source_family_report_items(
+    scene: &Scene,
+    runtime: &DesignerRuntimeSessionSnapshot,
+) -> Vec<DesignerReadinessReportItem> {
+    let families = [
+        ("browser", "Browser overlays", SceneSourceFamily::Browser),
+        ("media", "Local media", SceneSourceFamily::Media),
+        ("transitions", "Transitions", SceneSourceFamily::Transitions),
+        ("filters", "Filters", SceneSourceFamily::Filters),
+    ];
+    families
+        .into_iter()
+        .map(|(id, label, family)| {
+            let state = source_family_readiness(scene, runtime, family);
+            DesignerReadinessReportItem {
+                id: id.to_string(),
+                label: label.to_string(),
+                state: state.clone(),
+                detail: source_family_detail(scene, runtime, family, state),
+            }
+        })
+        .collect()
+}
+
+fn source_family_readiness(
+    scene: &Scene,
+    runtime: &DesignerRuntimeSessionSnapshot,
+    family: SceneSourceFamily,
+) -> DesignerRuntimeReadinessState {
+    match family {
+        SceneSourceFamily::Transitions => {
+            if runtime.validation.errors.is_empty() {
+                DesignerRuntimeReadinessState::Ready
+            } else {
+                DesignerRuntimeReadinessState::Blocked
+            }
+        }
+        SceneSourceFamily::Filters => {
+            let filter_count = scene
+                .sources
+                .iter()
+                .map(|source| source.filters.len())
+                .sum::<usize>();
+            if filter_count == 0 {
+                DesignerRuntimeReadinessState::NotApplicable
+            } else if runtime.validation.errors.is_empty() {
+                DesignerRuntimeReadinessState::Ready
+            } else {
+                DesignerRuntimeReadinessState::Blocked
+            }
+        }
+        SceneSourceFamily::Browser | SceneSourceFamily::Media => {
+            let source_kind = match family {
+                SceneSourceFamily::Browser => vaexcore_core::SceneSourceKind::BrowserOverlay,
+                SceneSourceFamily::Media => vaexcore_core::SceneSourceKind::ImageMedia,
+                SceneSourceFamily::Transitions | SceneSourceFamily::Filters => unreachable!(),
+            };
+            let source_count = scene
+                .sources
+                .iter()
+                .filter(|source| source.kind == source_kind)
+                .count();
+            if source_count == 0 {
+                return DesignerRuntimeReadinessState::NotApplicable;
+            }
+            let mut state = DesignerRuntimeReadinessState::Ready;
+            let mut saw_runtime = false;
+            for source in runtime
+                .sources
+                .iter()
+                .filter(|source| source.source_kind == source_kind)
+            {
+                saw_runtime = true;
+                state = worse_readiness(state, source.readiness_state.clone());
+            }
+            if saw_runtime {
+                state
+            } else {
+                DesignerRuntimeReadinessState::Degraded
+            }
+        }
+    }
+}
+
+fn source_family_detail(
+    scene: &Scene,
+    runtime: &DesignerRuntimeSessionSnapshot,
+    family: SceneSourceFamily,
+    state: DesignerRuntimeReadinessState,
+) -> String {
+    match family {
+        SceneSourceFamily::Browser => {
+            let configured = scene
+                .sources
+                .iter()
+                .filter(|source| source.kind == vaexcore_core::SceneSourceKind::BrowserOverlay)
+                .count();
+            format!("{configured} browser source(s); runtime state {state:?}.")
+        }
+        SceneSourceFamily::Media => {
+            let configured = scene
+                .sources
+                .iter()
+                .filter(|source| source.kind == vaexcore_core::SceneSourceKind::ImageMedia)
+                .count();
+            format!("{configured} media source(s); runtime state {state:?}.")
+        }
+        SceneSourceFamily::Transitions => {
+            "Pixel transition preview runtime is available for cut, fade, swipe, and stinger fallback states.".to_string()
+        }
+        SceneSourceFamily::Filters => {
+            let filter_count = scene
+                .sources
+                .iter()
+                .map(|source| source.filters.len())
+                .sum::<usize>();
+            format!(
+                "{filter_count} filter(s); latest runtime session {}.",
+                runtime.runtime_session_id
+            )
+        }
+    }
+}
+
+fn readiness_from_validation(
+    not_applicable: bool,
+    errors: &[String],
+    warnings: &[String],
+) -> DesignerRuntimeReadinessState {
+    if not_applicable {
+        DesignerRuntimeReadinessState::NotApplicable
+    } else if !errors.is_empty() {
+        DesignerRuntimeReadinessState::Blocked
+    } else if !warnings.is_empty() {
+        DesignerRuntimeReadinessState::Degraded
+    } else {
+        DesignerRuntimeReadinessState::Ready
+    }
+}
+
+fn worse_readiness(
+    current: DesignerRuntimeReadinessState,
+    next: DesignerRuntimeReadinessState,
+) -> DesignerRuntimeReadinessState {
+    if readiness_rank(&next) > readiness_rank(&current) {
+        next
+    } else {
+        current
+    }
+}
+
+fn readiness_rank(state: &DesignerRuntimeReadinessState) -> u8 {
+    match state {
+        DesignerRuntimeReadinessState::Ready => 0,
+        DesignerRuntimeReadinessState::NotApplicable => 1,
+        DesignerRuntimeReadinessState::Degraded => 2,
+        DesignerRuntimeReadinessState::Blocked => 3,
+    }
 }
 
 async fn get_clients(
@@ -2189,6 +2713,13 @@ mod tests {
             "target-runtime-preview"
         );
         assert_eq!(preview["data"]["rendered_frame"]["renderer"], "software");
+        assert_eq!(
+            preview["data"]["runtime_session"]["target"],
+            "runtime_preview"
+        );
+        assert!(preview["data"]["runtime_session"]["sources"]
+            .as_array()
+            .is_some_and(|sources| !sources.is_empty()));
 
         let (status, program_preview) = request_json(
             app.clone(),
@@ -2223,6 +2754,10 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("software-program:"));
+        assert_eq!(
+            program_preview["data"]["runtime_session"]["target"],
+            "program_preview"
+        );
 
         let (status, bindings) = request_json(
             app.clone(),
@@ -2269,6 +2804,53 @@ mod tests {
                 .unwrap()
                 >= 0.0
         );
+
+        let (status, session) = request_json(
+            app.clone(),
+            "GET",
+            "/scene-runtime/designer-session".to_string(),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(session["data"]["scene_id"], "scene-main");
+        assert!(session["data"]["runtime_session_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("designer:"));
+
+        let (status, paused) = request_json(
+            app.clone(),
+            "POST",
+            "/scene-runtime/designer-session/pause".to_string(),
+            Some(json!({ "paused": true, "reason": "test pause" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(paused["data"]["snapshot"]["session_state"], "paused");
+
+        let (status, restarted) = request_json(
+            app.clone(),
+            "POST",
+            "/scene-runtime/designer-session/restart".to_string(),
+            Some(json!({ "source_id": "source-main-display" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(restarted["data"]["action"], "restart");
+
+        let (status, report) = request_json(
+            app.clone(),
+            "GET",
+            "/scene-runtime/readiness-report".to_string(),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(report["data"]["active_scene_id"], "scene-main");
+        assert!(report["data"]["windows_handoff"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()));
 
         let (status, plan) =
             request_json(app.clone(), "GET", "/media/plan".to_string(), None).await;

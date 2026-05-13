@@ -599,6 +599,8 @@ test("scene runtime contracts validate preview, render, binding, and transition 
     evaluateCompositorFrame,
     validateCompositorRenderRequest,
     validateCompositorRenderResponse,
+    validateDesignerReadinessReport,
+    validateDesignerRuntimeSessionSnapshot,
     validatePreviewFrameRequest,
     validatePreviewFrameResponse,
     validateProgramPreviewFrameRequest,
@@ -711,6 +713,47 @@ test("scene runtime contracts validate preview, render, binding, and transition 
   assert.equal(validateCompositorRenderResponse(renderResponse).ready, true);
   assert.equal(validatePreviewFrameResponse(previewResponse).ready, true);
   assert.equal(validateProgramPreviewFrameResponse(programPreviewResponse).ready, true);
+  assert.equal(
+    validateDesignerRuntimeSessionSnapshot(previewResponse.runtime_session).ready,
+    true,
+  );
+  assert.equal(
+    previewResponse.runtime_session_id,
+    previewResponse.runtime_session.runtime_session_id,
+  );
+  assert.equal(
+    validateDesignerRuntimeSessionSnapshot(programPreviewResponse.runtime_session).ready,
+    true,
+  );
+  assert.equal(
+    programPreviewResponse.runtime_session_id,
+    programPreviewResponse.runtime_session.runtime_session_id,
+  );
+  assert.equal(programPreviewResponse.runtime_session.target, "program_preview");
+  const readinessReport = {
+    version: 1,
+    collection_id: collection.id,
+    active_scene_id: scene.id,
+    active_scene_name: scene.name,
+    generated_at: "2026-05-08T12:15:00.050Z",
+    overall: "degraded",
+    items: [
+      {
+        id: "scene-model",
+        label: "Scene Model",
+        state: "ready",
+        detail: "Scene graph validates.",
+      },
+      {
+        id: "runtime-preview",
+        label: "Runtime Preview",
+        state: previewResponse.readiness_state,
+        detail: previewResponse.provider_status,
+      },
+    ],
+    windows_handoff: ["Run npm run validate:windows on a Windows machine."],
+  };
+  assert.equal(validateDesignerReadinessReport(readinessReport).ready, true);
   const programPreviewCommand = createSceneRuntimeCommand(
     "request_program_preview_frame",
     programPreviewRequest,
