@@ -126,6 +126,36 @@ const targets = [
     ],
   },
   {
+    name: "designer-capture-provider-runtime",
+    path: "/?section=designer",
+    minBytes: 50_000,
+    interactions: [
+      {
+        type: "click",
+        selector:
+          '[data-testid="designer-source-select"][data-source-id="source-main-display"]',
+      },
+      {
+        type: "assert",
+        expression:
+          'Boolean(document.querySelector("[data-testid=\\"designer-capture-provider-runtime\\"]"))',
+        message: "Designer capture provider runtime panel did not render.",
+      },
+      {
+        type: "assert",
+        expression:
+          'document.querySelector("[data-testid=\\"designer-capture-provider-runtime\\"]")?.textContent?.includes("Capture Provider Runtime")',
+        message: "Designer capture provider runtime panel did not show its title.",
+      },
+      {
+        type: "assert",
+        expression:
+          'document.querySelector("[data-testid=\\"designer-capture-provider-runtime\\"]")?.textContent?.includes("permission") || document.querySelector("[data-testid=\\"designer-capture-provider-runtime\\"]")?.textContent?.includes("running") || document.querySelector("[data-testid=\\"designer-capture-provider-runtime\\"]")?.textContent?.includes("pending")',
+        message: "Designer capture provider runtime panel did not show lifecycle/readiness state.",
+      },
+    ],
+  },
+  {
     name: "designer-multi-select",
     path: "/?section=designer",
     minBytes: 50_000,

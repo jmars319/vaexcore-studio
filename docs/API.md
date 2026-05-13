@@ -257,6 +257,10 @@ Accepts a `CompositorRenderRequest`, evaluates the render graph contract, and re
 
 Returns capture and audio binding contracts for the active saved scene.
 
+### `GET /scene-runtime/capture-providers`
+
+Returns the active scene capture provider runtime snapshot. V1 uses deterministic mocked providers that mirror display, window, camera, microphone, and system-audio bindings, report lifecycle/readiness state, frame shape, latency, dropped-frame counters, and validation warnings, but do not start platform capture.
+
 ### `GET /scene-runtime/audio-graph`
 
 Returns the active scene audio graph runtime snapshot with simulated pre-filter and post-filter meter levels, ordered `audio_gain` / `noise_gate` / `compressor` diagnostics, gain, mute, monitor, sync offset, bus state, and validation metadata. This endpoint does not start live audio capture.

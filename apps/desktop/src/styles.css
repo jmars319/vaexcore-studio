@@ -1209,7 +1209,15 @@ nav {
   justify-content: flex-start;
 }
 
+.capture-provider-runtime-panel {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .image-asset-runtime-panel .designer-preview-meta,
+.capture-provider-runtime-panel .designer-preview-meta,
 .text-runtime-panel .designer-preview-meta,
 .audio-filter-runtime-panel .designer-preview-meta {
   margin-top: 0;

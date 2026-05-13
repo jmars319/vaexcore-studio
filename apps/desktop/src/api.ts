@@ -3,6 +3,7 @@ import type {
   AppSettings,
   AudioGraphRuntimeSnapshot,
   AuditLogSnapshot,
+  CaptureProviderRuntimeSnapshot,
   CaptureSourceInventory,
   CommandStatus,
   ConnectedClientsSnapshot,
@@ -605,6 +606,11 @@ export const StudioApi = {
     }),
   sceneRuntimeBindings: (config: RuntimeApiConfig) =>
     apiRequest<SceneRuntimeBindingsSnapshot>(config, "/scene-runtime/bindings"),
+  sceneRuntimeCaptureProviders: (config: RuntimeApiConfig) =>
+    apiRequest<CaptureProviderRuntimeSnapshot>(
+      config,
+      "/scene-runtime/capture-providers",
+    ),
   sceneRuntimeAudioGraph: (config: RuntimeApiConfig) =>
     apiRequest<AudioGraphRuntimeSnapshot>(config, "/scene-runtime/audio-graph"),
   createProfile: (config: RuntimeApiConfig, request: CreateProfileRequest) =>

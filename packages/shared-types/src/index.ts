@@ -1323,6 +1323,13 @@ export type CaptureFrameBindingStatus =
   | "permission_required"
   | "unavailable";
 
+export type CaptureProviderLifecycleState =
+  | "idle"
+  | "starting"
+  | "running"
+  | "stopping"
+  | "error";
+
 export interface CaptureFrameBinding {
   scene_source_id: string;
   scene_source_name: string;
@@ -1340,11 +1347,66 @@ export interface CaptureFrameBinding {
   status_detail: string;
 }
 
+export interface CaptureProviderStatus {
+  provider_id: string;
+  scene_source_id: string;
+  scene_source_name: string;
+  capture_source_id: string | null;
+  capture_kind: CaptureSourceKind;
+  media_kind: CaptureFrameMediaKind;
+  lifecycle: CaptureProviderLifecycleState;
+  binding_status: CaptureFrameBindingStatus;
+  status_detail: string;
+  width: number | null;
+  height: number | null;
+  framerate: number | null;
+  sample_rate: number | null;
+  channels: number | null;
+  format: CaptureFrameFormat;
+  frame_index: number;
+  dropped_frames: number;
+  latency_ms: number | null;
+}
+
+export interface CaptureVideoFramePacket {
+  provider_id: string;
+  scene_source_id: string;
+  capture_source_id: string | null;
+  frame_index: number;
+  width: number;
+  height: number;
+  format: CaptureFrameFormat;
+  pts_nanos: number;
+  duration_nanos: number;
+  pixels: number[];
+}
+
+export interface CaptureAudioPacket {
+  provider_id: string;
+  scene_source_id: string;
+  capture_source_id: string | null;
+  frame_index: number;
+  sample_rate: number;
+  channels: number;
+  format: CaptureFrameFormat;
+  pts_nanos: number;
+  duration_nanos: number;
+  samples_f32: number[];
+}
+
 export interface CaptureFramePlan {
   version: number;
   scene_id: string;
   scene_name: string;
   bindings: CaptureFrameBinding[];
+  validation: CaptureFrameValidation;
+}
+
+export interface CaptureProviderRuntimeSnapshot {
+  version: number;
+  scene_id: string;
+  scene_name: string;
+  providers: CaptureProviderStatus[];
   validation: CaptureFrameValidation;
 }
 
@@ -2397,6 +2459,130 @@ export function validateCaptureFramePlan(
     ready: errors.length === 0,
     warnings,
     errors,
+  };
+}
+
+export function buildCaptureProviderRuntimeSnapshot(
+  scene: Scene,
+): CaptureProviderRuntimeSnapshot {
+  const framePlan = buildCaptureFramePlan(scene);
+  const providers = framePlan.bindings.map((binding) =>
+    captureProviderStatusFromBinding(binding),
+  );
+  const snapshot: CaptureProviderRuntimeSnapshot = {
+    version: 1,
+    scene_id: scene.id,
+    scene_name: scene.name,
+    providers,
+    validation: {
+      ready: true,
+      warnings: [],
+      errors: [],
+    },
+  };
+  snapshot.validation = validateCaptureProviderRuntimeSnapshot(snapshot);
+  return snapshot;
+}
+
+export function validateCaptureProviderRuntimeSnapshot(
+  snapshot: CaptureProviderRuntimeSnapshot,
+): CaptureFrameValidation {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+  const providerIds = new Set<string>();
+
+  if (!Number.isInteger(snapshot.version) || snapshot.version < 1) {
+    errors.push("Capture provider snapshot version must be a positive integer.");
+  }
+  if (!snapshot.scene_id.trim()) {
+    errors.push("Capture provider snapshot scene id is required.");
+  }
+  if (!snapshot.scene_name.trim()) {
+    errors.push("Capture provider snapshot scene name is required.");
+  }
+  if (snapshot.providers.length === 0) {
+    warnings.push("Capture provider snapshot has no providers.");
+  }
+
+  snapshot.providers.forEach((provider) => {
+    if (providerIds.has(provider.provider_id)) {
+      errors.push(`Duplicate capture provider "${provider.provider_id}".`);
+    }
+    providerIds.add(provider.provider_id);
+    if (!provider.provider_id.trim()) {
+      errors.push("Capture provider id is required.");
+    }
+    if (!provider.scene_source_id.trim()) {
+      errors.push(`Capture provider "${provider.provider_id}" source id is required.`);
+    }
+    if (!provider.scene_source_name.trim()) {
+      errors.push(`Capture provider "${provider.provider_id}" source name is required.`);
+    }
+    if (provider.media_kind === "video") {
+      validateNullablePositiveNumber(provider.width, `${provider.provider_id}.width`, errors);
+      validateNullablePositiveNumber(provider.height, `${provider.provider_id}.height`, errors);
+      validateNullablePositiveNumber(
+        provider.framerate,
+        `${provider.provider_id}.framerate`,
+        errors,
+      );
+    } else {
+      validateNullablePositiveNumber(
+        provider.sample_rate,
+        `${provider.provider_id}.sample_rate`,
+        errors,
+      );
+      validateNullablePositiveNumber(
+        provider.channels,
+        `${provider.provider_id}.channels`,
+        errors,
+      );
+    }
+    if (provider.lifecycle !== "running") {
+      warnings.push(
+        `${provider.scene_source_name} provider is ${provider.lifecycle}: ${provider.status_detail}`,
+      );
+    }
+  });
+
+  return {
+    ready: errors.length === 0,
+    warnings,
+    errors,
+  };
+}
+
+function captureProviderStatusFromBinding(
+  binding: CaptureFrameBinding,
+): CaptureProviderStatus {
+  const running = binding.status === "ready";
+  const lifecycle: CaptureProviderLifecycleState =
+    binding.status === "ready"
+      ? "running"
+      : binding.status === "unavailable"
+        ? "error"
+        : "idle";
+  return {
+    provider_id: `provider:${binding.scene_source_id}`,
+    scene_source_id: binding.scene_source_id,
+    scene_source_name: binding.scene_source_name,
+    capture_source_id: binding.capture_source_id,
+    capture_kind: binding.capture_kind,
+    media_kind: binding.media_kind,
+    lifecycle,
+    binding_status: binding.status,
+    status_detail: running
+      ? "Mock capture provider is producing deterministic test frames."
+      : binding.status_detail,
+    width: binding.width,
+    height: binding.height,
+    framerate: binding.framerate,
+    sample_rate: binding.sample_rate,
+    channels: binding.channels,
+    format: binding.format,
+    frame_index: 0,
+    dropped_frames: 0,
+    latency_ms: running ? 0 : null,
   };
 }
 

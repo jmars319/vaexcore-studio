@@ -77,6 +77,8 @@ import type {
   AudioGraphRuntimeSnapshot,
   AudioGraphRuntimeSource,
   AuditLogEntry,
+  CaptureProviderRuntimeSnapshot,
+  CaptureProviderStatus,
   CaptureSourceCandidate,
   CaptureSourceInventory,
   CaptureSourceKind,
@@ -1271,6 +1273,44 @@ function audioGraphSourceForSource(
   );
 }
 
+function captureProviderForSource(
+  snapshot: CaptureProviderRuntimeSnapshot | null,
+  sourceId: string,
+): CaptureProviderStatus | null {
+  return (
+    snapshot?.providers.find((provider) => provider.scene_source_id === sourceId) ??
+    null
+  );
+}
+
+function captureProviderTone(
+  provider: CaptureProviderStatus | null,
+): "green" | "red" | "amber" | "muted" {
+  if (!provider) return "muted";
+  switch (provider.lifecycle) {
+    case "running":
+      return "green";
+    case "starting":
+    case "stopping":
+    case "idle":
+      return "amber";
+    case "error":
+      return "red";
+    default:
+      return "muted";
+  }
+}
+
+function captureProviderShape(provider: CaptureProviderStatus | null): string {
+  if (!provider) return "No provider";
+  if (provider.media_kind === "audio") {
+    return `${provider.sample_rate ?? "auto"} Hz / ${provider.channels ?? "auto"} ch`;
+  }
+  return `${provider.width ?? "auto"}x${provider.height ?? "auto"} @ ${
+    provider.framerate ?? "auto"
+  } fps`;
+}
+
 function formatAudioLevel(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) {
     return "-90.0 dB";
@@ -1344,6 +1384,8 @@ function App() {
   const [sceneRuntime, setSceneRuntime] = useState<SceneRuntimeSnapshot | null>(null);
   const [sceneRuntimeBindings, setSceneRuntimeBindings] =
     useState<SceneRuntimeBindingsSnapshot | null>(null);
+  const [captureProviderRuntime, setCaptureProviderRuntime] =
+    useState<CaptureProviderRuntimeSnapshot | null>(null);
   const [audioGraphRuntime, setAudioGraphRuntime] =
     useState<AudioGraphRuntimeSnapshot | null>(null);
   const [previewFrame, setPreviewFrame] = useState<PreviewFrameResponse | null>(null);
@@ -1455,6 +1497,7 @@ function App() {
           nextPipelinePlan,
           nextSceneRuntime,
           nextSceneRuntimeBindings,
+          nextCaptureProviderRuntime,
           nextAudioGraphRuntime,
           nextSuiteStatus,
           nextSuiteSession,
@@ -1472,6 +1515,7 @@ function App() {
           StudioApi.mediaPlan(runtimeConfig),
           StudioApi.sceneRuntime(runtimeConfig),
           StudioApi.sceneRuntimeBindings(runtimeConfig),
+          StudioApi.sceneRuntimeCaptureProviders(runtimeConfig),
           StudioApi.sceneRuntimeAudioGraph(runtimeConfig),
           loadSuiteStatus(),
           loadSuiteSession(),
@@ -1490,6 +1534,7 @@ function App() {
         setPipelinePlan(nextPipelinePlan);
         setSceneRuntime(nextSceneRuntime);
         setSceneRuntimeBindings(nextSceneRuntimeBindings);
+        setCaptureProviderRuntime(nextCaptureProviderRuntime);
         setAudioGraphRuntime(nextAudioGraphRuntime);
         setSuiteStatus(nextSuiteStatus);
         setSuiteSession(nextSuiteSession);
@@ -1741,17 +1786,23 @@ function App() {
     let cancelled = false;
     const runtimeConfig = config;
 
-    async function refreshAudioGraph() {
+    async function refreshLiveSourceRuntime() {
       try {
-        const snapshot = await StudioApi.sceneRuntimeAudioGraph(runtimeConfig);
-        if (!cancelled) setAudioGraphRuntime(snapshot);
+        const [audioGraph, captureProviders] = await Promise.all([
+          StudioApi.sceneRuntimeAudioGraph(runtimeConfig),
+          StudioApi.sceneRuntimeCaptureProviders(runtimeConfig),
+        ]);
+        if (!cancelled) {
+          setAudioGraphRuntime(audioGraph);
+          setCaptureProviderRuntime(captureProviders);
+        }
       } catch {
-        // Audio graph telemetry is best-effort in the Designer shell.
+        // Live source telemetry is best-effort in the Designer shell.
       }
     }
 
-    void refreshAudioGraph();
-    const interval = window.setInterval(refreshAudioGraph, 500);
+    void refreshLiveSourceRuntime();
+    const interval = window.setInterval(refreshLiveSourceRuntime, 500);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
@@ -1815,13 +1866,15 @@ function App() {
     try {
       await refreshCaptureContext();
       if (config) {
-        const [runtime, bindings, audioGraph] = await Promise.all([
+        const [runtime, bindings, captureProviders, audioGraph] = await Promise.all([
           StudioApi.sceneRuntime(config),
           StudioApi.sceneRuntimeBindings(config),
+          StudioApi.sceneRuntimeCaptureProviders(config),
           StudioApi.sceneRuntimeAudioGraph(config),
         ]);
         setSceneRuntime(runtime);
         setSceneRuntimeBindings(bindings);
+        setCaptureProviderRuntime(captureProviders);
         setAudioGraphRuntime(audioGraph);
       }
       setSceneSaveStatus("Capture bindings refreshed");
@@ -2240,12 +2293,14 @@ function App() {
       StudioApi.mediaPlan(config),
       StudioApi.sceneRuntime(config),
       StudioApi.sceneRuntimeBindings(config),
+      StudioApi.sceneRuntimeCaptureProviders(config),
       StudioApi.sceneRuntimeAudioGraph(config),
     ])
-      .then(([plan, runtime, bindings, audioGraph]) => {
+      .then(([plan, runtime, bindings, captureProviders, audioGraph]) => {
         setPipelinePlan(plan);
         setSceneRuntime(runtime);
         setSceneRuntimeBindings(bindings);
+        setCaptureProviderRuntime(captureProviders);
         setAudioGraphRuntime(audioGraph);
       })
       .catch(() => undefined);
@@ -3214,12 +3269,14 @@ function App() {
         StudioApi.mediaPlan(config),
         StudioApi.sceneRuntime(config),
         StudioApi.sceneRuntimeBindings(config),
+        StudioApi.sceneRuntimeCaptureProviders(config),
         StudioApi.sceneRuntimeAudioGraph(config),
       ])
-        .then(([plan, runtime, bindings, audioGraph]) => {
+        .then(([plan, runtime, bindings, captureProviders, audioGraph]) => {
           setPipelinePlan(plan);
           setSceneRuntime(runtime);
           setSceneRuntimeBindings(bindings);
+          setCaptureProviderRuntime(captureProviders);
           setAudioGraphRuntime(audioGraph);
         })
         .catch(() => undefined);
@@ -3249,6 +3306,7 @@ function App() {
         return (
           <DesignerPage
             audioGraphRuntime={audioGraphRuntime}
+            captureProviderRuntime={captureProviderRuntime}
             captureInventory={captureInventory}
             collection={designerSceneCollection}
             clipboardSources={designerSourceClipboard}
@@ -3471,6 +3529,7 @@ function App() {
     activeDesignerScene,
     captureBindingRefreshing,
     captureInventory,
+    captureProviderRuntime,
     designerSceneCollection,
     designerSourceClipboard,
     previewError,
@@ -3629,6 +3688,7 @@ function DesignerPage(props: {
   canRedo: boolean;
   canUndo: boolean;
   captureBindingRefreshing: boolean;
+  captureProviderRuntime: CaptureProviderRuntimeSnapshot | null;
   captureInventory: CaptureSourceInventory | null;
   collection: SceneCollection;
   clipboardSources: SceneSource[];
@@ -3820,6 +3880,9 @@ function DesignerPage(props: {
     : null;
   const selectedRuntimeBinding = props.selectedSource
     ? runtimeBindingForSource(props.runtimeBindings, props.selectedSource)
+    : null;
+  const selectedCaptureProvider = props.selectedSource
+    ? captureProviderForSource(props.captureProviderRuntime, props.selectedSource.id)
     : null;
   const selectedAudioGraphSource = props.selectedSource
     ? audioGraphSourceForSource(props.audioGraphRuntime, props.selectedSource.id)
@@ -6840,6 +6903,7 @@ function DesignerPage(props: {
               audioGraphSource={selectedAudioGraphSource}
               binding={selectedRuntimeBinding}
               candidates={selectedCaptureCandidates}
+              provider={selectedCaptureProvider}
               onRebind={() =>
                 props.onRebindSource(props.scene.id, props.selectedSource!.id)
               }
@@ -7054,6 +7118,7 @@ function RuntimeBindingPanel(props: {
   candidates: CaptureSourceCandidate[];
   onRebind: () => void;
   onRefresh: () => void;
+  provider: CaptureProviderStatus | null;
   refreshing: boolean;
   source: SceneSource;
 }) {
@@ -7111,6 +7176,50 @@ function RuntimeBindingPanel(props: {
           />
         </div>
       )}
+      <div
+        className="capture-provider-runtime-panel"
+        data-testid="designer-capture-provider-runtime"
+      >
+        <div className="runtime-binding-header">
+          <div>
+            <strong>Capture Provider Runtime</strong>
+            <span>
+              {props.provider?.status_detail ??
+                "Provider lifecycle has not been resolved for this source."}
+            </span>
+          </div>
+          <Pill tone={captureProviderTone(props.provider)}>
+            {props.provider?.lifecycle ?? "pending"}
+          </Pill>
+        </div>
+        <div className="designer-preview-meta">
+          <KeyValue
+            label="Provider"
+            value={props.provider?.provider_id ?? "pending"}
+          />
+          <KeyValue
+            label="Binding"
+            value={props.provider?.binding_status?.replace("_", " ") ?? status}
+          />
+          <KeyValue label="Shape" value={captureProviderShape(props.provider)} />
+          <KeyValue
+            label="Frames"
+            value={
+              props.provider
+                ? `${props.provider.frame_index} / dropped ${props.provider.dropped_frames}`
+                : "pending"
+            }
+          />
+          <KeyValue
+            label="Latency"
+            value={
+              props.provider?.latency_ms != null
+                ? `${props.provider.latency_ms.toFixed(1)} ms`
+                : "pending"
+            }
+          />
+        </div>
+      </div>
       {status !== "ready" && (
         <div className="validation-issue warning">
           <strong>{status.replace("_", " ")}</strong>

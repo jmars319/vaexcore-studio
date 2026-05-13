@@ -834,6 +834,32 @@ test("capture frame plan maps scene sources to video and audio bindings", async 
   assert.equal(audio.channels, 2);
 });
 
+test("capture provider runtime snapshot mirrors capture bindings", async () => {
+  const {
+    buildCaptureProviderRuntimeSnapshot,
+    createDefaultSceneCollection,
+    validateCaptureProviderRuntimeSnapshot,
+  } = await sharedTypes;
+  const scene = createDefaultSceneCollection("2026-05-08T12:00:00.000Z").scenes[0];
+  const snapshot = buildCaptureProviderRuntimeSnapshot(scene);
+  const validation = validateCaptureProviderRuntimeSnapshot(snapshot);
+
+  assert.equal(snapshot.version, 1);
+  assert.equal(snapshot.scene_id, scene.id);
+  assert.equal(snapshot.providers.length, 3);
+  assert.equal(validation.ready, true);
+  assert.ok(snapshot.providers.some((provider) => provider.media_kind === "video"));
+  assert.ok(snapshot.providers.some((provider) => provider.media_kind === "audio"));
+
+  const display = snapshot.providers.find(
+    (provider) => provider.scene_source_id === "source-main-display",
+  );
+  assert.equal(display.provider_id, "provider:source-main-display");
+  assert.equal(display.lifecycle, "idle");
+  assert.equal(display.binding_status, "permission_required");
+  assert.equal(display.dropped_frames, 0);
+});
+
 test("audio mixer plan maps audio meter sources to buses", async () => {
   const {
     buildAudioMixerPlan,

@@ -17,6 +17,7 @@ The shared contracts also define:
 - `CaptureSourceSelection`
 - `CaptureSourceInventory`
 - `CaptureFramePlan`
+- `CaptureProviderRuntimeSnapshot`
 - `AudioMixerPlan`
 - `PerformanceTelemetryPlan`
 - `SceneRuntimeCommand`
@@ -74,6 +75,13 @@ audio frame stream the compositor will eventually consume. Each binding records
 the scene source id, capture source id, media kind, expected format, dimensions
 or audio shape, planned transport, and permission/availability status. This is a
 contract and validation layer only; it does not start platform capture.
+
+`CaptureProviderRuntimeSnapshot` mirrors the active scene's capture bindings into
+provider lifecycle state. V1 uses deterministic mocked providers so the UI,
+API, and tests can validate display, window, camera, microphone, and
+system-audio readiness, frame/audio packet contracts, latency, dropped-frame
+counters, and lifecycle transitions before any native capture backend is
+started.
 
 `AudioMixerPlan` maps visible audio meter sources to the master, monitor,
 recording, and stream buses. It carries gain, mute, monitoring, meter, and sync

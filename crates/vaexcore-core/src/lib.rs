@@ -20,10 +20,13 @@ pub use audio::{
     AudioMixSource, AudioMixSourceStatus, AudioMixerPlan, AudioMixerValidation,
 };
 pub use capture::{
-    build_capture_frame_plan, default_capture_sources, validate_capture_frame_plan,
+    build_capture_frame_plan, build_capture_provider_runtime_snapshot, default_capture_sources,
+    validate_capture_frame_plan, validate_capture_provider_runtime_snapshot, CaptureAudioPacket,
     CaptureFrameBinding, CaptureFrameBindingStatus, CaptureFrameFormat, CaptureFrameMediaKind,
-    CaptureFramePlan, CaptureFrameTransport, CaptureFrameValidation, CaptureSourceCandidate,
-    CaptureSourceInventory, CaptureSourceKind, CaptureSourceSelection,
+    CaptureFramePlan, CaptureFrameTransport, CaptureFrameValidation, CaptureProvider,
+    CaptureProviderLifecycleState, CaptureProviderRuntimeSnapshot, CaptureProviderStatus,
+    CaptureSourceCandidate, CaptureSourceInventory, CaptureSourceKind, CaptureSourceSelection,
+    CaptureVideoFramePacket, MockCaptureProvider,
 };
 pub use compositor::{
     build_compositor_graph, build_compositor_render_plan, build_software_compositor_input_frames,

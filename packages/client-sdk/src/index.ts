@@ -3,6 +3,7 @@ import type {
   ApiResponse,
   AudioGraphRuntimeSnapshot,
   AuditLogSnapshot,
+  CaptureProviderRuntimeSnapshot,
   CommandStatus,
   CompositorRenderRequest,
   CompositorRenderResponse,
@@ -196,6 +197,12 @@ export class VaexcoreStudioClient {
 
   sceneRuntimeBindings(): Promise<SceneRuntimeBindingsSnapshot> {
     return this.request<SceneRuntimeBindingsSnapshot>("/scene-runtime/bindings");
+  }
+
+  sceneRuntimeCaptureProviders(): Promise<CaptureProviderRuntimeSnapshot> {
+    return this.request<CaptureProviderRuntimeSnapshot>(
+      "/scene-runtime/capture-providers",
+    );
   }
 
   sceneRuntimeAudioGraph(): Promise<AudioGraphRuntimeSnapshot> {

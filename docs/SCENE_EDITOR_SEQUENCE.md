@@ -25,16 +25,18 @@ foundation to OBS-class scene editing and output.
 10. Frame timing, resolution, FPS, scaling, and color contracts: started with
     render target timing/scaling evaluation.
 11. Display capture binding on macOS and Windows: started with inventory-backed
-    source availability plus capture-frame plan bindings; real capture is not
-    started.
+    source availability, capture-frame plan bindings, and mocked provider
+    lifecycle diagnostics; real capture is not started.
 12. Window capture binding on macOS and Windows: started with inventory-backed
-    source availability plus capture-frame plan bindings; real capture is not
-    started.
+    source availability, capture-frame plan bindings, and mocked provider
+    lifecycle diagnostics; real capture is not started.
 13. Camera source engine: started with inventory-backed source availability plus
-    capture-frame plan bindings; real capture is not started.
+    capture-frame plan bindings and mocked provider lifecycle diagnostics; real
+    capture is not started.
 14. Microphone and system audio capture: started with inventory-backed source
-    availability, capture-frame plan bindings, and audio source routing fields;
-    real audio capture is not started.
+    availability, capture-frame plan bindings, mocked provider lifecycle
+    diagnostics, and audio source routing fields; real audio capture is not
+    started.
 15. Audio mixer model, meters, and routing: started with serializable mixer
     buses, gain/mute/monitor/sync controls, simulated pre/post-filter levels,
     and pipeline validation; real audio mixing and live meters are not started.
@@ -129,9 +131,12 @@ pixels.
 Phase E capture binding, covering steps 41-50, is now started in Designer with
 source-to-inventory candidate matching for display, window, camera, microphone,
 and system-audio sources. The Inspector surfaces runtime binding status, target,
-media shape, candidate availability, refresh, and auto-bind controls. This still
-does not start real capture; it prepares the saved scene graph and runtime
-contracts for capture-backed frames in later phases.
+media shape, candidate availability, mocked provider lifecycle diagnostics,
+refresh, and auto-bind controls. The API now exposes a serializable capture
+provider runtime snapshot with deterministic mock video/audio packet contracts,
+latency, dropped-frame, and readiness metadata. This still does not start real
+capture; it prepares the saved scene graph and runtime contracts for
+capture-backed frames in later phases.
 
 Phase F software compositor, covering steps 51-60, now has serializable input
 frame contracts, per-source placeholder providers, local still-image decode,

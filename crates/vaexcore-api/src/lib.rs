@@ -34,11 +34,12 @@ use tokio::{
 };
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use vaexcore_core::{
-    build_audio_graph_runtime_snapshot, build_scene_runtime_bindings_snapshot,
-    create_compositor_render_response, create_preview_frame_response,
-    create_program_preview_frame_response, create_scene_activation_response,
-    create_scene_runtime_state_update_response, create_transition_preview_frame_response,
-    scene_runtime_snapshot, scene_runtime_snapshot_with_options, AudioGraphRuntimeSnapshot,
+    build_audio_graph_runtime_snapshot, build_capture_provider_runtime_snapshot,
+    build_scene_runtime_bindings_snapshot, create_compositor_render_response,
+    create_preview_frame_response, create_program_preview_frame_response,
+    create_scene_activation_response, create_scene_runtime_state_update_response,
+    create_transition_preview_frame_response, scene_runtime_snapshot,
+    scene_runtime_snapshot_with_options, AudioGraphRuntimeSnapshot, CaptureProviderRuntimeSnapshot,
     CompositorRenderRequest, CompositorRenderResponse, ProgramPreviewFrameRequest,
     ProgramPreviewFrameResponse,
 };
@@ -335,6 +336,10 @@ pub fn router(state: Arc<ApiState>) -> Router {
             post(post_scene_runtime_validate_graph),
         )
         .route("/scene-runtime/bindings", get(get_scene_runtime_bindings))
+        .route(
+            "/scene-runtime/capture-providers",
+            get(get_scene_runtime_capture_providers),
+        )
         .route(
             "/scene-runtime/audio-graph",
             get(get_scene_runtime_audio_graph),
@@ -913,6 +918,24 @@ async fn get_scene_runtime_bindings(
     })?;
     Ok(Json(ApiResponse::ok(
         build_scene_runtime_bindings_snapshot(scene),
+    )))
+}
+
+async fn get_scene_runtime_capture_providers(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<CaptureProviderRuntimeSnapshot>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let collection = state.store.scene_collection()?;
+    let scene = collection.active_scene().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "scene_runtime_no_active_scene",
+            "scene runtime has no active scene",
+        )
+    })?;
+    Ok(Json(ApiResponse::ok(
+        build_capture_provider_runtime_snapshot(scene),
     )))
 }
 
@@ -2216,6 +2239,21 @@ mod tests {
             .unwrap()
             .iter()
             .any(|binding| binding["media_kind"] == "video"));
+
+        let (status, capture_providers) = request_json(
+            app.clone(),
+            "GET",
+            "/scene-runtime/capture-providers".to_string(),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(capture_providers["data"]["scene_id"], "scene-main");
+        assert!(capture_providers["data"]["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|provider| provider["media_kind"] == "video"));
 
         let (status, audio_graph) = request_json(
             app.clone(),
