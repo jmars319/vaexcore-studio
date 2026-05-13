@@ -42,10 +42,11 @@ foundation to OBS-class scene editing and output.
     rendering; real browser capture is not started.
 18. Text render engine with font controls: started with canvas preview text
     rendering; backend text rasterization is not started.
-19. Groups, nesting, and parent transforms: started with group preview
-    rendering, group child validation, compositor parent/depth metadata, and
-    first-pass nested position/rotation/opacity evaluation. Full group
-    clipping, scaling inheritance, and group editor actions are not started.
+19. Groups, nesting, and parent transforms: done for offline editor V1 with
+    group preview rendering, structured child management, group child
+    validation, compositor parent/depth metadata, and first-pass nested
+    position/rotation/opacity evaluation. Full group clipping and scaling
+    inheritance remain renderer parity work.
 20. Full editor interactions: started with drag/resize, keyboard nudging,
     undo/redo, transform command buttons, align-to-canvas controls,
     edge/center snapping guides, multi-select, rotate handles, distribute,
@@ -61,15 +62,16 @@ foundation to OBS-class scene editing and output.
     compositor graph propagation plus first-pass Designer filter chain editing.
     Real video/audio filter rendering and detailed per-filter controls are not
     started.
-23. Scene transitions and transition preview: started with persisted transition
-    contracts, validation, Designer controls, and frame/easing preview plans;
-    live pixel transition playback and renderer application are not started.
-24. Scene collection import/export/backup: started with versioned bundle
-    contracts, local API export/import routes, SDK helpers, desktop bridge
-    commands, store validation, and Designer import/export actions against the
-    app data bundle path. Desktop imports write a timestamped backup of the
-    current scene collection and retain the newest 10 backups. Designer-facing
-    file picker UX is not started.
+23. Scene transitions and transition preview: done for offline editor V1 with
+    persisted transition contracts, validation, Designer controls, from/to scene
+    selection, scrub/playback controls, and deterministic placeholder preview
+    frames for `cut`, `fade`, `swipe`, and `stinger`. Live pixel transition
+    playback and renderer application are not started.
+24. Scene collection import/export/backup: done for offline editor V1 with
+    versioned bundle contracts, local API export/import routes, SDK helpers,
+    desktop bridge commands, explicit user-selected JSON import/export, app-data
+    fallback import/export, store validation, and timestamped backups after
+    successful import validation. Desktop retains the newest 10 backups.
 25. Hotkeys and workflow shortcuts: started with Designer-level save,
     undo/redo, selected-source delete, copy, paste, duplicate, grouping,
     visibility/lock, z-order, nudge, and rotate shortcuts. Designer shortcuts
@@ -148,6 +150,13 @@ duplicate actions, grouped command-bar history for selection visibility/lock
 commands, an external Designer shortcut reference, scene import runtime refresh,
 and an updated Windows validation runner. This cuts the runtime-preview-ready
 milestone; it is still not a real capture, recording, or streaming backend.
+
+Offline Editor V1 is now complete for local authoring scope: scene/source
+editing, grouping, numeric transforms, local asset URI selection, explicit
+bundle import/export, app-data fallback bundles, validation, runtime refresh,
+and deterministic placeholder transition preview. The remaining Scene Designer
+work starts the real capture/compositor/output path; offline editor completion
+does not imply OBS-level capture, encoder, plugin, or live-output parity.
 
 ## Validation Contract
 

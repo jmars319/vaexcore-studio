@@ -1,8 +1,8 @@
 # vaexcore studio
 
-vaexcore studio is a local-first desktop control system for streaming, recording, and localhost integrations. It is the foundation layer that other vaexcore tools can use for local API discovery, recording control, marker capture, and connected-app coordination.
+vaexcore studio is a local-first desktop control system for streaming, recording, scene design, and localhost integrations. It is the foundation layer that other vaexcore tools can use for local API discovery, recording control, marker capture, and connected-app coordination.
 
-Studio is not a cloud control plane, giveaway bot, highlight detector, scene editor, or plugin marketplace. Its role is local infrastructure.
+Studio is not a cloud control plane, giveaway bot, highlight detector, or plugin marketplace. Its role is local infrastructure and creator-side production control.
 
 ## Operational Purpose
 
@@ -46,6 +46,9 @@ sidecars/
 - API discovery is written locally when the default port changes.
 - The media runner can run as a supervised dry-run sidecar.
 - Client SDK and smoke examples exist for companion integration testing.
+- Scene Designer offline editor V1 supports local scene/source authoring,
+  grouping, import/export, deterministic preview, and validation without
+  starting real capture, recording, or streaming output.
 - Windows launcher material is present, but platform maturity still centers on local desktop validation.
 
 ## Deployment Posture

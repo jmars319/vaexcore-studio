@@ -54,7 +54,10 @@ that creating/editing a scene in Studio, saving it, quitting, and reopening
 Studio preserves the scene collection before running a full suite
 recording/streaming pass. Also verify
 `GET /scenes/export` returns a versioned scene bundle and `POST /scenes/import`
-restores that bundle while refreshing the default media plan. Also confirm
+restores that bundle while refreshing the default media plan. The desktop
+Designer should also be checked with explicit JSON import/export through the
+native file picker, including a failed invalid import that preserves the current
+collection and a successful import that creates a timestamped backup. Also confirm
 that the default media plan reports `capture.frames`, `audio.mixer`,
 `scene.compositor`, `scene.render_targets`, and `performance.telemetry` steps, writes
 `capture_frame_plan.scene_id`, `audio_mixer_plan.scene_id`, and

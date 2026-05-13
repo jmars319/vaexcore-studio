@@ -33,10 +33,14 @@ Scene sources may include a serializable `filters` chain; the compositor graph
 preserves that chain for future video/audio filter execution.
 Scene sources also include `bounds_mode` (`stretch`, `fit`, `fill`, `center`,
 or `original_size`), which maps into compositor node `scale_mode` evaluation.
-Scene transition helpers expose frame-count and easing sample plans for preview
-and future renderer handoff.
-Desktop scene bundle imports create timestamped backups under `scene-backups`
-in the app data directory before replacing the active collection.
+Scene transition helpers expose frame-count, easing sample plans, and
+deterministic placeholder preview frames for `cut`, `fade`, `swipe`, and
+`stinger` transition review before renderer handoff.
+Desktop scene bundle imports validate the selected bundle first, then create
+timestamped backups under `scene-backups` in the app data directory before
+replacing the active collection. The app-data bundle path remains available as a
+fallback, while the desktop UI can import/export an explicit user-selected JSON
+bundle path.
 Shared Scene Runtime contracts now define scene activation, runtime state
 updates, preview-frame requests/responses, compositor render requests/responses,
 capture/audio binding readiness, and transition execution payloads. These are
