@@ -20,6 +20,8 @@ import type {
   MarkersSnapshot,
   MediaPipelinePlan,
   MediaProfileInput,
+  OutputJob,
+  OutputJobPrepareRequest,
   PreflightSnapshot,
   ProfilesSnapshot,
   RecentRecordingsSnapshot,
@@ -523,6 +525,20 @@ export const StudioApi = {
     apiRequest<MarkersSnapshot>(config, markerListPath(options)),
   mediaPlan: (config: RuntimeApiConfig) =>
     apiRequest<MediaPipelinePlan>(config, "/media/plan"),
+  outputJob: (config: RuntimeApiConfig) =>
+    apiRequest<OutputJob>(config, "/output/job"),
+  prepareOutputJob: (
+    config: RuntimeApiConfig,
+    request: OutputJobPrepareRequest = {},
+  ) =>
+    apiRequest<OutputJob>(config, "/output/job/prepare", {
+      method: "POST",
+      body: JSON.stringify(request),
+    }),
+  cancelOutputJob: (config: RuntimeApiConfig) =>
+    apiRequest<OutputJob>(config, "/output/job/cancel", {
+      method: "POST",
+    }),
   profiles: (config: RuntimeApiConfig) =>
     apiRequest<ProfilesSnapshot>(config, "/profiles"),
   sceneCollection: (config: RuntimeApiConfig) =>

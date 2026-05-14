@@ -95,6 +95,7 @@ import type {
   MediaPipelinePlan,
   MediaProfile,
   MediaProfileInput,
+  OutputJob,
   PlatformKind,
   PreflightSnapshot,
   PreflightStatus,
@@ -1533,6 +1534,7 @@ function App() {
     microphone: PermissionStatus | null;
   }>({ camera: null, microphone: null });
   const [pipelinePlan, setPipelinePlan] = useState<MediaPipelinePlan | null>(null);
+  const [outputJob, setOutputJob] = useState<OutputJob | null>(null);
   const [sceneRuntime, setSceneRuntime] = useState<SceneRuntimeSnapshot | null>(null);
   const [sceneRuntimeBindings, setSceneRuntimeBindings] = useState<SceneRuntimeBindingsSnapshot | null>(null);
   const [captureProviderRuntime, setCaptureProviderRuntime] = useState<CaptureProviderRuntimeSnapshot | null>(null);
@@ -1635,6 +1637,7 @@ function App() {
           nextMarkers,
           nextMediaRunnerInfo,
           nextPipelinePlan,
+          nextOutputJob,
           nextSceneRuntime,
           nextSceneRuntimeBindings,
           nextCaptureProviderRuntime,
@@ -1655,6 +1658,7 @@ function App() {
           StudioApi.markers(runtimeConfig, { limit: 20 }),
           loadMediaRunnerInfo(),
           StudioApi.mediaPlan(runtimeConfig),
+          StudioApi.outputJob(runtimeConfig),
           StudioApi.sceneRuntime(runtimeConfig),
           StudioApi.sceneRuntimeBindings(runtimeConfig),
           StudioApi.sceneRuntimeCaptureProviders(runtimeConfig),
@@ -1676,6 +1680,7 @@ function App() {
         setRecentMarkers(nextMarkers.markers);
         setMediaRunnerInfo(nextMediaRunnerInfo);
         setPipelinePlan(nextPipelinePlan);
+        setOutputJob(nextOutputJob);
         setSceneRuntime(nextSceneRuntime);
         setSceneRuntimeBindings(nextSceneRuntimeBindings);
         setCaptureProviderRuntime(nextCaptureProviderRuntime);
@@ -2059,6 +2064,42 @@ function App() {
       setError(null);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Command failed");
+    }
+  }
+
+  async function prepareOutputJob() {
+    if (!config) return;
+    try {
+      const enabledDestinationIds =
+        profiles?.stream_destinations.filter((destination) => destination.enabled).map((destination) => destination.id) ??
+        [];
+      const job = await StudioApi.prepareOutputJob(config, {
+        recording_profile_id: selectedProfileId ?? null,
+        stream_destination_ids: enabledDestinationIds,
+      });
+      setOutputJob(job);
+      const [plan, readinessReport] = await Promise.all([
+        StudioApi.mediaPlan(config),
+        StudioApi.designerReadinessReport(config),
+      ]);
+      setPipelinePlan(plan);
+      setDesignerReadinessReport(readinessReport);
+      setError(null);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Output preparation failed");
+    }
+  }
+
+  async function cancelOutputJob() {
+    if (!config) return;
+    try {
+      const job = await StudioApi.cancelOutputJob(config);
+      setOutputJob(job);
+      const readinessReport = await StudioApi.designerReadinessReport(config);
+      setDesignerReadinessReport(readinessReport);
+      setError(null);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Output cancellation failed");
     }
   }
 
@@ -3422,9 +3463,13 @@ function App() {
             }
             onStopRecording={() => config && runCommand(() => StudioApi.stopRecording(config))}
             onStopStream={() => config && runCommand(() => StudioApi.stopStream(config))}
+            onPrepareOutput={prepareOutputJob}
+            onCancelOutput={cancelOutputJob}
             onCreateMarker={() =>
               config && StudioApi.createMarker(config, markerLabel).catch((error: Error) => setError(error.message))
             }
+            outputJob={outputJob}
+            pipelinePlan={pipelinePlan}
             profiles={profiles}
             preflight={preflight}
             recordingActive={activeStatus?.recording_active ?? false}
@@ -9796,6 +9841,10 @@ function ControlsPage(props: {
   onStartStream: () => void;
   onStopRecording: () => void;
   onStopStream: () => void;
+  onPrepareOutput: () => void;
+  onCancelOutput: () => void;
+  outputJob: OutputJob | null;
+  pipelinePlan: MediaPipelinePlan | null;
   profiles: ProfilesSnapshot | null;
   preflight: PreflightSnapshot | null;
   recordingActive: boolean;
@@ -9836,6 +9885,50 @@ function ControlsPage(props: {
     props.engineMode === "dry_run" || props.mediaRunnerInfo?.fallbackDryRun
       ? "Start Dry-Run Recording"
       : "Start Recording";
+  const selectedProfile = props.profiles?.recording_profiles.find((profile) => profile.id === props.selectedProfileId);
+  const enabledDestinations = props.profiles?.stream_destinations.filter((destination) => destination.enabled) ?? [];
+  const outputPreflightPlan = props.outputJob?.output_preflight_plan ?? props.pipelinePlan?.config.output_preflight_plan ?? null;
+  const outputJobState = props.outputJob?.state ?? "idle";
+  const outputBlockers = props.outputJob?.blockers ?? outputPreflightPlan?.validation.errors ?? [];
+  const outputWarnings = props.outputJob?.warnings ?? outputPreflightPlan?.validation.warnings ?? [];
+  const outputChecks = [
+    {
+      label: "Scene",
+      ready: props.outputJob?.scene_output_ready ?? false,
+      detail: props.outputJob?.active_scene_name ?? props.pipelinePlan?.config.active_scene?.name ?? "No active scene",
+    },
+    {
+      label: "Media Pipeline",
+      ready: props.outputJob?.media_pipeline_ready ?? props.pipelinePlan?.ready ?? false,
+      detail: props.pipelinePlan?.pipeline_name ?? "No media plan loaded",
+    },
+    {
+      label: "Output Preflight",
+      ready: props.outputJob?.output_preflight_ready ?? outputPreflightPlan?.validation.ready ?? false,
+      detail: outputPreflightPlan
+        ? `${outputPreflightPlan.render_targets.length} render target(s), ${outputPreflightPlan.streaming_targets.length} stream target(s)`
+        : "No output preflight plan loaded",
+    },
+    {
+      label: "Recording Target",
+      ready: props.outputJob?.recording_target_ready ?? outputPreflightPlan?.recording_target?.ready ?? false,
+      detail:
+        props.outputJob?.output_path_preview ??
+        outputPreflightPlan?.recording_target?.output_path_preview ??
+        "No recording target preview",
+    },
+    {
+      label: "Stream Targets",
+      ready: props.outputJob?.stream_targets_ready ?? outputPreflightPlan?.validation.stream_destinations_ready ?? false,
+      detail:
+        props.outputJob?.stream_destination_names.join(", ") ||
+        enabledDestinations.map((destination) => destination.name).join(", ") ||
+        "Recording-only output",
+    },
+  ];
+  const canCancelOutput = Boolean(
+    props.outputJob && props.outputJob.state !== "idle" && props.outputJob.state !== "cancelled",
+  );
 
   return (
     <div className="control-grid">
@@ -9977,6 +10070,63 @@ function ControlsPage(props: {
       </section>
 
       <section className="panel">
+        <PanelTitle title="Output Preparation" />
+        <div className="checklist">
+          <div className="checklist-row">
+            <Pill tone={outputJobTone(outputJobState)}>{outputJobStateLabel(outputJobState)}</Pill>
+            <div>
+              <strong>{props.outputJob?.detail ?? "No prepared output job"}</strong>
+              <span>
+                {selectedProfile?.name ?? props.outputJob?.recording_profile_name ?? "No recording profile"} -{" "}
+                {enabledDestinations.length} enabled destination(s)
+              </span>
+            </div>
+          </div>
+          {outputChecks.map((item) => (
+            <div className="checklist-row" key={item.label}>
+              <Pill tone={item.ready ? "green" : "amber"}>{item.ready ? "Ready" : "Check"}</Pill>
+              <div>
+                <strong>{item.label}</strong>
+                <span>{item.detail}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        {(outputBlockers.length > 0 || outputWarnings.length > 0) && (
+          <div className="designer-preview-diagnostics">
+            {outputBlockers.slice(0, 3).map((blocker) => (
+              <div className="checklist-row" key={`blocker-${blocker}`}>
+                <Pill tone="red">Blocked</Pill>
+                <div>
+                  <strong>Blocker</strong>
+                  <span>{blocker}</span>
+                </div>
+              </div>
+            ))}
+            {outputWarnings.slice(0, Math.max(0, 3 - outputBlockers.length)).map((warning) => (
+              <div className="checklist-row" key={`warning-${warning}`}>
+                <Pill tone="amber">Warning</Pill>
+                <div>
+                  <strong>Warning</strong>
+                  <span>{warning}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="button-row">
+          <button className="primary-button" onClick={props.onPrepareOutput} type="button">
+            <ListChecks size={16} />
+            Prepare Output
+          </button>
+          <button className="secondary-button" disabled={!canCancelOutput} onClick={props.onCancelOutput} type="button">
+            <X size={16} />
+            Cancel Prepared Output
+          </button>
+        </div>
+      </section>
+
+      <section className="panel">
         <PanelTitle title="Go Live Checklist" />
         <div className="checklist">
           {checklist.map((item) => (
@@ -10049,6 +10199,29 @@ function goLiveChecklist(
       detail: preflight ? `Preflight status is ${preflight.overall}.` : "Preflight status has not loaded yet.",
     },
   ];
+}
+
+function outputJobTone(state: OutputJob["state"]): "green" | "red" | "amber" | "muted" {
+  if (state === "ready") return "green";
+  if (state === "blocked") return "red";
+  if (state === "preparing") return "amber";
+  return "muted";
+}
+
+function outputJobStateLabel(state: OutputJob["state"]): string {
+  switch (state) {
+    case "ready":
+      return "Ready";
+    case "blocked":
+      return "Blocked";
+    case "preparing":
+      return "Preparing";
+    case "cancelled":
+      return "Cancelled";
+    case "idle":
+    default:
+      return "Idle";
+  }
 }
 
 function mergeSceneSourcePatch(source: SceneSource, patch: SceneSourcePatch): SceneSource {
