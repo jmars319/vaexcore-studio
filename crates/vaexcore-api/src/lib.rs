@@ -51,14 +51,14 @@ use vaexcore_core::{
     new_id, now_utc, scene_capture_sources, ApiResponse, AuditLogEntry, AuditLogSnapshot,
     CommandStatus, ConnectedClientsSnapshot, HealthResponse, LocalRuntimeDependency,
     LocalRuntimeHealth, Marker, MarkersSnapshot, MediaPipelinePlan, MediaPipelinePlanRequest,
-    MediaPipelineValidation, MediaProfileInput, PipelineIntent, PreviewFrameEncoding,
-    PreviewFrameRequest, PreviewFrameResponse, ProfilesSnapshot, RecentRecordingsSnapshot, Scene,
-    SceneActivationRequest, SceneActivationResponse, SceneCollection, SceneCollectionBundle,
-    SceneCollectionImportResult, SceneOutputReadyDiagnostic, SceneRuntimeBindingsSnapshot,
-    SceneRuntimeSnapshot, SceneRuntimeStateUpdateRequest, SceneRuntimeStateUpdateResponse,
-    SceneRuntimeStatus, SceneValidationResult, SecretStore, StreamDestinationInput, StudioEvent,
-    StudioEventKind, StudioStatus, TransitionPreviewFrameRequest, TransitionPreviewFrameResponse,
-    APP_NAME,
+    MediaPipelineValidation, MediaProfileInput, OutputJob, OutputJobPrepareRequest, PipelineIntent,
+    PreviewFrameEncoding, PreviewFrameRequest, PreviewFrameResponse, ProfilesSnapshot,
+    RecentRecordingsSnapshot, Scene, SceneActivationRequest, SceneActivationResponse,
+    SceneCollection, SceneCollectionBundle, SceneCollectionImportResult,
+    SceneOutputReadyDiagnostic, SceneRuntimeBindingsSnapshot, SceneRuntimeSnapshot,
+    SceneRuntimeStateUpdateRequest, SceneRuntimeStateUpdateResponse, SceneRuntimeStatus,
+    SceneValidationResult, SecretStore, StreamDestinationInput, StudioEvent, StudioEventKind,
+    StudioStatus, TransitionPreviewFrameRequest, TransitionPreviewFrameResponse, APP_NAME,
 };
 use vaexcore_media::{
     build_dry_run_pipeline_plan, DryRunMediaEngine, MediaEngine, MediaError, MediaRunnerSupervisor,
@@ -381,6 +381,9 @@ pub fn router(state: Arc<ApiState>) -> Router {
             "/scene-runtime/readiness-report",
             get(get_scene_runtime_readiness_report),
         )
+        .route("/output/job", get(get_output_job))
+        .route("/output/job/prepare", post(post_output_job_prepare))
+        .route("/output/job/cancel", post(post_output_job_cancel))
         .route(
             "/media/plan",
             get(default_pipeline_plan).post(post_pipeline_plan),
@@ -555,6 +558,8 @@ fn command_action(method: &Method, path: &str) -> Option<String> {
         ("POST", "/scene-runtime/designer-session/pause") => "scene_runtime.designer.pause",
         ("POST", "/scene-runtime/designer-session/restart") => "scene_runtime.designer.restart",
         ("POST", "/scene-runtime/designer-session/cleanup") => "scene_runtime.designer.cleanup",
+        ("POST", "/output/job/prepare") => "output.job.prepare",
+        ("POST", "/output/job/cancel") => "output.job.cancel",
         ("POST", "/media/plan") => "media.plan",
         ("POST", "/media/validate") => "media.validate",
         ("POST", "/marker/create") => "marker.create",
@@ -1356,6 +1361,7 @@ async fn designer_readiness_report_for_state(
         overall,
         items,
         output_ready,
+        output_job: state.store.current_output_job()?.map(|job| job.summary()),
         windows_handoff: vec![
             "Run npm run validate:windows on this repo from the Windows checkout.".to_string(),
             "Launch Studio on Windows and verify display, window, camera, browser, media, text, transitions, filters, and readiness panels.".to_string(),
@@ -1669,6 +1675,66 @@ async fn get_recent_recordings(
     Ok(Json(ApiResponse::ok(RecentRecordingsSnapshot {
         recordings: state.store.list_recent_recordings(20)?,
     })))
+}
+
+async fn get_output_job(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<OutputJob>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    Ok(Json(ApiResponse::ok(current_output_job_snapshot(&state)?)))
+}
+
+async fn post_output_job_prepare(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+    payload: Option<Json<OutputJobPrepareRequest>>,
+) -> Result<Json<ApiResponse<OutputJob>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let request = payload.map(|Json(payload)| payload).unwrap_or_default();
+    let pipeline_request = output_job_pipeline_plan_request(&state, &request)?;
+    let pipeline = plan_pipeline(&state, pipeline_request).await;
+    let output_ready = scene_output_ready_for_current_collection(
+        &state,
+        &pipeline,
+        "output-job-prepare-diagnostic",
+    )?;
+    let job = OutputJob::prepared(
+        new_id("output_job"),
+        request,
+        &pipeline,
+        &output_ready,
+        now_utc(),
+    );
+    let saved = state.store.save_output_job(&job)?;
+    state.events.emit(StudioEvent::new(
+        StudioEventKind::MediaEngineReady,
+        json!({
+            "output_job_id": saved.id,
+            "output_job_state": saved.state,
+            "dry_run": true
+        }),
+    ));
+
+    Ok(Json(ApiResponse::ok(saved)))
+}
+
+async fn post_output_job_cancel(
+    State(state): State<Arc<ApiState>>,
+    headers: HeaderMap,
+) -> Result<Json<ApiResponse<OutputJob>>, ApiError> {
+    auth::authorize_headers(&headers, &state.auth)?;
+    let job = state.store.cancel_output_job(now_utc())?;
+    state.events.emit(StudioEvent::new(
+        StudioEventKind::MediaEngineReady,
+        json!({
+            "output_job_id": job.id,
+            "output_job_state": job.state,
+            "dry_run": true
+        }),
+    ));
+
+    Ok(Json(ApiResponse::ok(job)))
 }
 
 async fn default_pipeline_plan(
@@ -2189,6 +2255,137 @@ fn default_pipeline_plan_request(state: &ApiState) -> Result<MediaPipelinePlanRe
         recording_profile,
         stream_destinations,
     })
+}
+
+fn current_output_job_snapshot(state: &ApiState) -> Result<OutputJob, StoreError> {
+    Ok(state
+        .store
+        .current_output_job()?
+        .unwrap_or_else(|| OutputJob::idle(now_utc())))
+}
+
+fn output_job_pipeline_plan_request(
+    state: &ApiState,
+    request: &OutputJobPrepareRequest,
+) -> Result<MediaPipelinePlanRequest, ApiError> {
+    let settings = state.store.app_settings()?;
+    let scene_collection = state.store.scene_collection()?;
+    let active_scene = scene_collection.active_scene().cloned().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "scene_runtime_no_active_scene",
+            "scene runtime has no active scene",
+        )
+    })?;
+    let scene_capture_sources = scene_capture_sources(&active_scene);
+    let capture_sources = if scene_capture_sources.is_empty() {
+        settings.capture_sources
+    } else {
+        scene_capture_sources
+    };
+    let recording_profile = state
+        .store
+        .recording_profile_by_id(request.recording_profile_id.as_deref())?
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "recording_profile_not_found",
+                "recording profile not found",
+            )
+        })?;
+    let all_destinations = state.store.list_stream_destinations()?;
+    let stream_destinations = if let Some(ids) = request.stream_destination_ids.as_ref() {
+        let mut destinations = Vec::new();
+        let mut requested_ids = Vec::new();
+        for id in ids.iter().map(|id| id.trim()).filter(|id| !id.is_empty()) {
+            if requested_ids.contains(&id) {
+                continue;
+            }
+            requested_ids.push(id);
+        }
+
+        for id in requested_ids {
+            let destination = all_destinations
+                .iter()
+                .find(|destination| destination.id == id)
+                .cloned()
+                .ok_or_else(|| {
+                    ApiError::new(
+                        StatusCode::NOT_FOUND,
+                        "stream_destination_not_found",
+                        format!("stream destination {id} not found"),
+                    )
+                })?;
+            if !destination.enabled {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "stream_destination_disabled",
+                    format!("stream destination {id} is disabled"),
+                ));
+            }
+            destinations.push(destination);
+        }
+        destinations
+    } else {
+        all_destinations
+            .into_iter()
+            .filter(|destination| destination.enabled)
+            .collect()
+    };
+    let intent = if stream_destinations.is_empty() {
+        PipelineIntent::Recording
+    } else {
+        PipelineIntent::RecordingAndStream
+    };
+
+    Ok(MediaPipelinePlanRequest {
+        dry_run: true,
+        intent,
+        capture_sources,
+        active_scene: Some(active_scene),
+        recording_profile: Some(recording_profile),
+        stream_destinations,
+    })
+}
+
+fn scene_output_ready_for_current_collection(
+    state: &ApiState,
+    pipeline: &MediaPipelinePlan,
+    request_id: &str,
+) -> Result<SceneOutputReadyDiagnostic, ApiError> {
+    let collection = state.store.scene_collection()?;
+    let active_scene = collection.active_scene().ok_or_else(|| {
+        ApiError::new(
+            StatusCode::CONFLICT,
+            "scene_runtime_no_active_scene",
+            "scene runtime has no active scene",
+        )
+    })?;
+    let validation = state.store.validate_scene_collection(&collection);
+    let program_preview = create_program_preview_frame_response(
+        &ProgramPreviewFrameRequest {
+            version: 1,
+            request_id: request_id.to_string(),
+            collection_id: collection.id.clone(),
+            width: active_scene.canvas.width,
+            height: active_scene.canvas.height,
+            framerate: 60,
+            frame_format: CompositorFrameFormat::Bgra8,
+            scale_mode: CompositorScaleMode::Fit,
+            encoding: PreviewFrameEncoding::None,
+            include_debug_overlay: false,
+            requested_at: now_utc(),
+        },
+        &collection,
+        0,
+    );
+
+    Ok(scene_output_ready_diagnostic(
+        active_scene,
+        &program_preview,
+        pipeline,
+        validation.ok,
+    ))
 }
 
 async fn plan_pipeline(state: &ApiState, request: MediaPipelinePlanRequest) -> MediaPipelinePlan {
@@ -2736,6 +2933,111 @@ mod tests {
                 .iter()
                 .any(|target| target["kind"] == "recording")
         );
+    }
+
+    #[tokio::test]
+    async fn output_job_api_prepares_reports_and_cancels_ready_snapshot() {
+        let app = test_app();
+        let profile_id = first_recording_profile_id(app.clone()).await;
+        let (status, scenes) = request_json(app.clone(), "GET", "/scenes".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        let mut collection = scenes["data"].clone();
+        let mut display_source = collection["scenes"][0]["sources"][0].clone();
+        display_source["config"]["availability"] = serde_json::json!({
+            "state": "available",
+            "detail": "Test display is available."
+        });
+        let mut audio_source = collection["scenes"][0]["sources"][2].clone();
+        audio_source["config"]["device_id"] = serde_json::json!("microphone:test");
+        audio_source["config"]["availability"] = serde_json::json!({
+            "state": "available",
+            "detail": "Test microphone is available."
+        });
+        collection["scenes"][0]["sources"] = serde_json::json!([display_source, audio_source]);
+        let (status, _) =
+            request_json(app.clone(), "PUT", "/scenes".to_string(), Some(collection)).await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, idle) =
+            request_json(app.clone(), "GET", "/output/job".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(idle["data"]["state"], serde_json::json!("idle"));
+
+        let (status, prepared) = request_json(
+            app.clone(),
+            "POST",
+            "/output/job/prepare".to_string(),
+            Some(json!({
+                "recording_profile_id": profile_id,
+                "stream_destination_ids": []
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(prepared["data"]["state"], serde_json::json!("ready"));
+        assert_eq!(
+            prepared["data"]["scene_output_ready"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            prepared["data"]["recording_target_ready"],
+            serde_json::json!(true)
+        );
+        assert!(prepared["data"]["output_path_preview"].as_str().is_some());
+
+        let (status, report) = request_json(
+            app.clone(),
+            "GET",
+            "/scene-runtime/readiness-report".to_string(),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            report["data"]["output_job"]["id"],
+            prepared["data"]["id"].clone()
+        );
+        assert_eq!(
+            report["data"]["output_job"]["state"],
+            serde_json::json!("ready")
+        );
+
+        let (status, cancelled) =
+            request_json(app.clone(), "POST", "/output/job/cancel".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(cancelled["data"]["id"], prepared["data"]["id"].clone());
+        assert_eq!(cancelled["data"]["state"], serde_json::json!("cancelled"));
+
+        let (status, current) = request_json(app, "GET", "/output/job".to_string(), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(current["data"]["state"], serde_json::json!("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn output_job_prepare_blocks_when_enabled_stream_target_is_not_ready() {
+        let app = test_app();
+
+        let (status, prepared) = request_json(
+            app,
+            "POST",
+            "/output/job/prepare".to_string(),
+            Some(json!({})),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(prepared["data"]["state"], serde_json::json!("blocked"));
+        assert_eq!(
+            prepared["data"]["stream_destination_names"][0],
+            serde_json::json!("Dry Run RTMP Target")
+        );
+        assert!(prepared["data"]["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|blocker| blocker
+                .as_str()
+                .is_some_and(|value| value.contains("Scene output readiness"))));
     }
 
     #[tokio::test]

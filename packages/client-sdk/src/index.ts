@@ -18,6 +18,8 @@ import type {
   MediaPipelinePlanRequest,
   MediaPipelineValidation,
   MediaProfileInput,
+  OutputJob,
+  OutputJobPrepareRequest,
   PreviewFrameRequest,
   PreviewFrameResponse,
   ProgramPreviewFrameRequest,
@@ -142,6 +144,23 @@ export class VaexcoreStudioClient {
 
   designerReadinessReport(): Promise<DesignerReadinessReport> {
     return this.request<DesignerReadinessReport>("/scene-runtime/readiness-report");
+  }
+
+  outputJob(): Promise<OutputJob> {
+    return this.request<OutputJob>("/output/job");
+  }
+
+  prepareOutputJob(request: OutputJobPrepareRequest = {}): Promise<OutputJob> {
+    return this.request<OutputJob>("/output/job/prepare", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  }
+
+  cancelOutputJob(): Promise<OutputJob> {
+    return this.request<OutputJob>("/output/job/cancel", {
+      method: "POST",
+    });
   }
 
   activateScene(request: SceneActivationRequest): Promise<SceneActivationResponse> {

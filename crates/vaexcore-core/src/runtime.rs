@@ -163,6 +163,8 @@ pub struct DesignerReadinessReport {
     pub overall: DesignerRuntimeReadinessState,
     pub items: Vec<DesignerReadinessReportItem>,
     pub output_ready: SceneOutputReadyDiagnostic,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_job: Option<crate::OutputJobSummary>,
     pub windows_handoff: Vec<String>,
 }
 

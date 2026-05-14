@@ -8,16 +8,16 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use vaexcore_core::{
     new_id, now_utc, AppSettings, AuditLogEntry, Marker, MediaProfile, MediaProfileInput,
-    PlatformKind, ProfileBundle, ProfileBundleImportResult, ProfilesSnapshot, RecordingContainer,
-    RecordingHistoryEntry, RecordingSession, Resolution, SceneCollection, SceneCollectionBundle,
-    SceneCollectionImportResult, SceneValidationResult, SecretRef, SecretStore, SecretStoreError,
-    SensitiveString, StreamDestination, StreamDestinationBundleItem, StreamDestinationInput,
-    LOCAL_SQLITE_SECRET_PROVIDER, MACOS_KEYCHAIN_SECRET_PROVIDER,
+    OutputJob, PlatformKind, ProfileBundle, ProfileBundleImportResult, ProfilesSnapshot,
+    RecordingContainer, RecordingHistoryEntry, RecordingSession, Resolution, SceneCollection,
+    SceneCollectionBundle, SceneCollectionImportResult, SceneValidationResult, SecretRef,
+    SecretStore, SecretStoreError, SensitiveString, StreamDestination, StreamDestinationBundleItem,
+    StreamDestinationInput, LOCAL_SQLITE_SECRET_PROVIDER, MACOS_KEYCHAIN_SECRET_PROVIDER,
     WINDOWS_CREDENTIAL_MANAGER_SECRET_PROVIDER,
 };
 use vaexcore_platforms::apply_platform_defaults;
 
-const CURRENT_SCHEMA_VERSION: u32 = 5;
+const CURRENT_SCHEMA_VERSION: u32 = 6;
 const AUDIT_LOG_LIMIT: usize = 200;
 const MARKER_LIST_LIMIT: usize = 200;
 const MACOS_KEYCHAIN_SERVICE: &str = "com.vaexcore.studio.stream-keys";
@@ -413,6 +413,56 @@ impl ProfileStore {
         )?;
 
         Ok(collection)
+    }
+
+    pub fn current_output_job(&self) -> Result<Option<OutputJob>, StoreError> {
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        let value = connection
+            .query_row(
+                "SELECT value_json FROM output_jobs ORDER BY updated_at DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+
+        value
+            .map(|value| serde_json::from_str(&value).map_err(StoreError::Json))
+            .transpose()
+    }
+
+    pub fn save_output_job(&self, job: &OutputJob) -> Result<OutputJob, StoreError> {
+        let state = serde_json::to_string(&job.state)?
+            .trim_matches('"')
+            .to_string();
+        let connection = self
+            .connection
+            .lock()
+            .expect("profile store mutex poisoned");
+        connection.execute("DELETE FROM output_jobs", [])?;
+        connection.execute(
+            "INSERT INTO output_jobs (id, value_json, state, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                &job.id,
+                serde_json::to_string(job)?,
+                state,
+                job.prepared_at.to_rfc3339(),
+                job.updated_at.to_rfc3339(),
+            ],
+        )?;
+
+        Ok(job.clone())
+    }
+
+    pub fn cancel_output_job(&self, now: DateTime<Utc>) -> Result<OutputJob, StoreError> {
+        let job = self
+            .current_output_job()?
+            .unwrap_or_else(|| OutputJob::idle(now))
+            .cancelled(now);
+        self.save_output_job(&job)
     }
 
     pub fn validate_scene_collection(&self, collection: &SceneCollection) -> SceneValidationResult {
@@ -1076,6 +1126,9 @@ impl ProfileStore {
         if current_version < 5 {
             apply_migration_5(&connection)?;
         }
+        if current_version < 6 {
+            apply_migration_6(&connection)?;
+        }
 
         Ok(())
     }
@@ -1478,6 +1531,28 @@ fn apply_migration_5(connection: &Connection) -> Result<(), StoreError> {
     connection.execute(
         "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
         params![5_u32, now_utc().to_rfc3339()],
+    )?;
+    Ok(())
+}
+
+fn apply_migration_6(connection: &Connection) -> Result<(), StoreError> {
+    connection.execute_batch(
+        r#"
+            CREATE TABLE IF NOT EXISTS output_jobs (
+              id TEXT PRIMARY KEY,
+              value_json TEXT NOT NULL,
+              state TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_output_jobs_updated_at
+            ON output_jobs(updated_at DESC);
+            "#,
+    )?;
+    connection.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES (?1, ?2)",
+        params![6_u32, now_utc().to_rfc3339()],
     )?;
     Ok(())
 }
@@ -2009,6 +2084,47 @@ mod tests {
         assert_eq!(
             target.scene_collection().unwrap().scenes[0].name,
             "Imported Main"
+        );
+    }
+
+    #[test]
+    fn output_job_round_trip_replaces_latest_snapshot() {
+        let store = ProfileStore::open_memory().unwrap();
+        let first = OutputJob::idle(now_utc());
+        store.save_output_job(&first).unwrap();
+
+        let mut second = OutputJob::idle(now_utc());
+        second.id = "output-job-second".to_string();
+        second.detail = "Second snapshot".to_string();
+        store.save_output_job(&second).unwrap();
+
+        let current = store.current_output_job().unwrap().unwrap();
+        assert_eq!(current.id, "output-job-second");
+        assert_eq!(current.detail, "Second snapshot");
+    }
+
+    #[test]
+    fn output_job_persists_after_reopen_and_can_cancel() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let database_path = temp_dir.path().join("profiles.sqlite3");
+        let mut job = OutputJob::idle(now_utc());
+        job.id = "output-job-persisted".to_string();
+
+        {
+            let store = ProfileStore::open(&database_path).unwrap();
+            store.save_output_job(&job).unwrap();
+        }
+
+        let store = ProfileStore::open(&database_path).unwrap();
+        let persisted = store.current_output_job().unwrap().unwrap();
+        assert_eq!(persisted.id, "output-job-persisted");
+
+        let cancelled = store.cancel_output_job(now_utc()).unwrap();
+        assert_eq!(cancelled.id, "output-job-persisted");
+        assert_eq!(cancelled.state, vaexcore_core::OutputJobState::Cancelled);
+        assert_eq!(
+            store.current_output_job().unwrap().unwrap().state,
+            vaexcore_core::OutputJobState::Cancelled
         );
     }
 

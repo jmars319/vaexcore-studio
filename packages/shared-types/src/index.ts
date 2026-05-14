@@ -804,6 +804,7 @@ export interface DesignerReadinessReport {
   overall: DesignerRuntimeReadinessState;
   items: DesignerReadinessReportItem[];
   output_ready: SceneOutputReadyDiagnostic;
+  output_job?: OutputJobSummary | null;
   windows_handoff: string[];
 }
 
@@ -1765,6 +1766,55 @@ export interface MediaPipelineValidation {
   ready: boolean;
   warnings: string[];
   errors: string[];
+}
+
+export type OutputJobState = "idle" | "preparing" | "ready" | "blocked" | "cancelled";
+
+export interface OutputJobPrepareRequest {
+  recording_profile_id?: string | null;
+  stream_destination_ids?: string[] | null;
+}
+
+export interface OutputJobSummary {
+  id: string;
+  state: OutputJobState;
+  detail: string;
+  active_scene_id?: string | null;
+  active_scene_name?: string | null;
+  recording_profile_id?: string | null;
+  recording_profile_name?: string | null;
+  output_path_preview?: string | null;
+  stream_destination_count: number;
+  blockers: string[];
+  warnings: string[];
+  updated_at: string;
+}
+
+export interface OutputJob {
+  version: number;
+  id: string;
+  state: OutputJobState;
+  detail: string;
+  prepared_at: string;
+  updated_at: string;
+  request: OutputJobPrepareRequest;
+  intent: PipelineIntent;
+  active_scene_id?: string | null;
+  active_scene_name?: string | null;
+  recording_profile_id?: string | null;
+  recording_profile_name?: string | null;
+  stream_destination_ids: string[];
+  stream_destination_names: string[];
+  output_path_preview?: string | null;
+  scene_output_ready: boolean;
+  media_pipeline_ready: boolean;
+  output_preflight_ready: boolean;
+  recording_target_ready: boolean;
+  stream_targets_ready: boolean;
+  blockers: string[];
+  warnings: string[];
+  pipeline_validation: MediaPipelineValidation;
+  output_preflight_plan?: OutputPreflightPlan | null;
 }
 
 export interface DeletedProfile {
@@ -5105,6 +5155,23 @@ export function validateDesignerReadinessReport(report: DesignerReadinessReport)
     }
     if (report.output_ready.ready && report.output_ready.blockers.length > 0) {
       errors.push("Scene output-ready diagnostic cannot be ready with blockers.");
+    }
+  }
+  if (report.output_job) {
+    if (!["idle", "preparing", "ready", "blocked", "cancelled"].includes(report.output_job.state)) {
+      errors.push("Output job summary state is invalid.");
+    }
+    if (!report.output_job.id.trim()) {
+      errors.push("Output job summary id is required.");
+    }
+    if (!report.output_job.detail.trim()) {
+      warnings.push("Output job summary detail is empty.");
+    }
+    if (Number.isNaN(Date.parse(report.output_job.updated_at))) {
+      errors.push("Output job summary updated_at must be a valid ISO-8601 timestamp.");
+    }
+    if (report.output_job.state === "ready" && report.output_job.blockers.length > 0) {
+      errors.push("Output job summary cannot be ready with blockers.");
     }
   }
   if (report.windows_handoff.length === 0) {

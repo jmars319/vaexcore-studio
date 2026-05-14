@@ -2,6 +2,7 @@ pub mod audio;
 pub mod capture;
 pub mod compositor;
 pub mod events;
+pub mod output;
 pub mod performance;
 pub mod pipeline;
 pub mod profiles;
@@ -47,6 +48,7 @@ pub use compositor::{
     SoftwareCompositorTextMetadata, SoftwareCompositorTextStatus,
 };
 pub use events::{StudioEvent, StudioEventKind};
+pub use output::{OutputJob, OutputJobPrepareRequest, OutputJobState, OutputJobSummary};
 pub use performance::{
     build_performance_telemetry_plan, validate_performance_telemetry_plan, PerformanceTargetBudget,
     PerformanceTelemetryPlan, PerformanceTelemetryValidation,
