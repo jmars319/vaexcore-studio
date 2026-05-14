@@ -130,6 +130,16 @@ output preflight categories, and media pipeline validation. It is the Scene
 Designer runtime V1 milestone surface; it does not start recording, streaming,
 encoder execution, or cross-platform hardware capture validation.
 
+Output Preparation V1 persists the latest dry-run `OutputJob` in Studio's local
+SQLite database and exposes it through `GET /output/job`,
+`POST /output/job/prepare`, and `POST /output/job/cancel`. A prepared job binds
+the active scene, selected recording profile, enabled stream destinations,
+media pipeline validation, output preflight validation, and scene output-ready
+diagnostic into one operator-facing readiness snapshot. `ready` means the dry-run
+handoff contract is coherent; it still does not start encoders, create output
+files, open RTMP connections, mutate Twitch/Discord state, or validate Windows
+hardware.
+
 The Designer Completion Candidate adds managed runtime-session metadata around
 that surface. Preview, program-preview, and transition-preview frames now expose
 session id, session state, last frame time, stale-frame age, restart count,

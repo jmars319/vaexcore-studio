@@ -285,7 +285,40 @@ filters, performance, permissions, output handoff, scene output readiness, and
 Windows validation handoff. Item states are `ready`, `degraded`, `blocked`, or
 `not_applicable`. The report includes `output_ready`, a redacted diagnostic
 derived from the active scene, generated program preview frame, compositor
-render plan, output preflight plan, and media pipeline validation.
+render plan, output preflight plan, and media pipeline validation. When a dry-run
+output job has been prepared, the report also includes a compact `output_job`
+summary.
+
+### `GET /output/job`
+
+Returns the current persisted dry-run `OutputJob`, or an idle snapshot when no
+job has been prepared. This is an output preparation contract only; it does not
+start encoders, create files, or open stream connections.
+
+### `POST /output/job/prepare`
+
+Creates or replaces the current dry-run output job from the active scene,
+selected recording profile, enabled stream destinations, current media pipeline
+plan, output preflight plan, and scene output-ready diagnostic.
+
+Body:
+
+```json
+{
+  "recording_profile_id": "rec_profile_optional",
+  "stream_destination_ids": ["stream_destination_optional"]
+}
+```
+
+The returned job is `ready` only when scene output readiness, media pipeline
+validation, output preflight validation, recording target readiness, and every
+enabled stream target are ready. Otherwise it is `blocked` with redacted blockers
+and warnings.
+
+### `POST /output/job/cancel`
+
+Marks the current prepared output job as `cancelled` and persists that state.
+Existing recording and streaming dry-run lifecycle commands remain independent.
 
 ### `POST /scene-runtime/validate-graph`
 
